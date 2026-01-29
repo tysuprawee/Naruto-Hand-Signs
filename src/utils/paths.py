@@ -140,8 +140,8 @@ def get_latest_weights(run_name: Optional[str] = None) -> Optional[Path]:
     if not all_runs:
         return None
     
-    # Sort by modification time (newest first)
-    all_runs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    # Sort by directory name (contains timestamp YYYYMMDD_HHMMSS)
+    all_runs.sort(key=lambda x: x.name, reverse=True)
     
     for run_dir in all_runs:
         # Check for best.pt
