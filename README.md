@@ -136,14 +136,14 @@ Once your labeled dataset is in place:
 python src/train.py
 
 # With custom options
-python src/train.py --model yolov8s.pt --epochs 100 --batch 16
+python src/train.py --model yolov8s.pt --epochs 30 --batch 16
 ```
 
 **Available arguments:**
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--model` | yolov8n.pt | Base model (n=nano, s=small, m=medium) |
-| `--epochs` | 100 | Number of training epochs |
+| `--epochs` | 30 | Number of training epochs |
 | `--img-size` | 640 | Image size for training |
 | `--batch` | 16 | Batch size (-1 for auto) |
 | `--patience` | 50 | Early stopping patience |

@@ -3,7 +3,7 @@
 
 # Path to dataset root (relative or absolute)
 # Using relative path from this config file location
-path: ../dataset
+path: /Users/bugatti/Documents/Naruto/dataset
 
 # Train and validation image directories (relative to 'path')
 train: images/train
