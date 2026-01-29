@@ -57,6 +57,12 @@ def convert_to_yolo(box, img_w, img_h):
     return xc, yc, wn, hn
 
 def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Manual Labeler for Naruto Hand Signs")
+    parser.add_argument("--preview", "--all", action="store_true", help="Review all images (including already labeled ones)")
+    args = parser.parse_args()
+
     print("[*] Starting Manual Labeler...")
     
     raw_dir = get_raw_images_dir()
@@ -72,12 +78,13 @@ def main():
             imgs = list(cls_dir.glob("*.jpg")) + list(cls_dir.glob("*.png"))
             for img in imgs:
                 txt_path = img.with_suffix(".txt")
-                if not txt_path.exists():
+                if args.preview or not txt_path.exists():
                     images.append((img, cls))
     
     if not images:
-        print("[*] No unlabeled images found! Good job.")
-        print("[*] To re-label, delete the .txt files in dataset/images/raw/<class>/")
+        print("[*] No images found to label.")
+        if not args.preview:
+            print("[*] All images appear to be labeled! Use '--preview' to review and edit existing labels.")
         return
 
     print(f"[*] Found {len(images)} images to label.")
