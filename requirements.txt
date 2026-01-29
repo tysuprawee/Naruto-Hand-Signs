@@ -1,0 +1,27 @@
+# Naruto Hand Signs YOLO - Requirements
+# Install with: pip install -r requirements.txt
+
+# Core ML framework for YOLO
+ultralytics>=8.0.0
+
+# Computer vision
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+
+# Additional dependencies (usually installed with ultralytics)
+numpy>=1.23.0
+pillow>=9.0.0
+pyyaml>=6.0
+matplotlib>=3.5.0
+tqdm>=4.64.0
+
+# Optional: For Raspberry Pi communication
+# Uncomment the ones you need:
+# pyserial>=3.5  # For serial/UART communication
+# paho-mqtt>=1.6.0  # For MQTT messaging
+# requests>=2.28.0  # For HTTP REST API
+
+# Optional: For faster training on NVIDIA GPUs
+# Note: Install from PyTorch website for your CUDA version
+# torch>=2.0.0
+# torchvision>=0.15.0

@@ -1,0 +1,29 @@
+# Naruto Hand Signs YOLO Dataset Configuration
+# This file is used by Ultralytics YOLO for training
+
+# Path to dataset root (relative or absolute)
+# Using relative path from this config file location
+path: ../dataset
+
+# Train and validation image directories (relative to 'path')
+train: images/train
+val: images/val
+
+# Class names in order (index 0, 1, 2, ...)
+# These are Naruto hand sign names
+names:
+  0: tiger
+  1: boar
+  2: snake
+  3: ram
+  4: bird
+  5: dragon
+  6: dog
+  7: rat
+  8: horse
+  9: monkey
+  10: ox
+  11: hare
+
+# Number of classes
+nc: 12
