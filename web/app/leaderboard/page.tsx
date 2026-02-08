@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { supabase } from "@/utils/supabase";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -30,7 +30,7 @@ interface ModeRow {
     mode: string;
 }
 
-export default function LeaderboardPage() {
+function LeaderboardContent() {
     const DEV_DISCORD_ID = "[REDACTED_DISCORD_ID]";
     const PAGE_SIZE = 10;
 
@@ -299,11 +299,10 @@ export default function LeaderboardPage() {
                                     setPage(1);
                                 }}
                                 className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border
-                                ${
-                                    view === "speed"
+                                ${view === "speed"
                                         ? "bg-ninja-accent text-white border-ninja-accent shadow-[0_0_15px_rgba(255,120,50,0.3)] scale-105"
                                         : "bg-ninja-card text-ninja-dim border-ninja-border hover:border-ninja-hover hover:text-white"
-                                }
+                                    }
                                 `}
                             >
                                 Speedrun
@@ -314,11 +313,10 @@ export default function LeaderboardPage() {
                                     setPage(1);
                                 }}
                                 className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border
-                                ${
-                                    view === "level"
+                                ${view === "level"
                                         ? "bg-ninja-accent text-white border-ninja-accent shadow-[0_0_15px_rgba(255,120,50,0.3)] scale-105"
                                         : "bg-ninja-card text-ninja-dim border-ninja-border hover:border-ninja-hover hover:text-white"
-                                }
+                                    }
                                 `}
                             >
                                 Top Level
@@ -401,121 +399,119 @@ export default function LeaderboardPage() {
                                 <tbody className="divide-y divide-ninja-border">
                                     {view === "speed"
                                         ? entries.map((entry, index) => {
-                                              const rank = (page - 1) * PAGE_SIZE + index + 1;
-                                              return (
-                                                  <tr key={entry.id} className="hover:bg-ninja-hover/30 transition-colors group">
-                                                      <td className="px-6 py-5 text-center font-bold text-ninja-dim group-hover:text-white">
-                                                          {rank === 1 ? (
-                                                              <div className="relative inline-block">
-                                                                  <Crown className="w-6 h-6 text-yellow-400 mx-auto drop-shadow-md" />
-                                                                  <div className="absolute inset-0 bg-yellow-400/20 blur-md rounded-full"></div>
-                                                              </div>
-                                                          ) : (
-                                                              `#${rank}`
-                                                          )}
-                                                      </td>
-                                                      <td className="px-6 py-5 font-medium text-white flex items-center gap-4">
-                                                          {entry.avatar_url ? (
-                                                              <div
-                                                                  className={`w-10 h-10 rounded-lg overflow-hidden shadow-lg border border-white/10
+                                            const rank = (page - 1) * PAGE_SIZE + index + 1;
+                                            return (
+                                                <tr key={entry.id} className="hover:bg-ninja-hover/30 transition-colors group">
+                                                    <td className="px-6 py-5 text-center font-bold text-ninja-dim group-hover:text-white">
+                                                        {rank === 1 ? (
+                                                            <div className="relative inline-block">
+                                                                <Crown className="w-6 h-6 text-yellow-400 mx-auto drop-shadow-md" />
+                                                                <div className="absolute inset-0 bg-yellow-400/20 blur-md rounded-full"></div>
+                                                            </div>
+                                                        ) : (
+                                                            `#${rank}`
+                                                        )}
+                                                    </td>
+                                                    <td className="px-6 py-5 font-medium text-white flex items-center gap-4">
+                                                        {entry.avatar_url ? (
+                                                            <div
+                                                                className={`w-10 h-10 rounded-lg overflow-hidden shadow-lg border border-white/10
                                                         ${rank === 1 ? "ring-2 ring-yellow-400" : ""}
                                                     `}
-                                                              >
-                                                                  <img src={entry.avatar_url} alt={entry.username} className="w-full h-full object-cover" />
-                                                              </div>
-                                                          ) : (
-                                                              <div
-                                                                  className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold text-white shadow-lg border border-white/10
-                                                        ${
-                                                            rank === 1
-                                                                ? "bg-gradient-to-br from-yellow-400 to-yellow-600"
-                                                                : rank === 2
-                                                                  ? "bg-gradient-to-br from-gray-300 to-gray-500"
-                                                                  : rank === 3
-                                                                    ? "bg-gradient-to-br from-orange-400 to-orange-600"
-                                                                    : "bg-ninja-card border-ninja-border text-ninja-dim"
-                                                        }
+                                                            >
+                                                                <img src={entry.avatar_url} alt={entry.username} className="w-full h-full object-cover" />
+                                                            </div>
+                                                        ) : (
+                                                            <div
+                                                                className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold text-white shadow-lg border border-white/10
+                                                        ${rank === 1
+                                                                        ? "bg-gradient-to-br from-yellow-400 to-yellow-600"
+                                                                        : rank === 2
+                                                                            ? "bg-gradient-to-br from-gray-300 to-gray-500"
+                                                                            : rank === 3
+                                                                                ? "bg-gradient-to-br from-orange-400 to-orange-600"
+                                                                                : "bg-ninja-card border-ninja-border text-ninja-dim"
+                                                                    }
                                                     `}
-                                                              >
-                                                                  {entry.username.charAt(0).toUpperCase()}
-                                                              </div>
-                                                          )}
-                                                          <div className="flex items-center gap-2">
-                                                              <span className={rank <= 3 ? "text-ninja-accent-glow font-bold" : ""}>{entry.username}</span>
-                                                              {entry.discord_id === DEV_DISCORD_ID && (
-                                                                  <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black tracking-wider shadow-sm border border-red-400">
-                                                                      DEV
-                                                                  </span>
-                                                              )}
-                                                          </div>
-                                                      </td>
-                                                      <td className="px-6 py-5 text-right font-mono font-bold text-white">
-                                                          <div className="flex items-center justify-end gap-2">
-                                                              <Clock className="w-4 h-4 text-ninja-dim" />
-                                                              <span className={rank === 1 ? "text-yellow-400 text-lg" : ""}>{entry.score_time.toFixed(2)}s</span>
-                                                          </div>
-                                                      </td>
-                                                      <td className="px-6 py-5 text-center text-xs text-ninja-dim font-mono">
-                                                          {new Date(entry.created_at).toLocaleDateString()}
-                                                      </td>
-                                                  </tr>
-                                              );
-                                          })
+                                                            >
+                                                                {entry.username.charAt(0).toUpperCase()}
+                                                            </div>
+                                                        )}
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={rank <= 3 ? "text-ninja-accent-glow font-bold" : ""}>{entry.username}</span>
+                                                            {entry.discord_id === DEV_DISCORD_ID && (
+                                                                <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black tracking-wider shadow-sm border border-red-400">
+                                                                    DEV
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-5 text-right font-mono font-bold text-white">
+                                                        <div className="flex items-center justify-end gap-2">
+                                                            <Clock className="w-4 h-4 text-ninja-dim" />
+                                                            <span className={rank === 1 ? "text-yellow-400 text-lg" : ""}>{entry.score_time.toFixed(2)}s</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-5 text-center text-xs text-ninja-dim font-mono">
+                                                        {new Date(entry.created_at).toLocaleDateString()}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
                                         : profiles.map((entry, index) => {
-                                              const rank = (page - 1) * PAGE_SIZE + index + 1;
-                                              return (
-                                                  <tr key={entry.id} className="hover:bg-ninja-hover/30 transition-colors group">
-                                                      <td className="px-6 py-5 text-center font-bold text-ninja-dim group-hover:text-white">
-                                                          {rank === 1 ? (
-                                                              <div className="relative inline-block">
-                                                                  <Crown className="w-6 h-6 text-yellow-400 mx-auto drop-shadow-md" />
-                                                                  <div className="absolute inset-0 bg-yellow-400/20 blur-md rounded-full"></div>
-                                                              </div>
-                                                          ) : (
-                                                              `#${rank}`
-                                                          )}
-                                                      </td>
-                                                      <td className="px-6 py-5 font-medium text-white flex items-center gap-4">
-                                                          {entry.avatar_url ? (
-                                                              <div
-                                                                  className={`w-10 h-10 rounded-lg overflow-hidden shadow-lg border border-white/10
+                                            const rank = (page - 1) * PAGE_SIZE + index + 1;
+                                            return (
+                                                <tr key={entry.id} className="hover:bg-ninja-hover/30 transition-colors group">
+                                                    <td className="px-6 py-5 text-center font-bold text-ninja-dim group-hover:text-white">
+                                                        {rank === 1 ? (
+                                                            <div className="relative inline-block">
+                                                                <Crown className="w-6 h-6 text-yellow-400 mx-auto drop-shadow-md" />
+                                                                <div className="absolute inset-0 bg-yellow-400/20 blur-md rounded-full"></div>
+                                                            </div>
+                                                        ) : (
+                                                            `#${rank}`
+                                                        )}
+                                                    </td>
+                                                    <td className="px-6 py-5 font-medium text-white flex items-center gap-4">
+                                                        {entry.avatar_url ? (
+                                                            <div
+                                                                className={`w-10 h-10 rounded-lg overflow-hidden shadow-lg border border-white/10
                                                         ${rank === 1 ? "ring-2 ring-yellow-400" : ""}
                                                     `}
-                                                              >
-                                                                  <img src={entry.avatar_url} alt={entry.username} className="w-full h-full object-cover" />
-                                                              </div>
-                                                          ) : (
-                                                              <div
-                                                                  className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold text-white shadow-lg border border-white/10
-                                                        ${
-                                                            rank === 1
-                                                                ? "bg-gradient-to-br from-yellow-400 to-yellow-600"
-                                                                : rank === 2
-                                                                  ? "bg-gradient-to-br from-gray-300 to-gray-500"
-                                                                  : rank === 3
-                                                                    ? "bg-gradient-to-br from-orange-400 to-orange-600"
-                                                                    : "bg-ninja-card border-ninja-border text-ninja-dim"
-                                                        }
+                                                            >
+                                                                <img src={entry.avatar_url} alt={entry.username} className="w-full h-full object-cover" />
+                                                            </div>
+                                                        ) : (
+                                                            <div
+                                                                className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold text-white shadow-lg border border-white/10
+                                                        ${rank === 1
+                                                                        ? "bg-gradient-to-br from-yellow-400 to-yellow-600"
+                                                                        : rank === 2
+                                                                            ? "bg-gradient-to-br from-gray-300 to-gray-500"
+                                                                            : rank === 3
+                                                                                ? "bg-gradient-to-br from-orange-400 to-orange-600"
+                                                                                : "bg-ninja-card border-ninja-border text-ninja-dim"
+                                                                    }
                                                     `}
-                                                              >
-                                                                  {entry.username.charAt(0).toUpperCase()}
-                                                              </div>
-                                                          )}
-                                                          <div className="flex items-center gap-2">
-                                                              <span className={rank <= 3 ? "text-ninja-accent-glow font-bold" : ""}>{entry.username}</span>
-                                                              {entry.discord_id === DEV_DISCORD_ID && (
-                                                                  <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black tracking-wider shadow-sm border border-red-400">
-                                                                      DEV
-                                                                  </span>
-                                                              )}
-                                                          </div>
-                                                      </td>
-                                                      <td className="px-6 py-5 text-right font-mono font-bold text-white">LV.{entry.level}</td>
-                                                      <td className="px-6 py-5 text-right font-mono text-ninja-accent-glow font-bold">{entry.xp.toLocaleString()}</td>
-                                                      <td className="px-6 py-5 text-center text-xs text-ninja-dim font-mono uppercase">{entry.rank || "Student"}</td>
-                                                  </tr>
-                                              );
-                                          })}
+                                                            >
+                                                                {entry.username.charAt(0).toUpperCase()}
+                                                            </div>
+                                                        )}
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={rank <= 3 ? "text-ninja-accent-glow font-bold" : ""}>{entry.username}</span>
+                                                            {entry.discord_id === DEV_DISCORD_ID && (
+                                                                <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black tracking-wider shadow-sm border border-red-400">
+                                                                    DEV
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-5 text-right font-mono font-bold text-white">LV.{entry.level}</td>
+                                                    <td className="px-6 py-5 text-right font-mono text-ninja-accent-glow font-bold">{entry.xp.toLocaleString()}</td>
+                                                    <td className="px-6 py-5 text-center text-xs text-ninja-dim font-mono uppercase">{entry.rank || "Student"}</td>
+                                                </tr>
+                                            );
+                                        })}
                                 </tbody>
                             </table>
                         </div>
@@ -547,5 +543,20 @@ export default function LeaderboardPage() {
                 )}
             </main>
         </div>
+    );
+}
+
+export default function LeaderboardPage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen bg-ninja-bg flex items-center justify-center">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="w-12 h-12 border-4 border-ninja-accent border-t-transparent rounded-full animate-spin"></div>
+                    <p className="text-white font-bold tracking-widest animate-pulse">LOADING CHAKRA...</p>
+                </div>
+            </div>
+        }>
+            <LeaderboardContent />
+        </Suspense>
     );
 }
