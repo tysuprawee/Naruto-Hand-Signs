@@ -60,16 +60,16 @@ export default function Home() {
             {/* Badges Container */}
             <div className="flex flex-col items-start gap-4">
               {/* Global Launch Date Pill */}
-              <div className="inline-flex w-full max-w-[42rem] flex-col gap-2 px-4 py-3 rounded-2xl border-2 border-ninja-accent/80 bg-ninja-accent/10 backdrop-blur-xl shadow-[0_0_40px_rgba(255,120,50,0.4)] transition-shadow duration-500 sm:w-auto sm:flex-row sm:items-center sm:gap-3 sm:px-6 sm:py-4 sm:rounded-full hover:shadow-[0_0_60px_rgba(255,120,50,0.6)]">
+              <div className="inline-flex w-full max-w-[42rem] flex-col gap-2 px-4 py-3 rounded-2xl border-2 border-ninja-accent/80 bg-ninja-accent/10 backdrop-blur-xl shadow-[0_0_40px_rgba(255,120,50,0.4)] transition-shadow duration-500 sm:w-full sm:flex-row sm:items-center sm:gap-3 sm:px-6 sm:py-4 sm:rounded-full hover:shadow-[0_0_60px_rgba(255,120,50,0.6)]">
                 <span className="flex h-4 w-4 relative shrink-0">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-ninja-accent opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-4 w-4 bg-ninja-accent"></span>
                 </span>
-                <span className="text-ninja-accent font-black tracking-[0.1em] text-[10px] sm:text-[11px] uppercase leading-tight drop-shadow-[0_0_10px_rgba(255,120,50,0.8)]">
-                  <span className="block sm:whitespace-nowrap">Release Countdown • Feb 21 • 9:00 PM</span>
+                <span className="flex-1 min-w-0 text-ninja-accent font-black tracking-[0.07em] text-[10px] sm:text-[11px] uppercase leading-tight drop-shadow-[0_0_10px_rgba(255,120,50,0.8)]">
+                  <span className="block whitespace-nowrap">Early Access • Feb 21 • 9:00 PM</span>
                 </span>
                 <div className="hidden sm:block w-0.5 h-8 mx-1 bg-ninja-accent/50"></div>
-                <span className="text-white font-black font-mono tabular-nums tracking-[0.06em] text-lg sm:text-xl md:text-2xl whitespace-nowrap min-w-[16ch] text-left sm:text-right drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                <span className="shrink-0 text-white font-black font-mono tabular-nums tracking-[0.05em] text-lg sm:text-xl md:text-2xl whitespace-nowrap min-w-[15ch] text-left sm:text-right drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
                   {countdownLabel}
                 </span>
               </div>

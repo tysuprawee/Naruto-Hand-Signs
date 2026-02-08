@@ -30,6 +30,7 @@ interface ModeRow {
 }
 
 export default function LeaderboardPage() {
+    const DEV_DISCORD_ID = "[REDACTED_DISCORD_ID]";
     const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
     const [profiles, setProfiles] = useState<ProfileEntry[]>([]);
     const [loading, setLoading] = useState(true);
@@ -133,7 +134,58 @@ export default function LeaderboardPage() {
                     return;
                 }
 
-                setProfiles((profileData || []) as ProfileEntry[]);
+                const { data: avatarRows, error: avatarError } = await supabase
+                    .from('leaderboard')
+                    .select('username, discord_id, avatar_url, created_at')
+                    .not('avatar_url', 'is', null)
+                    .order('created_at', { ascending: false })
+                    .limit(300);
+
+                if (avatarError) {
+                    console.error("Error fetching avatar fallbacks:", avatarError);
+                }
+
+                const avatarByDiscordId = new Map<string, string>();
+                const avatarByUsername = new Map<string, string>();
+                const discordIdByUsername = new Map<string, string>();
+
+                for (const row of (avatarRows || []) as LeaderboardEntry[]) {
+                    const avatar = row.avatar_url?.trim();
+                    const dId = row.discord_id?.trim();
+                    const uname = row.username?.trim().toLowerCase();
+
+                    if (dId && uname && !discordIdByUsername.has(uname)) {
+                        discordIdByUsername.set(uname, dId);
+                    }
+
+                    if (!avatar) continue;
+
+                    if (dId && !avatarByDiscordId.has(dId)) {
+                        avatarByDiscordId.set(dId, avatar);
+                    }
+                    if (uname && !avatarByUsername.has(uname)) {
+                        avatarByUsername.set(uname, avatar);
+                    }
+                }
+
+                const enrichedProfiles = ((profileData || []) as ProfileEntry[]).map((p) => {
+                    if (p.avatar_url) return p;
+
+                    const dId = p.discord_id?.trim() || "";
+                    const uname = p.username?.trim().toLowerCase() || "";
+                    const fallbackDiscordId = dId || (uname ? discordIdByUsername.get(uname) : undefined);
+                    const fallbackAvatar =
+                        (fallbackDiscordId ? avatarByDiscordId.get(fallbackDiscordId) : undefined) ||
+                        (uname ? avatarByUsername.get(uname) : undefined);
+
+                    return {
+                        ...p,
+                        discord_id: fallbackDiscordId || p.discord_id,
+                        avatar_url: fallbackAvatar || p.avatar_url,
+                    };
+                });
+
+                setProfiles(enrichedProfiles);
                 setEntries([]);
             }
 
@@ -331,7 +383,7 @@ export default function LeaderboardPage() {
                                                     )}
                                                     <div className="flex items-center gap-2">
                                                         <span className={index < 3 ? "text-ninja-accent-glow font-bold" : ""}>{entry.username}</span>
-                                                        {entry.discord_id === "[REDACTED_DISCORD_ID]" && (
+                                                        {entry.discord_id === DEV_DISCORD_ID && (
                                                             <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black tracking-wider shadow-sm border border-red-400">DEV</span>
                                                         )}
                                                     </div>
@@ -382,7 +434,7 @@ export default function LeaderboardPage() {
                                                     )}
                                                     <div className="flex items-center gap-2">
                                                         <span className={index < 3 ? "text-ninja-accent-glow font-bold" : ""}>{entry.username}</span>
-                                                        {entry.discord_id === "[REDACTED_DISCORD_ID]" && (
+                                                        {entry.discord_id === DEV_DISCORD_ID && (
                                                             <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black tracking-wider shadow-sm border border-red-400">DEV</span>
                                                         )}
                                                     </div>
