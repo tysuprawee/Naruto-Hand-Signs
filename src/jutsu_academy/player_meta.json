@@ -32,19 +32,19 @@
   },
   "quests": {
     "daily": {
-      "period": "2026-02-07",
+      "period": "2026-02-08",
       "quests": {
         "d_signs": {
-          "progress": 50,
-          "claimed": true
+          "progress": 6,
+          "claimed": false
         },
         "d_jutsus": {
-          "progress": 11,
-          "claimed": true
+          "progress": 1,
+          "claimed": false
         },
         "d_xp": {
-          "progress": 1050,
-          "claimed": true
+          "progress": 110,
+          "claimed": false
         }
       }
     },
@@ -52,15 +52,15 @@
       "period": "2026-W06",
       "quests": {
         "w_jutsus": {
-          "progress": 75,
+          "progress": 76,
           "claimed": false
         },
         "w_challenges": {
-          "progress": 1,
+          "progress": 2,
           "claimed": false
         },
         "w_xp": {
-          "progress": 6100,
+          "progress": 6210,
           "claimed": false
         }
       }
