@@ -3,6 +3,254 @@ from src.jutsu_academy.effects import EffectContext
 
 
 class GameplayMixin:
+    def _clamp(self, value, low, high):
+        return max(float(low), min(float(high), float(value)))
+
+    def _calibration_identity(self):
+        if self.discord_user and self.discord_user.get("id"):
+            base = f"discord_{self.discord_user.get('id')}"
+        else:
+            base = (self.username or "guest").strip().lower()
+        safe = "".join(ch if ch.isalnum() else "_" for ch in base).strip("_")
+        while "__" in safe:
+            safe = safe.replace("__", "_")
+        return safe or "guest"
+
+    def _calibration_profile_path(self):
+        root = Path("src/jutsu_academy/calibration")
+        root.mkdir(parents=True, exist_ok=True)
+        return root / f"{self._calibration_identity()}.json"
+
+    def _reset_detection_filters(self):
+        self.raw_detected_sign = "idle"
+        self.raw_detected_confidence = 0.0
+        self.detected_sign = "idle"
+        self.detected_confidence = 0.0
+        self.last_detected_hands = 0
+        self.last_vote_hits = 0
+        self.sign_vote_window = []
+
+    def _apply_calibration_values(self, profile):
+        self.lighting_min = self._clamp(profile.get("lighting_min", 45.0), 25.0, 120.0)
+        self.lighting_max = self._clamp(profile.get("lighting_max", 210.0), 120.0, 245.0)
+        self.lighting_min_contrast = self._clamp(profile.get("lighting_min_contrast", 22.0), 10.0, 80.0)
+        self.vote_min_confidence = self._clamp(profile.get("vote_min_confidence", 0.45), 0.2, 0.9)
+        self.vote_required_hits = int(self._clamp(profile.get("vote_required_hits", 3), 2, self.vote_window_size))
+
+    def _load_calibration_profile(self):
+        identity = self._calibration_identity()
+        if self.calibration_loaded_for == identity:
+            return
+
+        self.calibration_loaded_for = identity
+        self.calibration_profile = {}
+
+        path = self._calibration_profile_path()
+        if not path.exists():
+            self._apply_calibration_values({})
+            self.calibration_message = "No calibration profile found. Auto-calibration started."
+            self.calibration_message_until = time.time() + 6.0
+            return
+
+        try:
+            with open(path, "r") as f:
+                profile = json.load(f)
+            if isinstance(profile, dict):
+                self.calibration_profile = profile
+                self._apply_calibration_values(profile)
+                self.calibration_message = "Calibration profile loaded."
+                self.calibration_message_until = time.time() + 4.0
+            else:
+                self._apply_calibration_values({})
+        except Exception as e:
+            print(f"[!] Calibration profile load failed: {e}")
+            self._apply_calibration_values({})
+
+    def _save_calibration_profile(self, profile):
+        try:
+            path = self._calibration_profile_path()
+            with open(path, "w") as f:
+                json.dump(profile, f, indent=2)
+        except Exception as e:
+            print(f"[!] Calibration profile save failed: {e}")
+
+    def start_calibration(self, manual=True):
+        self.calibration_active = True
+        self.calibration_started_at = time.time()
+        self.calibration_samples = []
+        self.sign_vote_window = []
+        self.last_vote_hits = 0
+        if manual:
+            self.calibration_message = "Calibrating for 12s... keep hands visible and run signs."
+            self.calibration_message_until = time.time() + 12.0
+        else:
+            self.calibration_message = "Running first-time calibration..."
+            self.calibration_message_until = time.time() + 6.0
+
+    def _evaluate_lighting(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        self.lighting_mean = float(np.mean(gray))
+        self.lighting_contrast = float(np.std(gray))
+
+        if self.lighting_mean < self.lighting_min:
+            self.lighting_status = "low_light"
+        elif self.lighting_mean > self.lighting_max:
+            self.lighting_status = "overexposed"
+        elif self.lighting_contrast < self.lighting_min_contrast:
+            self.lighting_status = "low_contrast"
+        else:
+            self.lighting_status = "good"
+
+        return self.lighting_status == "good"
+
+    def _update_calibration_sample(self, raw_sign, raw_conf, num_hands):
+        if not self.calibration_active:
+            return
+
+        sample = {
+            "brightness": float(self.lighting_mean),
+            "contrast": float(self.lighting_contrast),
+            "hands": int(num_hands),
+        }
+        if self.last_palm_spans:
+            sample["palm_span"] = float(np.mean(self.last_palm_spans))
+        if raw_sign not in ("idle", "unknown"):
+            sample["conf"] = float(raw_conf)
+        self.calibration_samples.append(sample)
+
+        # Keep memory bounded.
+        if len(self.calibration_samples) > 1200:
+            self.calibration_samples = self.calibration_samples[-1200:]
+
+        elapsed = time.time() - self.calibration_started_at
+        if elapsed >= self.calibration_duration_s and len(self.calibration_samples) >= self.calibration_min_samples:
+            self._finalize_calibration()
+        elif elapsed >= self.calibration_duration_s * 1.7:
+            self._finalize_calibration()
+
+    def _finalize_calibration(self):
+        if not self.calibration_samples:
+            self.calibration_active = False
+            self.calibration_message = "Calibration failed: no samples captured."
+            self.calibration_message_until = time.time() + 4.0
+            return
+
+        brightness_vals = np.array([s["brightness"] for s in self.calibration_samples], dtype=np.float32)
+        contrast_vals = np.array([s["contrast"] for s in self.calibration_samples], dtype=np.float32)
+        conf_vals = np.array(
+            [s["conf"] for s in self.calibration_samples if "conf" in s and s["conf"] > 0.0],
+            dtype=np.float32,
+        )
+
+        b_med = float(np.median(brightness_vals)) if brightness_vals.size else 100.0
+        c_med = float(np.median(contrast_vals)) if contrast_vals.size else 30.0
+
+        lighting_min = self._clamp(b_med * 0.55, 25.0, 120.0)
+        lighting_max = self._clamp(b_med * 1.45, 120.0, 245.0)
+        lighting_min_contrast = self._clamp(c_med * 0.65, 10.0, 80.0)
+
+        vote_min_conf = self.vote_min_confidence
+        if conf_vals.size:
+            vote_min_conf = self._clamp(float(np.percentile(conf_vals, 30)) * 0.9, 0.25, 0.9)
+
+        profile = {
+            "version": 1,
+            "identity": self._calibration_identity(),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "samples": int(len(self.calibration_samples)),
+            "lighting_min": round(lighting_min, 3),
+            "lighting_max": round(lighting_max, 3),
+            "lighting_min_contrast": round(lighting_min_contrast, 3),
+            "vote_min_confidence": round(vote_min_conf, 3),
+            "vote_required_hits": int(self.vote_required_hits),
+        }
+
+        self.calibration_profile = profile
+        self._apply_calibration_values(profile)
+        self._save_calibration_profile(profile)
+
+        self.calibration_active = False
+        self.calibration_samples = []
+        self.calibration_message = "Calibration saved."
+        self.calibration_message_until = time.time() + 5.0
+
+    def _apply_temporal_vote(self, raw_sign, raw_conf, allow_detection):
+        now = time.time()
+        self.sign_vote_window = [
+            item for item in self.sign_vote_window
+            if now - item.get("time", 0.0) <= self.vote_entry_ttl_s
+        ]
+
+        normalized = str(raw_sign or "idle").strip().lower()
+        if (not allow_detection) or normalized in ("idle", "unknown"):
+            self.sign_vote_window = []
+            self.last_vote_hits = 0
+            return "idle", 0.0
+
+        self.sign_vote_window.append({
+            "label": normalized,
+            "conf": float(max(0.0, raw_conf)),
+            "time": now,
+        })
+        if len(self.sign_vote_window) > self.vote_window_size:
+            self.sign_vote_window = self.sign_vote_window[-self.vote_window_size:]
+
+        counts = {}
+        conf_sums = {}
+        for item in self.sign_vote_window:
+            label = item["label"]
+            counts[label] = counts.get(label, 0) + 1
+            conf_sums[label] = conf_sums.get(label, 0.0) + float(item.get("conf", 0.0))
+
+        if not counts:
+            self.last_vote_hits = 0
+            return "idle", 0.0
+
+        best_label = max(counts.keys(), key=lambda label: (counts[label], conf_sums.get(label, 0.0)))
+        best_hits = int(counts[best_label])
+        avg_conf = float(conf_sums.get(best_label, 0.0) / max(1, best_hits))
+        self.last_vote_hits = best_hits
+
+        if best_hits >= self.vote_required_hits and avg_conf >= self.vote_min_confidence:
+            return best_label, avg_conf
+        return "idle", avg_conf
+
+    def predict_sign_with_filters(self, frame, lighting_ok):
+        self.last_mp_result = None
+        self.detect_hands(frame)
+
+        raw_sign = "idle"
+        raw_conf = 0.0
+        num_hands = 0
+
+        if self.last_mp_result and self.last_mp_result.hand_landmarks:
+            num_hands = len(self.last_mp_result.hand_landmarks)
+            features = self.recorder.process_tasks_landmarks(
+                self.last_mp_result.hand_landmarks,
+                self.last_mp_result.handedness,
+            )
+            label, raw_conf, _ = self.recorder.predict_with_confidence(features)
+            raw_sign = str(label).strip().lower()
+
+        if self.settings.get("restricted_signs", False) and num_hands < 2:
+            raw_sign = "idle"
+            raw_conf = 0.0
+
+        allow_detection = lighting_ok and num_hands > 0
+        if self.settings.get("restricted_signs", False):
+            allow_detection = allow_detection and num_hands >= 2
+
+        stable_sign, stable_conf = self._apply_temporal_vote(raw_sign, raw_conf, allow_detection)
+
+        self.raw_detected_sign = raw_sign
+        self.raw_detected_confidence = float(raw_conf)
+        self.detected_sign = stable_sign
+        self.detected_confidence = float(stable_conf)
+        self.last_detected_hands = int(num_hands)
+
+        self._update_calibration_sample(raw_sign, raw_conf, num_hands)
+        return stable_sign
+
     def start_game(self, mode, initial_jutsu_idx=0):
         """Start the game with specified mode."""
         self.game_mode = mode
@@ -56,7 +304,11 @@ class GameplayMixin:
         self.pending_sounds = []
         self.pending_effects = []
         self.effect_orchestrator.reset()
-        
+        self._reset_detection_filters()
+        self._load_calibration_profile()
+        if not self.calibration_profile:
+            self.start_calibration(manual=False)
+
         # Challenge Mode Init
         self.challenge_state = "waiting"
         self.challenge_start_time = 0
@@ -111,6 +363,8 @@ class GameplayMixin:
         self.combo_rasengan_triple = False
         self.pending_sounds = []
         self.pending_effects = []
+        self.calibration_active = False
+        self._reset_detection_filters()
         self.effect_orchestrator.on_jutsu_end(EffectContext())
         clone_effect = self.effect_orchestrator.effects.get("clone")
         if clone_effect:
@@ -146,6 +400,7 @@ class GameplayMixin:
         self.fire_particles.emitting = False
         self.pending_sounds = []
         self.pending_effects = []
+        self._reset_detection_filters()
 
     def detect_and_process(self, frame):
         """Run detection and check sequence."""
@@ -190,6 +445,8 @@ class GameplayMixin:
             # Using current clock time for timestamp (MS)
             timestamp = int(time.time() * 1000)
             result = self.hand_landmarker.detect_for_video(mp_image, timestamp)
+            self.last_mp_result = result
+            self.last_palm_spans = []
             
             if result.hand_landmarks:
                 self.hand_lost_frames = 0
@@ -228,6 +485,7 @@ class GameplayMixin:
                         np.array([landmarks[5].x, landmarks[5].y]) -
                         np.array([landmarks[17].x, landmarks[17].y])
                     ))
+                    self.last_palm_spans.append(palm_span)
                     reference_span = 0.18
                     target_scale = palm_span / reference_span
                     target_scale = max(0.65, min(1.9, target_scale))
@@ -294,7 +552,6 @@ class GameplayMixin:
                         (target_scale - self.smooth_hand_effect_scale) * alpha_scale
                     )
                 self.hand_effect_scale = self.smooth_hand_effect_scale
-                self.last_mp_result = result
                 
                 # 2. Draw Skeletons for ALL detected hands
                 if self.settings.get("debug_hands", False):
