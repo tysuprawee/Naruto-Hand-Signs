@@ -109,6 +109,9 @@ class RuntimeMixin:
                         self.sequence_run_start = None
                         self.jutsu_active = False
                         self.fire_particles.emitting = False
+                    elif event.key == pygame.K_c:
+                        self.start_calibration(manual=True)
+                        self.play_sound("click")
                     elif event.key == pygame.K_SPACE:
                         if self.game_mode == "challenge":
                             if self.challenge_state == "waiting":

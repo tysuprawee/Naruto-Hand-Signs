@@ -3,19 +3,19 @@
   "tutorial_seen_at": null,
   "mastery": {
     "Shadow Clone": {
-      "best_time": 2.270822048187256
+      "best_time": 1.665816068649292
     },
     "Rasengan": {
-      "best_time": 1.3113021850585938e-05
+      "best_time": 1.2159347534179688e-05
     },
     "Fireball": {
-      "best_time": 32.23553800582886
+      "best_time": 12.710613012313843
     },
     "Chidori": {
       "best_time": 1.6928458213806152
     },
     "Water Dragon": {
-      "best_time": 43.59477472305298
+      "best_time": 18.61318612098694
     },
     "Phoenix Flower": {
       "best_time": 11.43950605392456
@@ -35,15 +35,15 @@
       "period": "2026-02-08",
       "quests": {
         "d_signs": {
-          "progress": 6,
+          "progress": 82,
           "claimed": false
         },
         "d_jutsus": {
-          "progress": 1,
+          "progress": 31,
           "claimed": false
         },
         "d_xp": {
-          "progress": 110,
+          "progress": 2350,
           "claimed": false
         }
       }
@@ -52,7 +52,7 @@
       "period": "2026-W06",
       "quests": {
         "w_jutsus": {
-          "progress": 76,
+          "progress": 106,
           "claimed": false
         },
         "w_challenges": {
@@ -60,7 +60,7 @@
           "claimed": false
         },
         "w_xp": {
-          "progress": 6210,
+          "progress": 8450,
           "claimed": false
         }
       }

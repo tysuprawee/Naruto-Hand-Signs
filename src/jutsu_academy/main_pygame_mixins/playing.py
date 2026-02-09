@@ -215,6 +215,7 @@ class PlayingMixin:
         
         # Flip for mirror
         frame = cv2.flip(frame, 1)
+        lighting_ok = self._evaluate_lighting(frame)
         
         # Camera position on screen (Centered & Scaled)
         # We want to fill the screen as much as possible while maintaining aspect ratio
@@ -251,38 +252,27 @@ class PlayingMixin:
             should_detect = False
         
         # 2. Detection Flow
-        detected = None
-        if should_detect:
+        detected = "idle"
+        run_detection = should_detect or self.calibration_active
+        if run_detection:
             if not self.jutsu_active:
                 # Sequence Phase: Recognition
                 if self.settings.get("use_mediapipe_signs", False):
-                    # Use MediaPipe Tasks API for sign recognition
-                    self.detect_hands(frame) # This populates self.last_mp_result if successful
-                    
-                    if hasattr(self, 'last_mp_result') and self.last_mp_result.hand_landmarks:
-                        features = self.recorder.process_tasks_landmarks(
-                            self.last_mp_result.hand_landmarks, 
-                            self.last_mp_result.handedness
-                        )
-                        detected = self.recorder.predict(features).lower()
-                        
-                        # --- 2-Hand Restriction logic ---
-                        if self.settings.get("restricted_signs", False):
-                            num_hands = len(self.last_mp_result.hand_landmarks)
-                            if num_hands < 2:
-                                detected = "idle"
-                        
-                        # (Removed moving OpenCV text to use static Pygame text below)
-                    else:
-                        detected = "Idle"
+                    # MediaPipe + quality gate + temporal consensus
+                    detected = self.predict_sign_with_filters(frame, lighting_ok)
                 else:
                     # Legacy Phase: Use YOLO for hand sign recognition (bounding boxes)
                     frame, detected = self.detect_and_process(frame)
+                    detected = str(detected or "idle").lower()
             else:
                 # Effect Phase: switch to MediaPipe for precise tracking
                 self.detect_hands(frame)
                 self.detect_face(frame)
-        
+        else:
+            self._apply_temporal_vote("idle", 0.0, False)
+            self.detected_sign = "idle"
+            self.detected_confidence = 0.0
+
         # 3. Process Sequence
         self.effect_orchestrator.on_sign_detected(
             detected,
@@ -499,7 +489,7 @@ class PlayingMixin:
             self.screen.blit(t_txt, (cam_x + 27, cam_y + 21))
 
         # --- Static Sign Prediction Label (Fixed Top-Right) ---
-        if detected and detected != "Idle":
+        if detected and str(detected).lower() != "idle":
             pred_txt = self.fonts["body"].render(f"SIGN: {detected.upper()}", True, (255, 255, 255))
             tw, th = pred_txt.get_size()
             
@@ -514,13 +504,50 @@ class PlayingMixin:
             self.screen.blit(lp_surf, lp_rect)
             self.screen.blit(pred_txt, (lx, ly))
 
-        elif self.state == GameState.WELCOME_MODAL:
-            self.render_welcome_modal(dt)
-        elif self.state == GameState.QUIT_CONFIRM:
-            self.render_quit_confirm()
-        elif self.state == GameState.LOGOUT_CONFIRM:
-            self.render_logout_confirm()
-        
+        # Detection diagnostics (quality gate + voting + calibration state)
+        light_color = COLORS["success"] if lighting_ok else COLORS["error"]
+        light_text = self.lighting_status.replace("_", " ").upper()
+        vote_text = f"VOTE {self.last_vote_hits}/{self.vote_window_size}"
+        if self.calibration_active:
+            progress = int(
+                self._clamp(
+                    ((time.time() - self.calibration_started_at) / max(0.001, self.calibration_duration_s)) * 100.0,
+                    0.0,
+                    100.0,
+                )
+            )
+            calib_text = f"CALIBRATING {progress}%"
+        else:
+            calib_text = "PRESS C TO CALIBRATE"
+
+        info_lines = [
+            f"LIGHT: {light_text}",
+            f"{vote_text} • {int(self.detected_confidence * 100)}%",
+            calib_text,
+        ]
+        if self.calibration_message and time.time() <= self.calibration_message_until:
+            info_lines.append(self.calibration_message.upper())
+
+        info_x = cam_x + 12
+        info_y = cam_y + 14
+        panel_w = 320
+        panel_h = 22 + len(info_lines) * 18
+        info_panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        pygame.draw.rect(info_panel, (20, 20, 30, 175), (0, 0, panel_w, panel_h), border_radius=10)
+        pygame.draw.rect(info_panel, (80, 80, 110, 170), (0, 0, panel_w, panel_h), 1, border_radius=10)
+        self.screen.blit(info_panel, (info_x, info_y))
+
+        for idx, line in enumerate(info_lines):
+            color = COLORS["text_dim"]
+            if line.startswith("LIGHT:"):
+                color = light_color
+            elif "CALIBRATING" in line:
+                color = COLORS["accent_glow"]
+            elif line.startswith("VOTE"):
+                color = COLORS["text"]
+            surf = self.fonts["tiny"].render(line, True, color)
+            self.screen.blit(surf, (info_x + 10, info_y + 8 + idx * 17))
+
         # --- Challenge Overlays (Responsive) ---
         if self.game_mode == "challenge" and not is_locked:
             if self.challenge_state == "waiting":

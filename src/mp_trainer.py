@@ -21,6 +21,8 @@ class SignRecorder:
         self.current_label_idx = 1 # Start with Tiger (Index 1), Idle is 0
         self.recording_frames = 0
         self.data_buffer = []
+        self.distance_threshold = 1.8
+        self.auto_mirror_on_save = True
         
         # Delayed Record State
         self.countdown_start = 0
@@ -127,28 +129,78 @@ class SignRecorder:
     def save_data(self):
         """Save buffered data to CSV."""
         if not self.data_buffer: return
-        
+
+        rows_to_write = list(self.data_buffer)
+        mirrored_count = 0
+
+        if self.auto_mirror_on_save:
+            for row in self.data_buffer:
+                mirrored = self._build_mirrored_row(row)
+                if mirrored is not None:
+                    rows_to_write.append(mirrored)
+                    mirrored_count += 1
+
         with open(DATA_FILE, 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerows(self.data_buffer)
-            
-        print(f"[+] Saved {len(self.data_buffer)} samples for {LABELS[self.current_label_idx]}")
+            writer.writerows(rows_to_write)
+
+        print(
+            f"[+] Saved {len(rows_to_write)} samples for {LABELS[self.current_label_idx]} "
+            f"(base={len(self.data_buffer)}, mirrored={mirrored_count})"
+        )
         self.data_buffer = []
         self._load_and_train() 
 
+    def _build_mirrored_row(self, row):
+        """Create left-right mirrored copy (flip x + swap hands)."""
+        if not row or len(row) != 127:
+            return None
+
+        label = row[0]
+        try:
+            values = [float(v) for v in row[1:]]
+        except ValueError:
+            return None
+        if len(values) != 126:
+            return None
+
+        h1 = values[:63]
+        h2 = values[63:]
+
+        def mirror_block(block):
+            mirrored = block[:]
+            for i in range(0, len(mirrored), 3):
+                mirrored[i] = -mirrored[i]
+            return mirrored
+
+        h1_m = mirror_block(h1)
+        h2_m = mirror_block(h2)
+        return [label] + h2_m + h1_m
+
     def predict(self, features):
-        if not self.knn: return "Unknown"
+        label, _, _ = self.predict_with_confidence(features)
+        return label
+
+    def predict_with_confidence(self, features):
+        """Predict label and return a simple confidence score in [0..1]."""
+        if not self.knn:
+            return "Unknown", 0.0, float("inf")
+
         sample = np.array([features], dtype=np.float32)
-        ret, result, neighbours, dist = self.knn.findNearest(sample, k=3)
-        min_dist = dist[0][0]
-        
-        if min_dist > 1.8:
-            return "Idle"
-            
+        _, result, _, dist = self.knn.findNearest(sample, k=3)
+        min_dist = float(dist[0][0]) if dist is not None else float("inf")
+
+        threshold = max(0.1, float(getattr(self, "distance_threshold", 1.8)))
+        normalized = min(1.0, min_dist / threshold)
+        confidence = max(0.0, 1.0 - normalized)
+
+        if min_dist > threshold:
+            return "Idle", 0.0, min_dist
+
         idx = int(result[0][0])
         if idx < len(self.knn_labels):
-            return self.knn_labels[idx]
-        return "Unknown"
+            return self.knn_labels[idx], confidence, min_dist
+        return "Unknown", 0.0, min_dist
 
 def draw_hand_landmarks(image, hand_landmarks):
     """Manual drawing of hand landmarks since mp_drawing is missing."""

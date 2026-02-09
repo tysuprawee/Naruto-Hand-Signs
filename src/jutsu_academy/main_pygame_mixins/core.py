@@ -392,7 +392,41 @@ class CoreMixin:
         self.hand_lost_frames = 0
         self.max_hold_frames = 15 # frames to keep the effect where it was
         self.head_yaw = 0
-        
+        self.last_mp_result = None
+        self.last_palm_spans = []
+
+        # Robust sign recognition state
+        self.raw_detected_sign = "idle"
+        self.raw_detected_confidence = 0.0
+        self.detected_sign = "idle"
+        self.detected_confidence = 0.0
+        self.last_detected_hands = 0
+        self.sign_vote_window = []
+        self.last_vote_hits = 0
+        self.vote_window_size = 5
+        self.vote_required_hits = 3
+        self.vote_min_confidence = 0.45
+        self.vote_entry_ttl_s = 0.7
+
+        # Lighting quality gate
+        self.lighting_status = "unknown"
+        self.lighting_mean = 0.0
+        self.lighting_contrast = 0.0
+        self.lighting_min = 45.0
+        self.lighting_max = 210.0
+        self.lighting_min_contrast = 22.0
+
+        # Per-user calibration profile
+        self.calibration_profile = {}
+        self.calibration_loaded_for = None
+        self.calibration_active = False
+        self.calibration_started_at = 0.0
+        self.calibration_duration_s = 12.0
+        self.calibration_min_samples = 100
+        self.calibration_samples = []
+        self.calibration_message = ""
+        self.calibration_message_until = 0.0
+
         # Effects
         self.fire_particles = FireParticleSystem(200)
         self.effect_orchestrator = EffectOrchestrator()
