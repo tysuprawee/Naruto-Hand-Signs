@@ -1,90 +1,101 @@
+type NumericRow = Record<string, number | string | null | undefined>;
+
+const FEATURE_KEYS: string[] = (() => {
+    const keys: string[] = [];
+    for (let hand = 1; hand <= 2; hand += 1) {
+        for (let i = 0; i < 21; i += 1) {
+            keys.push(`h${hand}_${i}_x`, `h${hand}_${i}_y`, `h${hand}_${i}_z`);
+        }
+    }
+    return keys;
+})();
+
+function clamp01(value: number): number {
+    return Math.max(0, Math.min(1, value));
+}
+
 export class KNNClassifier {
-    private data: { features: number[], label: string }[]; // Optimized storage
+    private data: { features: number[]; label: string }[];
     private k: number;
-    private labels: string[];
+    private threshold: number;
 
-    constructor(rawData: any[], k: number = 3) {
-        this.k = k;
+    constructor(rawData: NumericRow[], k: number = 3, threshold: number = 1.8) {
+        this.k = Math.max(1, Math.floor(k));
+        this.threshold = Math.max(0.1, threshold);
         this.data = [];
-        this.labels = [];
 
-        if (rawData.length > 0) {
-            // Determine feature keys once (assume consistent schema)
-            // Filter out 'label' and ensure we only get numeric columns essentially
-            const sample = rawData[0];
-            const featureKeys = Object.keys(sample).filter(key => key !== 'label');
+        for (const row of rawData || []) {
+            const label = String(row?.label ?? "").trim();
+            if (!label) continue;
 
-            // Pre-process all rows
-            rawData.forEach(row => {
-                const features = featureKeys.map(key => parseFloat(row[key]));
-                this.data.push({ features, label: row.label });
+            const features = FEATURE_KEYS.map((key) => {
+                const n = Number(row[key]);
+                return Number.isFinite(n) ? n : 0;
             });
 
-            // unique labels
-            this.labels = Array.from(new Set(this.data.map(d => d.label))).sort();
+            this.data.push({ label, features });
         }
     }
 
     predict(features: number[]): string {
-        if (!features || features.length === 0 || this.data.length === 0) return "Unknown";
+        return this.predictWithConfidence(features).label;
+    }
 
-        // Calculate distances with optimized pre-parsed numbers
-        // We avoid creating new objects inside the loop if possible, 
-        // but modern JS engines embrace object creation well.
-        // Let's stick to simple map/sort first, but use Pre-Parsed numbers.
-
-        /* 
-           PERFORMANCE NOTE:
-           Even with pre-parsing, mapping 10k objects every frame is costly.
-           Ideally, we'd use a flat Float32Array for features and doing loop unrolling,
-           but let's try this standard optimization first.
-        */
+    predictWithConfidence(features: number[]): { label: string; confidence: number; distance: number } {
+        if (!features || features.length === 0 || this.data.length === 0) {
+            return { label: "Unknown", confidence: 0, distance: Number.POSITIVE_INFINITY };
+        }
 
         const distances = new Array(this.data.length);
-        for (let i = 0; i < this.data.length; i++) {
+        for (let i = 0; i < this.data.length; i += 1) {
             distances[i] = {
                 label: this.data[i].label,
-                dist: this.euclideanDistance(features, this.data[i].features)
+                dist: this.euclideanDistance(features, this.data[i].features),
             };
         }
-
-        // Sort by distance (ASC)
         distances.sort((a, b) => a.dist - b.dist);
 
-        // Get top K
         const kNearest = distances.slice(0, this.k);
+        if (kNearest.length === 0) {
+            return { label: "Unknown", confidence: 0, distance: Number.POSITIVE_INFINITY };
+        }
+
         const minDist = kNearest[0].dist;
-
-        // Threshold check (User requested change?)
-        // Python script used 1.8. User said "when no hand it's 30 just no hand is 10"
-        // I suspect they mean "Just ONE hand is 10 [fps]". They might verify logic later.
-        if (minDist > 1.8) {
-            return "Idle";
+        if (minDist > this.threshold) {
+            return { label: "Idle", confidence: 0, distance: minDist };
         }
 
-        // Majority vote
-        const counts: { [key: string]: number } = {};
-        for (const n of kNearest) {
-            counts[n.label] = (counts[n.label] || 0) + 1;
+        const counts = new Map<string, { hits: number; distSum: number }>();
+        for (const item of kNearest) {
+            const current = counts.get(item.label) || { hits: 0, distSum: 0 };
+            current.hits += 1;
+            current.distSum += item.dist;
+            counts.set(item.label, current);
         }
 
-        let maxCount = 0;
-        let prediction = "Unknown";
-
-        for (const label in counts) {
-            if (counts[label] > maxCount) {
-                maxCount = counts[label];
-                prediction = label;
+        let bestLabel = kNearest[0].label;
+        let bestHits = -1;
+        let bestAvgDist = Number.POSITIVE_INFINITY;
+        for (const [label, score] of counts.entries()) {
+            const avgDist = score.distSum / Math.max(1, score.hits);
+            if (score.hits > bestHits || (score.hits === bestHits && avgDist < bestAvgDist)) {
+                bestHits = score.hits;
+                bestAvgDist = avgDist;
+                bestLabel = label;
             }
         }
 
-        return prediction;
+        return {
+            label: bestLabel,
+            confidence: clamp01(1 - minDist / this.threshold),
+            distance: minDist,
+        };
     }
 
     private euclideanDistance(a: number[], b: number[]): number {
         let sum = 0;
         const len = Math.min(a.length, b.length);
-        for (let i = 0; i < len; i++) {
+        for (let i = 0; i < len; i += 1) {
             const diff = a[i] - b[i];
             sum += diff * diff;
         }
@@ -92,7 +103,9 @@ export class KNNClassifier {
     }
 }
 
-export function normalizeHand(landmarks: any[]): number[] {
+type Landmark = { x: number; y: number; z: number };
+
+export function normalizeHand(landmarks: Landmark[]): number[] {
     if (!landmarks || landmarks.length === 0) return [];
 
     const wrist = landmarks[0];
@@ -104,14 +117,15 @@ export function normalizeHand(landmarks: any[]): number[] {
         (wrist.z - middleBase.z) ** 2
     );
 
-    if (dist < 0.0001) dist = 1.0;
+    if (dist < 0.0001) dist = 1;
 
     const coords: number[] = [];
     for (const lm of landmarks) {
-        const normX = (lm.x - wrist.x) / dist;
-        const normY = (lm.y - wrist.y) / dist;
-        const normZ = (lm.z - wrist.z) / dist;
-        coords.push(normX, normY, normZ);
+        coords.push(
+            (lm.x - wrist.x) / dist,
+            (lm.y - wrist.y) / dist,
+            (lm.z - wrist.z) / dist
+        );
     }
 
     return coords;
