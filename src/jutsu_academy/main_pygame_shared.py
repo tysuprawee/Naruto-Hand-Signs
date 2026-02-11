@@ -678,6 +678,7 @@ class ProgressionManager:
 # ═══════════════════════════════════════════════════════════════════════════
 class GameState:
     MENU = "menu"
+    MAINTENANCE_REQUIRED = "maintenance_required"
     UPDATE_REQUIRED = "update_required"
     JUTSU_LIBRARY = "jutsu_library"
     QUESTS = "quests"

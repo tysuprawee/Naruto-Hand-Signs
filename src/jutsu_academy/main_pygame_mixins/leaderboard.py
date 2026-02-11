@@ -53,7 +53,31 @@ class LeaderboardMixin:
         """Fetch announcements in background."""
         self.announcements_loading = True
         try:
-            data = self.network_manager.get_announcements(limit=5)
+            data = self.network_manager.get_announcements(limit=25)
+            # 0) Maintenance gate (from type='maintenance' rows)
+            maintenance_rows = []
+            if data:
+                maintenance_rows = [e for e in data if e.get("type") == "maintenance" and e.get("is_active", True)]
+            if maintenance_rows:
+                latest_maint = maintenance_rows[0]
+                maintenance_msg = str(latest_maint.get("message") or "Jutsu Academy is under maintenance. Please try again later.").strip()
+                if isinstance(maintenance_msg, str) and maintenance_msg.startswith("[") and maintenance_msg.endswith("]"):
+                    try:
+                        parsed_msg = ast.literal_eval(maintenance_msg)
+                        if isinstance(parsed_msg, list) and parsed_msg:
+                            maintenance_msg = str(parsed_msg[0])
+                    except Exception:
+                        pass
+                maintenance_url = str(latest_maint.get("url") or latest_maint.get("link") or "").strip()
+                self.force_maintenance_required = True
+                self.force_maintenance_message = maintenance_msg
+                if maintenance_url:
+                    self.force_maintenance_url = maintenance_url
+                self.show_announcements = False
+            else:
+                self.force_maintenance_required = False
+                self.force_maintenance_message = ""
+
             # 1) Version check popup (from type='version' rows)
             version_rows = []
             if data:

@@ -214,7 +214,7 @@ class NetworkManager:
         try:
             response = self.client.table('app_config')\
                 .select('*')\
-                .in_('type', ['announcement', 'version'])\
+                .in_('type', ['announcement', 'version', 'maintenance'])\
                 .eq('is_active', True)\
                 .order('priority', desc=True)\
                 .order('created_at', desc=True)\

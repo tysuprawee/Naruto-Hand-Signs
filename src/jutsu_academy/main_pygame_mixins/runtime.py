@@ -11,6 +11,45 @@ class RuntimeMixin:
         self._activate_next_alert()
         self._refresh_quest_periods()
 
+        # Poll app_config periodically so maintenance/update toggles can apply live.
+        now = time.time()
+        if self.network_manager and self.network_manager.client:
+            if (not self.announcements_loading) and (now - getattr(self, "config_poll_last_at", 0.0) >= getattr(self, "config_poll_interval_s", 20.0)):
+                self.config_poll_last_at = now
+                threading.Thread(target=self._fetch_announcements, daemon=True).start()
+
+        # Hard maintenance gate takes priority over version gate.
+        if self.force_maintenance_required and self.state not in [GameState.MAINTENANCE_REQUIRED, GameState.QUIT_CONFIRM]:
+            if self.state == GameState.SETTINGS:
+                self._stop_settings_camera_preview()
+            if self.state == GameState.PLAYING:
+                self._stop_camera()
+                self.jutsu_active = False
+                self.fire_particles.emitting = False
+            self.show_announcements = False
+            self.active_alert = None
+            self.state = GameState.MAINTENANCE_REQUIRED
+
+        if self.state == GameState.MAINTENANCE_REQUIRED:
+            if not self.force_maintenance_required and not self.force_update_required:
+                self.state = GameState.MENU
+            mouse_pos = pygame.mouse.get_pos()
+            for event in events:
+                if event.type == pygame.QUIT:
+                    self.running = False
+                elif event.type == pygame.KEYDOWN and event.key in [pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE]:
+                    self.running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if hasattr(self, "maintenance_open_rect") and self.maintenance_open_rect.collidepoint(mouse_pos):
+                        self.play_sound("click")
+                        url = self.force_maintenance_url if self.force_maintenance_url else SOCIAL_LINKS.get("discord")
+                        if url:
+                            webbrowser.open(url)
+                    elif hasattr(self, "maintenance_exit_rect") and self.maintenance_exit_rect.collidepoint(mouse_pos):
+                        self.play_sound("click")
+                        self.running = False
+            return
+
         # Hard version gate: block access when backend marks this client outdated.
         if self.force_update_required and self.state not in [GameState.UPDATE_REQUIRED, GameState.QUIT_CONFIRM]:
             if self.state == GameState.SETTINGS:
@@ -547,6 +586,8 @@ class RuntimeMixin:
             # Render based on state
             if self.state == GameState.MENU:
                 self.render_menu()
+            elif self.state == GameState.MAINTENANCE_REQUIRED:
+                self.render_maintenance_required()
             elif self.state == GameState.UPDATE_REQUIRED:
                 self.render_update_required()
             elif self.state == GameState.LOGIN_MODAL:

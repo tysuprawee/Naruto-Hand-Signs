@@ -340,6 +340,11 @@ class CoreMixin:
         self.force_update_remote_version = ""
         self.force_update_message = ""
         self.force_update_url = SOCIAL_LINKS.get("discord", "")
+        self.force_maintenance_required = False
+        self.force_maintenance_message = ""
+        self.force_maintenance_url = SOCIAL_LINKS.get("discord", "")
+        self.config_poll_interval_s = 20.0
+        self.config_poll_last_at = 0.0
         
         # Trigger background fetch if online
         if self.network_manager.client:
