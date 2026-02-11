@@ -1,15 +1,15 @@
 {
   "tutorial_seen": true,
-  "tutorial_seen_at": null,
+  "tutorial_seen_at": "2026-02-11T16:31:26Z",
   "mastery": {
     "Shadow Clone": {
-      "best_time": 1.665816068649292
+      "best_time": 1.5640590190887451
     },
     "Rasengan": {
       "best_time": 1.2159347534179688e-05
     },
     "Fireball": {
-      "best_time": 12.710613012313843
+      "best_time": 11.483841180801392
     },
     "Chidori": {
       "best_time": 1.6928458213806152
@@ -32,35 +32,35 @@
   },
   "quests": {
     "daily": {
-      "period": "2026-02-08",
+      "period": "2026-02-11",
       "quests": {
         "d_signs": {
-          "progress": 82,
+          "progress": 39,
           "claimed": false
         },
         "d_jutsus": {
-          "progress": 31,
+          "progress": 8,
           "claimed": false
         },
         "d_xp": {
-          "progress": 2350,
+          "progress": 790,
           "claimed": false
         }
       }
     },
     "weekly": {
-      "period": "2026-W06",
+      "period": "2026-W07",
       "quests": {
         "w_jutsus": {
-          "progress": 106,
+          "progress": 8,
           "claimed": false
         },
         "w_challenges": {
-          "progress": 2,
+          "progress": 6,
           "claimed": false
         },
         "w_xp": {
-          "progress": 8450,
+          "progress": 790,
           "claimed": false
         }
       }

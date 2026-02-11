@@ -11,6 +11,36 @@ class RuntimeMixin:
         self._activate_next_alert()
         self._refresh_quest_periods()
 
+        # Hard version gate: block access when backend marks this client outdated.
+        if self.force_update_required and self.state not in [GameState.UPDATE_REQUIRED, GameState.QUIT_CONFIRM]:
+            if self.state == GameState.SETTINGS:
+                self._stop_settings_camera_preview()
+            if self.state == GameState.PLAYING:
+                self._stop_camera()
+                self.jutsu_active = False
+                self.fire_particles.emitting = False
+            self.show_announcements = False
+            self.active_alert = None
+            self.state = GameState.UPDATE_REQUIRED
+
+        if self.state == GameState.UPDATE_REQUIRED:
+            mouse_pos = pygame.mouse.get_pos()
+            for event in events:
+                if event.type == pygame.QUIT:
+                    self.running = False
+                elif event.type == pygame.KEYDOWN and event.key in [pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE]:
+                    self.running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if hasattr(self, "update_open_rect") and self.update_open_rect.collidepoint(mouse_pos):
+                        self.play_sound("click")
+                        url = self.force_update_url if self.force_update_url else SOCIAL_LINKS.get("discord")
+                        if url:
+                            webbrowser.open(url)
+                    elif hasattr(self, "update_exit_rect") and self.update_exit_rect.collidepoint(mouse_pos):
+                        self.play_sound("click")
+                        self.running = False
+            return
+
         # Global reusable alert modal: blocks underlying interactions
         if self.active_alert:
             mouse_pos = pygame.mouse.get_pos()
@@ -117,6 +147,8 @@ class RuntimeMixin:
                             if self.challenge_state == "waiting":
                                 self.challenge_state = "countdown"
                                 self.challenge_countdown_start = time.time()
+                                if hasattr(self, "_challenge_reset_proof"):
+                                    self._challenge_reset_proof()
                                 self.play_sound("click")
                             elif self.challenge_state == "results":
                                 # Reset challenge
@@ -126,6 +158,8 @@ class RuntimeMixin:
                                 self.jutsu_active = False
                                 self.submission_complete = False
                                 self.challenge_rank_info = ""
+                                if hasattr(self, "_challenge_reset_proof"):
+                                    self._challenge_reset_proof()
                                 if self.video_cap:
                                     self.video_cap.release()
                                     self.video_cap = None
@@ -513,6 +547,8 @@ class RuntimeMixin:
             # Render based on state
             if self.state == GameState.MENU:
                 self.render_menu()
+            elif self.state == GameState.UPDATE_REQUIRED:
+                self.render_update_required()
             elif self.state == GameState.LOGIN_MODAL:
                 # Render menu underneath, then modal on top
                 self.render_menu()

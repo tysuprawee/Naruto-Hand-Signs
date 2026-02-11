@@ -336,6 +336,10 @@ class CoreMixin:
         self.version_alert_for_version = None
         self.announcement_timer_start = time.time()
         self.announcement_auto_show_delay = 1.5
+        self.force_update_required = False
+        self.force_update_remote_version = ""
+        self.force_update_message = ""
+        self.force_update_url = SOCIAL_LINKS.get("discord", "")
         
         # Trigger background fetch if online
         if self.network_manager.client:
@@ -377,6 +381,13 @@ class CoreMixin:
         self.challenge_rank_info = ""
         self.challenge_submitting = False
         self.submission_complete = False
+        self.challenge_run_token = ""
+        self.challenge_run_token_source = "none"
+        self.challenge_proof_events = []
+        self.challenge_run_hash = ""
+        self.challenge_started_at_iso = ""
+        self.challenge_submission_result = {}
+        self.challenge_event_overflow = False
         
         # Modal Rects (Pre-initialize to avoid first-frame click fails)
         self.welcome_ok_rect = pygame.Rect(0, 0, 0, 0)

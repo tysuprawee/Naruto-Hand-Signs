@@ -49,6 +49,8 @@ except ImportError:
         def __init__(self): self.client = None
         def get_leaderboard(self, **kwargs): return []
         def submit_score(self, **kwargs): pass
+        def issue_run_token(self, **kwargs): return {"ok": False, "token": "offline_mock", "source": "mock"}
+        def submit_score_secure(self, **kwargs): return {"ok": False, "reason": "mock"}
 
 # Try importing Discord auth and dotenv
 try:
@@ -676,6 +678,7 @@ class ProgressionManager:
 # ═══════════════════════════════════════════════════════════════════════════
 class GameState:
     MENU = "menu"
+    UPDATE_REQUIRED = "update_required"
     JUTSU_LIBRARY = "jutsu_library"
     QUESTS = "quests"
     TUTORIAL = "tutorial"

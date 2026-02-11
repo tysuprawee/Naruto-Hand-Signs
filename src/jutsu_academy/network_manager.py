@@ -5,6 +5,8 @@ import time
 import os
 import cv2
 import threading
+import uuid
+import hashlib
 
 # Load env variables simple parser
 def get_env():
@@ -60,6 +62,7 @@ class NetworkManager:
         self.last_state = {}
         self.msg_queue = []
         self.stop_thread = False
+        self._warned_profile_fallback = False
 
     def connect(self, room_id):
         if not self.client: return
@@ -239,6 +242,108 @@ class NetworkManager:
         except Exception as e:
             print(f"[!] Score submission failed: {e}")
 
+    def issue_run_token(self, username, mode, client_started_at=None):
+        """
+        Request a short-lived challenge run token from Supabase.
+        Falls back to local token if RPC isn't available yet.
+        """
+        fallback_token = f"local_{uuid.uuid4().hex}"
+        if not self.client:
+            return {"ok": False, "token": fallback_token, "source": "offline"}
+
+        payload = {
+            "p_username": username,
+            "p_mode": str(mode or "").upper(),
+            "p_client_started_at": client_started_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        for attempt in range(2):
+            try:
+                response = self.client.rpc("issue_run_token", payload).execute()
+                data = response.data
+                if isinstance(data, list) and data:
+                    data = data[0]
+                if isinstance(data, dict) and data.get("token"):
+                    return {
+                        "ok": bool(data.get("ok", True)),
+                        "token": data["token"],
+                        "expires_at": data.get("expires_at"),
+                        "source": "rpc",
+                    }
+            except Exception as e:
+                if attempt == 1:
+                    print(f"[!] issue_run_token RPC failed, using fallback token: {e}")
+                time.sleep(0.1)
+
+        return {"ok": False, "token": fallback_token, "source": "fallback"}
+
+    def submit_score_secure(
+        self,
+        username,
+        score_time,
+        mode="Fireball",
+        run_token=None,
+        events=None,
+        run_hash=None,
+        metadata=None,
+        discord_id=None,
+        avatar_url=None,
+    ):
+        """
+        Submit score through server validation RPC.
+        Falls back to legacy direct insert while migration is pending.
+        """
+        if not self.client:
+            return {"ok": False, "reason": "offline"}
+
+        local_token = str(run_token or "")
+        if (not local_token) or local_token.startswith("local_"):
+            token_data = self.issue_run_token(
+                username=username,
+                mode=mode,
+                client_started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+            refreshed_token = str(token_data.get("token") or "")
+            if refreshed_token:
+                local_token = refreshed_token
+
+        payload = {
+            "p_username": username,
+            "p_mode": str(mode or "").upper(),
+            "p_score_time": float(score_time),
+            "p_run_token": local_token,
+            "p_events": events or [],
+            "p_run_hash": run_hash or "",
+            "p_metadata": metadata or {},
+            "p_discord_id": discord_id,
+            "p_avatar_url": avatar_url,
+        }
+        if not payload["p_run_hash"]:
+            canonical = json.dumps(payload["p_events"], separators=(",", ":"), sort_keys=True)
+            payload["p_run_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+        for attempt in range(2):
+            try:
+                response = self.client.rpc("submit_challenge_run_secure", payload).execute()
+                data = response.data
+                if isinstance(data, list) and data:
+                    data = data[0]
+                if isinstance(data, dict):
+                    return data
+            except Exception as e:
+                if attempt == 1:
+                    print(f"[!] secure submit RPC failed, falling back to legacy insert: {e}")
+                time.sleep(0.1)
+
+        # Backward-compatible fallback so gameplay is not blocked pre-migration.
+        self.submit_score(
+            username=username,
+            score_time=score_time,
+            mode=mode,
+            discord_id=discord_id,
+            avatar_url=avatar_url,
+        )
+        return {"ok": True, "fallback": True}
+
     def get_profile(self, username):
         """Fetch player profile/progression from DB"""
         if not self.client: return None
@@ -255,8 +360,55 @@ class NetworkManager:
         """Update or Insert player progression"""
         if not self.client: return
         try:
+            username = data.get("username")
+            if not username:
+                return
+
+            # Preferred path: server-side guarded merge.
+            try:
+                rpc_payload = {
+                    "p_username": username,
+                    "p_xp": int(data.get("xp", 0) or 0),
+                    "p_level": int(data.get("level", 0) or 0),
+                    "p_rank": str(data.get("rank", "") or ""),
+                    "p_total_signs": int(data.get("total_signs", 0) or 0),
+                    "p_total_jutsus": int(data.get("total_jutsus", 0) or 0),
+                    "p_fastest_combo": int(data.get("fastest_combo", 0) or 0),
+                    "p_tutorial_seen": bool(data.get("tutorial_seen", False)),
+                    "p_tutorial_seen_at": data.get("tutorial_seen_at"),
+                    "p_tutorial_version": data.get("tutorial_version"),
+                    "p_discord_id": data.get("discord_id"),
+                }
+                self.client.rpc("upsert_profile_guarded", rpc_payload).execute()
+                return
+            except Exception:
+                if not self._warned_profile_fallback:
+                    print("[!] upsert_profile_guarded RPC unavailable, using strict cloud-authoritative fallback.")
+                    self._warned_profile_fallback = True
+                pass
+
+            existing = self.get_profile(username)
+            merged = dict(data)
+            if existing:
+                # Strict fallback: cloud remains authority for progression fields.
+                for key in ["xp", "level", "total_signs", "total_jutsus", "fastest_combo", "rank"]:
+                    if key in existing:
+                        merged[key] = existing.get(key)
+
+                # Tutorial/version flags should stay true once true.
+                if "tutorial_seen" in existing or "tutorial_seen" in merged:
+                    merged["tutorial_seen"] = bool(existing.get("tutorial_seen", False) or merged.get("tutorial_seen", False))
+                if "tutorial_seen_at" in existing and existing.get("tutorial_seen_at") and not merged.get("tutorial_seen_at"):
+                    merged["tutorial_seen_at"] = existing.get("tutorial_seen_at")
+                if "tutorial_version" in existing and not merged.get("tutorial_version"):
+                    merged["tutorial_version"] = existing.get("tutorial_version")
+
+                # Keep cloud discord id if client payload does not include one.
+                if existing.get("discord_id") and not merged.get("discord_id"):
+                    merged["discord_id"] = existing.get("discord_id")
+
             # We use username as the conflict target
-            self.client.table('profiles').upsert(data, on_conflict='username').execute()
+            self.client.table('profiles').upsert(merged, on_conflict='username').execute()
         except Exception as e:
             print(f"[!] Profile sync failed: {e}")
 
