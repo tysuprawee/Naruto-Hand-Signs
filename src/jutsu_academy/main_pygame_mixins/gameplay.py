@@ -253,6 +253,9 @@ class GameplayMixin:
 
     def start_game(self, mode, initial_jutsu_idx=0):
         """Start the game with specified mode."""
+        if getattr(self, "force_maintenance_required", False):
+            self.state = GameState.MAINTENANCE_REQUIRED
+            return
         if getattr(self, "force_update_required", False):
             self.state = GameState.UPDATE_REQUIRED
             return

@@ -35,15 +35,15 @@
       "period": "2026-02-11",
       "quests": {
         "d_signs": {
-          "progress": 39,
+          "progress": 40,
           "claimed": false
         },
         "d_jutsus": {
-          "progress": 8,
+          "progress": 9,
           "claimed": false
         },
         "d_xp": {
-          "progress": 790,
+          "progress": 850,
           "claimed": false
         }
       }
@@ -52,15 +52,15 @@
       "period": "2026-W07",
       "quests": {
         "w_jutsus": {
-          "progress": 8,
+          "progress": 9,
           "claimed": false
         },
         "w_challenges": {
-          "progress": 6,
+          "progress": 7,
           "claimed": false
         },
         "w_xp": {
-          "progress": 790,
+          "progress": 850,
           "claimed": false
         }
       }
