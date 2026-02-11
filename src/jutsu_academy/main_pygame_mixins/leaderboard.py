@@ -63,15 +63,21 @@ class LeaderboardMixin:
                 latest = version_rows[0]
                 remote_version = str(latest.get("version") or "").strip()
                 remote_message = str(latest.get("message") or "A newer version is available.").strip()
+                remote_url = str(latest.get("url") or latest.get("link") or "").strip()
 
                 if remote_version and remote_version != APP_VERSION:
-                    if self.version_alert_for_version != remote_version:
-                        self.show_alert(
-                            "Update Available",
-                            f"{remote_message}\nCurrent: v{APP_VERSION} • Latest: v{remote_version}",
-                            "OK",
-                        )
-                        self.version_alert_for_version = remote_version
+                    self.force_update_required = True
+                    self.force_update_remote_version = remote_version
+                    self.force_update_message = remote_message
+                    if remote_url:
+                        self.force_update_url = remote_url
+                    self.version_alert_for_version = remote_version
+                    self.show_announcements = False
+                elif remote_version == APP_VERSION:
+                    # Clear gate when app version catches up.
+                    self.force_update_required = False
+                    self.force_update_remote_version = remote_version
+                    self.force_update_message = ""
 
             # 2) Flatten announcements only for announcement popup
             flat_ann = []

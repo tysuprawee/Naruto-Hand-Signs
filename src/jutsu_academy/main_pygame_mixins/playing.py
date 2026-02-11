@@ -1,8 +1,71 @@
 from src.jutsu_academy.main_pygame_shared import *
 from src.jutsu_academy.effects import EffectContext
+import hashlib
 
 
 class PlayingMixin:
+    def _challenge_reset_proof(self):
+        self.challenge_run_token = ""
+        self.challenge_run_token_source = "none"
+        self.challenge_proof_events = []
+        self.challenge_run_hash = ""
+        self.challenge_started_at_iso = ""
+        self.challenge_submission_result = {}
+        self.challenge_event_overflow = False
+
+    def _challenge_events_digest(self):
+        canonical = json.dumps(self.challenge_proof_events or [], separators=(",", ":"), sort_keys=True)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _challenge_begin_proof(self):
+        self._challenge_reset_proof()
+        jutsu_name = self.jutsu_names[self.current_jutsu_idx]
+        mode = str(jutsu_name).upper()
+        self.challenge_started_at_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        seed = f"{self.username}|{mode}|{self.challenge_started_at_iso}|{time.time():.6f}"
+        self.challenge_run_hash = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+        self._challenge_append_event(
+            "run_start",
+            mode=mode,
+            expected_signs=len(self.sequence or []),
+        )
+        try:
+            if self.network_manager:
+                token_data = self.network_manager.issue_run_token(
+                    username=self.username if self.username else "Guest",
+                    mode=mode,
+                    client_started_at=self.challenge_started_at_iso,
+                )
+                self.challenge_run_token = str(token_data.get("token") or "")
+                self.challenge_run_token_source = str(token_data.get("source") or "none")
+        except Exception as exc:
+            print(f"[!] issue_run_token failed: {exc}")
+
+    def _challenge_append_event(self, event_type, **extra):
+        if self.game_mode != "challenge":
+            return
+        max_events = 256
+        if len(self.challenge_proof_events) >= max_events:
+            if not self.challenge_event_overflow:
+                self.challenge_event_overflow = True
+                # Keep a single overflow marker then ignore additional events.
+                overflow_evt = {"t": round(max(0.0, time.time() - self.challenge_start_time), 3), "type": "event_overflow"}
+                self.challenge_proof_events.append(overflow_evt)
+            return
+        rel_t = 0.0
+        if self.challenge_start_time:
+            rel_t = max(0.0, time.time() - self.challenge_start_time)
+        event = {
+            "t": round(rel_t, 3),
+            "type": str(event_type),
+        }
+        event.update(extra)
+        self.challenge_proof_events.append(event)
+
+        canonical = json.dumps(event, separators=(",", ":"), sort_keys=True)
+        prev_hash = self.challenge_run_hash or ""
+        self.challenge_run_hash = hashlib.sha256((prev_hash + "|" + canonical).encode("utf-8")).hexdigest()
+
     def _trigger_jutsu_payload(self, jutsu_name, effect_name):
         """Trigger sound/effect/video payload for a (sub)jutsu event."""
         # Queue signature sound (supports combo checkpoints without clobbering previous sound).
@@ -87,6 +150,7 @@ class PlayingMixin:
             self.challenge_state = "active"
             self.challenge_start_time = time.time()
             self.last_sign_time = time.time()
+            self._challenge_begin_proof()
             self.play_sound("complete")
 
     def _render_challenge_results(self, cam_x, cam_y, cam_w, cam_h):
@@ -150,14 +214,35 @@ class PlayingMixin:
                 if d_id and avatar_hash:
                     avatar_url = f"https://cdn.discordapp.com/avatars/{d_id}/{avatar_hash}.png?size=64"
             
-            # 1. Submit
-            self.network_manager.submit_score(
-                username, 
-                self.challenge_final_time, 
+            # 1. Submit using secure RPC when available (with fallback).
+            secure_metadata = {
+                "expected_signs": len(self.jutsu_list.get(jutsu_name, {}).get("sequence", [])),
+                "detected_signs": len([e for e in self.challenge_proof_events if e.get("type") == "sign_ok"]),
+                "cooldown_s": float(self.cooldown),
+                "client_fps_target": int(FPS),
+                "client_version": APP_VERSION,
+                "token_source": self.challenge_run_token_source,
+                "event_chain_hash": self.challenge_run_hash,
+                "event_overflow": bool(self.challenge_event_overflow),
+            }
+            submit_res = self.network_manager.submit_score_secure(
+                username=username,
+                score_time=self.challenge_final_time,
                 mode=jutsu_name.upper(),
+                run_token=self.challenge_run_token,
+                events=self.challenge_proof_events,
+                run_hash=self._challenge_events_digest(),
+                metadata=secure_metadata,
                 discord_id=d_id,
-                avatar_url=avatar_url
+                avatar_url=avatar_url,
             )
+            self.challenge_submission_result = submit_res if isinstance(submit_res, dict) else {}
+            if isinstance(submit_res, dict) and (not submit_res.get("ok", True)):
+                reason = submit_res.get("reason", "validation_failed")
+                self.challenge_rank_info = f"Submission rejected: {reason}"
+                self.challenge_submitting = False
+                self.submission_complete = True
+                return
             
             # 2. Get Leadboard to find rank (simulated for immediate feedback)
             # Fetch enough to find approximate rank
@@ -179,6 +264,9 @@ class PlayingMixin:
                     self.challenge_rank_info = "Rank: Top 100+"
             else:
                  self.challenge_rank_info = "Rank: #1 (First Record!)"
+
+            if isinstance(submit_res, dict) and submit_res.get("fallback"):
+                self.challenge_rank_info = f"{self.challenge_rank_info} • legacy verify"
                  
         except Exception as e:
             print(f"[!] Submission Error: {e}")
@@ -297,10 +385,17 @@ class PlayingMixin:
                     if now - self.last_sign_time > self.cooldown:
                         if self.current_step == 0:
                             self.sequence_run_start = now
+                        step_completed = self.current_step + 1
                         self.current_step += 1
                         self.last_sign_time = now
                         self.play_sound("each")
                         self._record_sign_progress()
+                        if self.game_mode == "challenge":
+                            self._challenge_append_event(
+                                "sign_ok",
+                                step=step_completed,
+                                sign=str(target),
+                            )
 
                         # Combo checkpoint triggers: allow first jutsu effect to run while continuing signs.
                         jutsu_name = self.jutsu_names[self.current_jutsu_idx]
@@ -366,6 +461,11 @@ class PlayingMixin:
                             # STOP TIMER if in challenge
                             if self.game_mode == "challenge":
                                 self.challenge_final_time = self.jutsu_start_time - self.challenge_start_time
+                                self._challenge_append_event(
+                                    "run_finish",
+                                    final_time=round(float(self.challenge_final_time), 4),
+                                    jutsu=str(jutsu_name).upper(),
+                                )
 
                             self._record_mastery_completion(jutsu_name, clear_time)
                             self._record_jutsu_completion(total_xp, self.game_mode == "challenge")

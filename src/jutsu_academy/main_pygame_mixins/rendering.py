@@ -3,6 +3,84 @@ import datetime
 
 
 class RenderingMixin:
+    def render_update_required(self):
+        """Render hard-blocking update gate when client version is outdated."""
+        if self.bg_image:
+            self.screen.blit(self.bg_image, (0, 0))
+        else:
+            self.screen.fill(COLORS["bg_dark"])
+
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 220))
+        self.screen.blit(overlay, (0, 0))
+
+        card_w, card_h = 720, 430
+        card_x = (SCREEN_WIDTH - card_w) // 2
+        card_y = (SCREEN_HEIGHT - card_h) // 2
+        card_rect = pygame.Rect(card_x, card_y, card_w, card_h)
+        pygame.draw.rect(self.screen, COLORS["bg_panel"], card_rect, border_radius=18)
+        pygame.draw.rect(self.screen, COLORS["error"], card_rect, 2, border_radius=18)
+
+        title = self.fonts["title_md"].render("UPDATE REQUIRED", True, COLORS["error"])
+        self.screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, card_y + 60)))
+
+        remote_version = str(getattr(self, "force_update_remote_version", "") or "latest")
+        version_txt = self.fonts["body"].render(
+            f"Current: v{APP_VERSION}   •   Required: v{remote_version}",
+            True,
+            COLORS["text"],
+        )
+        self.screen.blit(version_txt, version_txt.get_rect(center=(SCREEN_WIDTH // 2, card_y + 112)))
+
+        message = str(getattr(self, "force_update_message", "") or "A mandatory update is required to continue.")
+        words = message.replace("\n", " ").split(" ")
+        max_w = card_w - 90
+        lines = []
+        line = []
+        for word in words:
+            trial = " ".join(line + [word]).strip()
+            if self.fonts["body"].size(trial)[0] <= max_w:
+                line.append(word)
+            else:
+                if line:
+                    lines.append(" ".join(line))
+                line = [word]
+        if line:
+            lines.append(" ".join(line))
+
+        y = card_y + 160
+        for t in lines[:4]:
+            surf = self.fonts["body"].render(t, True, COLORS["text_dim"])
+            self.screen.blit(surf, surf.get_rect(center=(SCREEN_WIDTH // 2, y)))
+            y += 34
+
+        hint = self.fonts["body_sm"].render(
+            "You cannot enter the academy until you update.",
+            True,
+            COLORS["accent_glow"],
+        )
+        self.screen.blit(hint, hint.get_rect(center=(SCREEN_WIDTH // 2, card_y + 304)))
+
+        mouse_pos = pygame.mouse.get_pos()
+        self.update_open_rect = pygame.Rect(card_x + 135, card_y + 340, 210, 54)
+        self.update_exit_rect = pygame.Rect(card_x + card_w - 345, card_y + 340, 210, 54)
+
+        open_col = COLORS["accent_dark"] if self.update_open_rect.collidepoint(mouse_pos) else COLORS["accent"]
+        exit_col = (120, 45, 45) if self.update_exit_rect.collidepoint(mouse_pos) else (90, 35, 35)
+
+        pygame.draw.rect(self.screen, open_col, self.update_open_rect, border_radius=12)
+        pygame.draw.rect(self.screen, exit_col, self.update_exit_rect, border_radius=12)
+
+        open_txt = self.fonts["body"].render("OPEN UPDATE LINK", True, (20, 20, 20))
+        self.screen.blit(open_txt, open_txt.get_rect(center=self.update_open_rect.center))
+        exit_txt = self.fonts["body"].render("EXIT GAME", True, COLORS["text"])
+        self.screen.blit(exit_txt, exit_txt.get_rect(center=self.update_exit_rect.center))
+
+        if self.update_open_rect.collidepoint(mouse_pos) or self.update_exit_rect.collidepoint(mouse_pos):
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
+        else:
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
+
     def render_menu(self):
         """Render main menu with cleaner, game-like aesthetic."""
         # 1. Background & Overlay

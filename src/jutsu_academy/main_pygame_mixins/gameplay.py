@@ -253,6 +253,10 @@ class GameplayMixin:
 
     def start_game(self, mode, initial_jutsu_idx=0):
         """Start the game with specified mode."""
+        if getattr(self, "force_update_required", False):
+            self.state = GameState.UPDATE_REQUIRED
+            return
+
         self.game_mode = mode
         self.loading_message = "Initializing..."
         self.state = GameState.LOADING
@@ -316,6 +320,13 @@ class GameplayMixin:
         self.challenge_rank_info = ""
         self.challenge_submitting = False
         self.submission_complete = False
+        self.challenge_run_token = ""
+        self.challenge_run_token_source = "none"
+        self.challenge_proof_events = []
+        self.challenge_run_hash = ""
+        self.challenge_started_at_iso = ""
+        self.challenge_submission_result = {}
+        self.challenge_event_overflow = False
         
         self.state = GameState.PLAYING
 
@@ -354,6 +365,8 @@ class GameplayMixin:
 
     def stop_game(self, return_to_library=False):
         """Stop the game and return to menu."""
+        if hasattr(self, "_challenge_reset_proof"):
+            self._challenge_reset_proof()
         self._stop_camera()
         self.fire_particles.emitting = False
         self.jutsu_active = False
@@ -382,6 +395,8 @@ class GameplayMixin:
 
     def switch_jutsu(self, direction):
         """Switch to next/prev jutsu."""
+        if hasattr(self, "_challenge_reset_proof"):
+            self._challenge_reset_proof()
         self.effect_orchestrator.on_jutsu_end(EffectContext())
         clone_effect = self.effect_orchestrator.effects.get("clone")
         if clone_effect:
