@@ -12,6 +12,12 @@ export default function AnalyticsTracker() {
         const client = supabase;
         if (!client) return;
 
+        // Redirect /play to home
+        if (pathname === '/play') {
+            window.location.href = '/';
+            return;
+        }
+
         const trackVisit = async () => {
             try {
                 const { error } = await client.from("website_visits").insert({
