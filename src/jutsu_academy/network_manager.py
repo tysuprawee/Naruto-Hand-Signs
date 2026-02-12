@@ -49,7 +49,13 @@ class NetworkManager:
         
         # Try different key variants
         self.url = env.get("SUPABASE_URL") or env.get("NEXT_PUBLIC_SUPABASE_URL", "")
-        self.key = env.get("SUPABASE_KEY") or env.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
+        self.key = (
+            env.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+            or env.get("SUPABASE_ANON_KEY")
+            or env.get("SUPABASE_KEY", "")
+        )
+        if (not env.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")) and env.get("SUPABASE_KEY"):
+            print("[!] Using SUPABASE_KEY fallback. Prefer NEXT_PUBLIC_SUPABASE_ANON_KEY for client builds.")
         
         if not self.url or not self.key:
             print("[!] Supabase credentials missing (checked .env, web/.env.local)")
