@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Sword, Scroll, ArrowRight, Video, Trophy, UploadCloud, Youtube, Instagram, Shield, Info } from "lucide-react";
+import VisitorStats from "./components/visitor-stats";
 
 export default function Home() {
   const targetDate = useMemo(() => new Date(2026, 1, 21, 21, 0, 0), []);
@@ -205,11 +206,15 @@ export default function Home() {
       </main>
 
       {/* Footer */}
+      {/* Footer */}
       <footer className="border-t border-ninja-border bg-ninja-bg py-12">
         <div className="container mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-6 text-ninja-muted text-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span className="font-mono">SYSTEM OPERATIONAL</span>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+              <span className="font-mono">SYSTEM OPERATIONAL</span>
+            </div>
+            <VisitorStats />
           </div>
           <p>&copy; 2026 Shinobi Academy. Built with PyTorch & ONNX.</p>
         </div>
