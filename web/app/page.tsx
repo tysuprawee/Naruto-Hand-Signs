@@ -39,7 +39,7 @@ export default function Home() {
             <div className="h-10 w-10 relative">
               <img src="/logo2.png" alt="Shinobi Academy" className="object-contain w-full h-full" />
             </div>
-            <span className="font-bold tracking-tight text-lg text-zinc-100 drop-shadow-[0_1px_8px_rgba(0,0,0,0.85)]">SHINOBI ACADEMY</span>
+            <span className="font-bold tracking-tight text-lg text-zinc-100 drop-shadow-[0_1px_8px_rgba(0,0,0,0.85)]">Jutsu Academy</span>
           </div>
           <nav className="hidden md:flex gap-8 text-sm font-medium text-zinc-200/90">
             <Link href="#features" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Features</Link>
@@ -84,7 +84,7 @@ export default function Home() {
             <h1 className="text-5xl md:text-7xl font-black tracking-tight leading-[1.1] text-transparent bg-clip-text bg-gradient-to-b from-white via-zinc-100 to-zinc-300 drop-shadow-[0_2px_18px_rgba(0,0,0,0.95)]">
               MASTER YOUR <br />
               <span className="inline-block text-orange-300">
-                JUTSUS.
+                JUTSUS
               </span>
             </h1>
 
@@ -119,8 +119,11 @@ export default function Home() {
                 title="Download unlocks on release"
                 className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 opacity-85 cursor-not-allowed select-none"
               >
-                <UploadCloud className="w-5 h-5" />
-                DOWNLOAD (LOCKED)
+                {/* Windows/Microsoft Logo */}
+                <svg className="w-5 h-5 fill-current" viewBox="0 0 88 88" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M0 12.402l35.687-4.86.016 34.423-35.67.216zm35.707 34.005l-.012 34.697-35.695-4.913V46.602zM39.98 6.01L87.314 0v41.527l-47.334.373zM87.314 46.223V88L39.98 81.385V46.613z" />
+                </svg>
+                DOWNLOAD BETA
               </button>
             </div>
 

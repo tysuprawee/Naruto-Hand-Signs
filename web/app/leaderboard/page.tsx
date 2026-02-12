@@ -271,7 +271,7 @@ function LeaderboardContent() {
                         <div className="h-10 w-10 relative">
                             <img src="/logo2.png" alt="Shinobi Academy" className="object-contain w-full h-full" />
                         </div>
-                        <span className="font-bold tracking-tight text-lg text-white">SHINOBI ACADEMY</span>
+                        <span className="font-bold tracking-tight text-lg text-white">Jutsu Academy</span>
                     </Link>
                     <nav className="flex gap-4">
                         <Link href="/" className="text-sm font-medium text-ninja-dim hover:text-white flex items-center gap-1">
