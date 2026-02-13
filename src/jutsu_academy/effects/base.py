@@ -6,6 +6,7 @@ from typing import Any
 class EffectContext:
     dt: float = 0.0
     jutsu_name: str = ""
+    effect_duration: float = 0.0
     frame_bgr: Any = None
     frame_shape: Any = None
     hand_pos: Any = None

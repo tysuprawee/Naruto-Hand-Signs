@@ -70,17 +70,33 @@ class PlayingMixin:
         """Trigger sound/effect/video payload for a (sub)jutsu event."""
         # Queue signature sound (supports combo checkpoints without clobbering previous sound).
         sound_name = None
+        sound_delay_s = 0.5
         if jutsu_name in self.sounds:
             sound_name = jutsu_name
         elif effect_name == "clone":
             # No dedicated clone clip yet; use a light fallback signature.
             sound_name = "each"
+        if effect_name == "reaper":
+            # Reaper should ramp with the signature audio immediately.
+            sound_delay_s = 0.0
+
+        effect_duration = 0.0
+        if effect_name == "reaper" and sound_name in self.sounds:
+            try:
+                sound_len = float(self.sounds[sound_name].get_length() or 0.0)
+                if sound_len > 0.0:
+                    # Hold for audio duration, then fade away.
+                    effect_duration = sound_len + 0.9
+                    self.jutsu_duration = max(float(getattr(self, "jutsu_duration", 0.0)), effect_duration)
+            except Exception:
+                effect_duration = 0.0
+
         if sound_name:
             if not hasattr(self, "pending_sounds") or self.pending_sounds is None:
                 self.pending_sounds = []
             self.pending_sounds.append({
                 "name": sound_name,
-                "time": time.time() + 0.5,
+                "time": time.time() + max(0.0, float(sound_delay_s)),
             })
 
         if effect_name == "fire":
@@ -98,7 +114,7 @@ class PlayingMixin:
         else:
             self.effect_orchestrator.on_jutsu_start(
                 effect_name,
-                EffectContext(jutsu_name=jutsu_name),
+                EffectContext(jutsu_name=jutsu_name, effect_duration=effect_duration),
             )
 
         jutsu_data = self.jutsu_list.get(jutsu_name, {})
@@ -628,25 +644,26 @@ class PlayingMixin:
         if self.calibration_message and time.time() <= self.calibration_message_until:
             info_lines.append(self.calibration_message.upper())
 
-        info_x = cam_x + 12
-        info_y = cam_y + 14
-        panel_w = 320
-        panel_h = 22 + len(info_lines) * 18
-        info_panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        pygame.draw.rect(info_panel, (20, 20, 30, 175), (0, 0, panel_w, panel_h), border_radius=10)
-        pygame.draw.rect(info_panel, (80, 80, 110, 170), (0, 0, panel_w, panel_h), 1, border_radius=10)
-        self.screen.blit(info_panel, (info_x, info_y))
+        if getattr(self, "show_detection_panel", True):
+            info_x = cam_x + 12
+            info_y = cam_y + 14
+            panel_w = 320
+            panel_h = 22 + len(info_lines) * 18
+            info_panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+            pygame.draw.rect(info_panel, (20, 20, 30, 175), (0, 0, panel_w, panel_h), border_radius=10)
+            pygame.draw.rect(info_panel, (80, 80, 110, 170), (0, 0, panel_w, panel_h), 1, border_radius=10)
+            self.screen.blit(info_panel, (info_x, info_y))
 
-        for idx, line in enumerate(info_lines):
-            color = COLORS["text_dim"]
-            if line.startswith("LIGHT:"):
-                color = light_color
-            elif "CALIBRATING" in line:
-                color = COLORS["accent_glow"]
-            elif line.startswith("VOTE"):
-                color = COLORS["text"]
-            surf = self.fonts["tiny"].render(line, True, color)
-            self.screen.blit(surf, (info_x + 10, info_y + 8 + idx * 17))
+            for idx, line in enumerate(info_lines):
+                color = COLORS["text_dim"]
+                if line.startswith("LIGHT:"):
+                    color = light_color
+                elif "CALIBRATING" in line:
+                    color = COLORS["accent_glow"]
+                elif line.startswith("VOTE"):
+                    color = COLORS["text"]
+                surf = self.fonts["tiny"].render(line, True, color)
+                self.screen.blit(surf, (info_x + 10, info_y + 8 + idx * 17))
 
         # --- Challenge Overlays (Responsive) ---
         if self.game_mode == "challenge" and not is_locked:
@@ -841,6 +858,19 @@ class PlayingMixin:
         fps_txt = f"FPS: {self.fps}"
         fps_surf = self.fonts["tiny"].render(fps_txt, True, COLORS["success"])
         self.screen.blit(fps_surf, (cam_x + new_w - fps_surf.get_width() - 5, cam_y - 18))
+
+        # Toggle diagnostics panel button (outside camera zone, in top HUD).
+        self.diag_toggle_rect = pygame.Rect(SCREEN_WIDTH - 142, 6, 126, 30)
+        mouse_pos = pygame.mouse.get_pos()
+        diag_hover = self.diag_toggle_rect.collidepoint(mouse_pos)
+        if diag_hover:
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
+        btn_col = COLORS["bg_hover"] if diag_hover else COLORS["bg_card"]
+        pygame.draw.rect(self.screen, btn_col, self.diag_toggle_rect, border_radius=8)
+        pygame.draw.rect(self.screen, COLORS["border"], self.diag_toggle_rect, 1, border_radius=8)
+        diag_text = "DIAG: ON" if getattr(self, "show_detection_panel", True) else "DIAG: OFF"
+        diag_surf = self.fonts["small"].render(diag_text, True, COLORS["text"])
+        self.screen.blit(diag_surf, diag_surf.get_rect(center=self.diag_toggle_rect.center))
         
         # Navigation arrows - Only show if not active and (if challenge) in waiting room
         show_nav = not self.jutsu_active
@@ -925,9 +955,13 @@ class PlayingMixin:
         
         # Status text
         icon_y_start = y + 45
+        progress_step = n if self.jutsu_active else self.current_step
         if self.jutsu_active:
             display = self.jutsu_list[self.jutsu_names[self.current_jutsu_idx]].get("display_text", "")
-            status = self.fonts["title_sm"].render(display.upper(), True, COLORS["accent_glow"])
+            if display:
+                status = self.fonts["body"].render(f"CASTING • {display.upper()}", True, COLORS["accent_glow"])
+            else:
+                status = self.fonts["body"].render("CASTING...", True, COLORS["accent_glow"])
         else:
             target = self.sequence[self.current_step] if self.current_step < len(self.sequence) else ""
             status = self.fonts["body"].render(f"NEXT SIGN: {target.upper()}", True, (255, 255, 255))
@@ -943,8 +977,15 @@ class PlayingMixin:
             iy = icon_y_start + (80 - icon_size) // 2
             
             # Border
-            if i < self.current_step:
-                pygame.draw.rect(self.screen, COLORS["success"], (ix - 3, iy - 3, icon_size + 6, icon_size + 6), border_radius=10)
+            if i < progress_step:
+                if self.jutsu_active:
+                    glow_rect = pygame.Rect(ix - 8, iy - 8, icon_size + 16, icon_size + 16)
+                    glow = pygame.Surface((glow_rect.width, glow_rect.height), pygame.SRCALPHA)
+                    pygame.draw.rect(glow, (255, 190, 80, 55), glow.get_rect(), border_radius=12)
+                    self.screen.blit(glow, glow_rect)
+                    pygame.draw.rect(self.screen, (255, 206, 120), (ix - 4, iy - 4, icon_size + 8, icon_size + 8), border_radius=10)
+                else:
+                    pygame.draw.rect(self.screen, COLORS["success"], (ix - 3, iy - 3, icon_size + 6, icon_size + 6), border_radius=10)
             elif i == self.current_step and not self.jutsu_active:
                 pygame.draw.rect(self.screen, COLORS["accent"], (ix - 4, iy - 4, icon_size + 8, icon_size + 8), border_radius=10)
             
@@ -955,7 +996,11 @@ class PlayingMixin:
                     icon_surf = pygame.transform.smoothscale(icon_surf, (icon_size, icon_size))
                 
                 icon = icon_surf.copy()
-                if i < self.current_step:
+                if self.jutsu_active and i < progress_step:
+                    warm = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                    warm.fill((255, 170, 60, 34))
+                    icon.blit(warm, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                elif i < progress_step:
                     icon.set_alpha(100)
                 self.screen.blit(icon, (ix, iy))
             else:

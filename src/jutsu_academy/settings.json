@@ -2,6 +2,5 @@
   "music_vol": 0.09,
   "sfx_vol": 0.5033333333333333,
   "camera_idx": 0,
-  "debug_hands": true,
-  "use_mediapipe_signs": true
+  "debug_hands": true
 }
