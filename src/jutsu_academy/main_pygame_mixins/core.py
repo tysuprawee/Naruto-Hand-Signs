@@ -224,7 +224,11 @@ class CoreMixin:
         self._sync_tutorial_meta_to_cloud()
 
     def __init__(self):
-        from src.jutsu_academy.effects import EffectOrchestrator, ShadowCloneEffect
+        from src.jutsu_academy.effects import (
+            EffectOrchestrator,
+            ReaperDeathSealEffect,
+            ShadowCloneEffect,
+        )
 
         pygame.init()
         pygame.display.set_caption("Jutsu Academy")
@@ -423,6 +427,8 @@ class CoreMixin:
         self.vote_required_hits = 3
         self.vote_min_confidence = 0.45
         self.vote_entry_ttl_s = 0.7
+        self.show_detection_panel = True
+        self.diag_toggle_rect = pygame.Rect(0, 0, 0, 0)
 
         # Lighting quality gate
         self.lighting_status = "unknown"
@@ -447,6 +453,7 @@ class CoreMixin:
         self.fire_particles = FireParticleSystem(200)
         self.effect_orchestrator = EffectOrchestrator()
         self.effect_orchestrator.register("clone", ShadowCloneEffect(swap_xy=True), passive=True)
+        self.effect_orchestrator.register("reaper", ReaperDeathSealEffect())
         
         # Video overlay for jutsus
         self.current_video = None

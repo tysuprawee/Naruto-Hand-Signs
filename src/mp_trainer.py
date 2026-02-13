@@ -12,7 +12,7 @@ from mediapipe.tasks.python import vision
 
 # Constants
 DATA_FILE = "src/mediapipe_signs_db.csv"
-LABELS = ["Idle", "Tiger", "Ram", "Snake", "Horse", "Rat", "Boar", "Dog", "Bird", "Monkey", "Ox", "Dragon", "Hare"] 
+LABELS = ["Idle", "Tiger", "Ram", "Snake", "Horse", "Rat", "Boar", "Dog", "Bird", "Monkey", "Ox", "Dragon", "Hare", "Clap"]
 MODEL_PATH = "models/hand_landmarker.task"
 
 class SignRecorder:
@@ -258,6 +258,7 @@ def main():
     print(" [SPACE] - Countdown to Auto-Record")
     print(" [[] / []] - Prev/Next Label")
     print(" [0-9] - Quick Select Label")
+    print(" [C] - Quick Select Clap")
     print(" [Q] - Quit")
     print("="*50)
 
@@ -296,6 +297,9 @@ def main():
         elif raw_keys >= ord('1') and raw_keys <= ord('9'):
              idx = raw_keys - ord('0') 
              if idx < len(LABELS): recorder.current_label_idx = idx
+        elif raw_keys == ord('c'):
+             if "Clap" in LABELS:
+                 recorder.current_label_idx = LABELS.index("Clap")
         elif raw_keys == ord('r'):
              if recorder.mode == "RECORD":
                  recorder.mode = "PREDICT"

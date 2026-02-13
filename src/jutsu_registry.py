@@ -54,6 +54,15 @@ OFFICIAL_JUTSUS = {
         "effect": "clone",
         "min_level": 0
     },
+    "Reaper Death Seal": {
+        "sequence": ["snake", "boar", "ram", "hare", "dog", "rat", "bird", "horse", "snake", "clap"],
+        "display_text": "SHIKI FUJIN!",
+        "sound_path": "src/sounds/reaper.mp3",
+        "video_path": None,
+        "effect": "reaper",
+        "duration": 7.0,
+        "min_level": 10
+    },
     "Rasengan": {
         "sequence": ["ram"],
         "display_text": "RASENGAN!",

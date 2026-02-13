@@ -1,9 +1,9 @@
 {
   "tutorial_seen": true,
-  "tutorial_seen_at": "2026-02-12T21:37:23Z",
+  "tutorial_seen_at": "2026-02-13T20:09:16Z",
   "mastery": {
     "Shadow Clone": {
-      "best_time": 1.5640590190887451
+      "best_time": 1.4634208679199219
     },
     "Rasengan": {
       "best_time": 1.2159347534179688e-05
@@ -21,13 +21,16 @@
       "best_time": 11.43950605392456
     },
     "Sharingan": {
-      "best_time": 51.18164610862732
+      "best_time": 6.20782208442688
     },
     "Shadow Clone + Chidori Combo": {
       "best_time": 4.960210800170898
     },
     "Shadow Clone + Rasengan Combo": {
       "best_time": 2.303658962249756
+    },
+    "Reaper Death Seal": {
+      "best_time": 9.912360906600952
     }
   },
   "quests": {
@@ -35,15 +38,15 @@
       "period": "2026-02-13",
       "quests": {
         "d_signs": {
-          "progress": 88,
+          "progress": 340,
           "claimed": false
         },
         "d_jutsus": {
-          "progress": 14,
+          "progress": 41,
           "claimed": false
         },
         "d_xp": {
-          "progress": 1570,
+          "progress": 5340,
           "claimed": false
         }
       }
@@ -52,7 +55,7 @@
       "period": "2026-W07",
       "quests": {
         "w_jutsus": {
-          "progress": 23,
+          "progress": 50,
           "claimed": false
         },
         "w_challenges": {
@@ -60,7 +63,7 @@
           "claimed": false
         },
         "w_xp": {
-          "progress": 2420,
+          "progress": 6190,
           "claimed": false
         }
       }

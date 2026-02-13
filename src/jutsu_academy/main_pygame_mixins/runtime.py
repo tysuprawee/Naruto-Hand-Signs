@@ -552,6 +552,10 @@ class RuntimeMixin:
                         self.state = GameState.PRACTICE_SELECT
         
         elif self.state == GameState.PLAYING:
+            if mouse_click and hasattr(self, "diag_toggle_rect") and self.diag_toggle_rect.collidepoint(mouse_pos):
+                self.show_detection_panel = not bool(getattr(self, "show_detection_panel", True))
+                self.play_sound("click")
+                return
             if hasattr(self, "playing_back_button"):
                 if self.playing_back_button.update(mouse_pos, mouse_click, mouse_down, self.play_sound):
                     self.stop_game(return_to_library=True)

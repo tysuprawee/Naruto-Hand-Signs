@@ -199,8 +199,13 @@ class AssetsMixin:
         """Load hand sign icons."""
         pics_dir = Path("src/pics")
         class_names = get_class_names()
-        
-        for name in class_names:
+        sequence_signs = set()
+        for jutsu_data in getattr(self, "jutsu_list", {}).values():
+            for sign in jutsu_data.get("sequence", []):
+                sequence_signs.add(str(sign).strip().lower())
+
+        all_sign_names = sorted(set(class_names) | sequence_signs)
+        for name in all_sign_names:
             for ext in [".jpeg", ".jpg", ".png"]:
                 path = pics_dir / f"{name}{ext}"
                 if path.exists():
