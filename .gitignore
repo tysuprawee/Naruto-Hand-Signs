@@ -7,6 +7,9 @@ env/
 .env
 .env.local
 
+# Session files (contain OAuth tokens - NEVER COMMIT)
+user_session.json
+
 # Python cache
 __pycache__/
 *.py[cod]
