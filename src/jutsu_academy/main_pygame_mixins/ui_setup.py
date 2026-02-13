@@ -42,7 +42,6 @@ class UISetupMixin:
         
         self.settings_checkboxes = {
             "debug_hands": Checkbox(cx - 150, cy + 290, 24, "Show Hand Skeleton", self.settings["debug_hands"]),
-            "use_mp": Checkbox(cx - 150, cy + 330, 24, "Use MediaPipe AI (Faster/Experimental) - Always On", True),
             "restricted": Checkbox(cx - 150, cy + 370, 24, "Restricted Signs (Require 2 Hands) - Always On", True),
         }
         

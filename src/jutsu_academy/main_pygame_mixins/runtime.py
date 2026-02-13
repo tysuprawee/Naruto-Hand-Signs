@@ -377,8 +377,7 @@ class RuntimeMixin:
                 if self.settings_preview_enabled:
                     self._start_settings_camera_preview(self.camera_dropdown.selected_idx)
             
-            # Keep these always ON and non-interactive.
-            self.settings_checkboxes["use_mp"].checked = True
+            # Keep restricted signs always ON and non-interactive.
             self.settings_checkboxes["restricted"].checked = True
             self.settings_checkboxes["debug_hands"].update(mouse_pos, mouse_click, self.play_sound)
             
@@ -402,7 +401,6 @@ class RuntimeMixin:
                         self.settings["sfx_vol"] = self.settings_sliders["sfx"].value
                         self.settings["camera_idx"] = self.camera_dropdown.selected_idx
                         self.settings["debug_hands"] = self.settings_checkboxes["debug_hands"].checked
-                        self.settings["use_mediapipe_signs"] = True
                         self.settings["restricted_signs"] = True
                         
                         if not self.is_muted:

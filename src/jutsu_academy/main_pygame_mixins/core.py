@@ -263,8 +263,8 @@ class CoreMixin:
             "sfx_vol": 0.7,
             "camera_idx": 0,
             "debug_hands": False,
-            "use_mediapipe_signs": True, # Forced ON
-            "restricted_signs": True     # Forced ON
+            "use_mediapipe_signs": True,
+            "restricted_signs": True
         }
         self.load_settings()
         self.settings["use_mediapipe_signs"] = True

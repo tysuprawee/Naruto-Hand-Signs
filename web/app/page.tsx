@@ -38,14 +38,14 @@ export default function Home() {
       {/* Header */}
       <header className="fixed top-0 w-full z-50 bg-ninja-bg/80 backdrop-blur-md border-b border-ninja-border">
         <div className="container mx-auto flex h-16 items-center justify-between px-6">
-          <div className="flex items-center gap-3">
+          <a href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
             <div className="h-10 w-10 relative">
               <img src="/logo2.png" alt="Shinobi Academy" className="object-contain w-full h-full" />
             </div>
             <span className="font-bold tracking-tight text-lg text-zinc-100 drop-shadow-[0_1px_8px_rgba(0,0,0,0.85)]">Jutsu Academy</span>
-          </div>
+          </a>
           <nav className="hidden md:flex gap-8 text-sm font-medium text-zinc-200/90">
-            <Link href="#features" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Features</Link>
+            <Link href="#showcase" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Features</Link>
             <Link href="#dev" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Dev</Link>
             <Link href="/leaderboard" className="flex items-center gap-2 text-ninja-accent font-bold hover:text-ninja-accent-glow transition-colors">
               <Trophy className="w-4 h-4" />
@@ -191,7 +191,7 @@ export default function Home() {
         </section>
 
         {/* Game Introduction / Showcase */}
-        <section className="mb-32 space-y-24">
+        <section id="showcase" className="mb-32 space-y-24">
           <div className="flex flex-col md:flex-row items-center gap-12">
             <div className="flex-1 space-y-6">
               <h2 className="text-3xl md:text-4xl font-black text-white">

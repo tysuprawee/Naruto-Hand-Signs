@@ -897,7 +897,7 @@ class RenderingMixin:
         )
 
         cb_y = controls_top + 266
-        for key in ["debug_hands", "use_mp", "restricted"]:
+        for key in ["debug_hands", "restricted"]:
             cb = self.settings_checkboxes[key]
             cb.rect.x = controls_cx - 150
             cb.rect.y = cb_y
