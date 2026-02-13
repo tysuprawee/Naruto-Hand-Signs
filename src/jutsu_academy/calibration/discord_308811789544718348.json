@@ -1,11 +1,11 @@
 {
   "version": 1,
   "identity": "discord_[REDACTED_DISCORD_ID]",
-  "updated_at": "2026-02-11T16:31:58Z",
-  "samples": 187,
-  "lighting_min": 75.125,
-  "lighting_max": 198.058,
-  "lighting_min_contrast": 33.56,
+  "updated_at": "2026-02-13T15:17:22Z",
+  "samples": 205,
+  "lighting_min": 78.9,
+  "lighting_max": 208.01,
+  "lighting_min_contrast": 34.608,
   "vote_min_confidence": 0.25,
   "vote_required_hits": 3
 }
