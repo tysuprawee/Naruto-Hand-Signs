@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Camera, CheckCircle2, Hand, Loader2, Volume2, VolumeX, Lightbulb, AlertTriangle, X, Sparkles } from "lucide-react";
 import { KNNClassifier, normalizeHand } from "../../utils/knn";
+import { supabase } from "../../utils/supabase";
 
 type SignName =
   | "Bird"
@@ -76,6 +77,11 @@ interface HandsResultShape {
 interface HandLandmarkerLike {
   detectForVideo: (video: HTMLVideoElement, nowMs: number) => HandsResultShape;
   close?: () => void;
+}
+
+interface DatasetConfig {
+  version: string;
+  datasetUrl: string;
 }
 
 const ALL_SIGNS: SignName[] = [
@@ -190,6 +196,122 @@ const VOTE_MIN_CONFIDENCE = 0.45;
 const VOTE_ENTRY_TTL_MS = 700;
 
 const HOLD_THRESHOLD = 8;
+const DATASET_CONFIG_TYPE = "dataset";
+const DATASET_CSV_URL = "/mediapipe_signs_db.csv";
+const DATASET_CACHE_NAMESPACE = "challenge-sign-db-cache-v1";
+const DATASET_CACHE_KEY_PREFIX = "/mediapipe_signs_db.csv?dataset_version=";
+const DATASET_VERSION_STORAGE_KEY = "challenge_dataset_version";
+const DATASET_FALLBACK_VERSION = "legacy";
+
+function normalizeDatasetVersion(raw: string | null | undefined): string {
+  const cleaned = String(raw ?? "").trim();
+  return cleaned || DATASET_FALLBACK_VERSION;
+}
+
+function readStoredDatasetVersion(): string {
+  if (typeof window === "undefined") return DATASET_FALLBACK_VERSION;
+  try {
+    return normalizeDatasetVersion(window.localStorage.getItem(DATASET_VERSION_STORAGE_KEY));
+  } catch {
+    return DATASET_FALLBACK_VERSION;
+  }
+}
+
+function writeStoredDatasetVersion(version: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(DATASET_VERSION_STORAGE_KEY, normalizeDatasetVersion(version));
+  } catch {
+    // Ignore storage quota/private mode errors.
+  }
+}
+
+async function fetchDatasetConfig(): Promise<DatasetConfig> {
+  const fallbackVersion = readStoredDatasetVersion();
+  if (!supabase) {
+    return { version: fallbackVersion, datasetUrl: DATASET_CSV_URL };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("app_config")
+      .select("version,url")
+      .eq("type", DATASET_CONFIG_TYPE)
+      .eq("is_active", true)
+      .order("priority", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+
+    const first = Array.isArray(data) && data.length > 0
+      ? (data[0] as { version?: string | null; url?: string | null })
+      : null;
+    const version = normalizeDatasetVersion(first?.version ?? fallbackVersion);
+    const datasetUrl = String(first?.url ?? DATASET_CSV_URL).trim() || DATASET_CSV_URL;
+    writeStoredDatasetVersion(version);
+    return { version, datasetUrl };
+  } catch (err) {
+    console.warn("Dataset version lookup failed, using cached fallback version.", err);
+    return { version: fallbackVersion, datasetUrl: DATASET_CSV_URL };
+  }
+}
+
+async function loadCachedDatasetCsv(datasetUrl: string, datasetVersion: string): Promise<string> {
+  const resolvedUrl = String(datasetUrl || DATASET_CSV_URL).trim() || DATASET_CSV_URL;
+  const version = normalizeDatasetVersion(datasetVersion);
+  const cacheKey = `${DATASET_CACHE_KEY_PREFIX}${encodeURIComponent(version)}`;
+
+  async function fetchDatasetText(): Promise<string> {
+    const resp = await fetch(resolvedUrl, { cache: "no-store" });
+    if (!resp.ok) {
+      throw new Error(`Dataset fetch failed (${resp.status})`);
+    }
+    return await resp.text();
+  }
+
+  if (typeof window === "undefined" || !("caches" in window)) {
+    return await fetchDatasetText();
+  }
+
+  const cache = await window.caches.open(DATASET_CACHE_NAMESPACE);
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    return await cached.text();
+  }
+
+  try {
+    const networkResp = await fetch(resolvedUrl, { cache: "no-store" });
+    if (!networkResp.ok) {
+      throw new Error(`Dataset fetch failed (${networkResp.status})`);
+    }
+    await cache.put(cacheKey, networkResp.clone());
+
+    // Keep only the currently active dataset cache entry.
+    const keys = await cache.keys();
+    for (const request of keys) {
+      const idx = request.url.indexOf(DATASET_CACHE_KEY_PREFIX);
+      if (idx < 0) continue;
+      const requestKey = request.url.slice(idx);
+      if (requestKey !== cacheKey) {
+        await cache.delete(request);
+      }
+    }
+
+    return await networkResp.text();
+  } catch (err) {
+    const keys = await cache.keys();
+    for (const request of keys) {
+      if (request.url.includes(DATASET_CACHE_KEY_PREFIX)) {
+        const fallbackCached = await cache.match(request);
+        if (fallbackCached) {
+          return await fallbackCached.text();
+        }
+      }
+    }
+    throw err;
+  }
+}
 
 function parseCSV(text: string): Record<string, string | number>[] {
   const lines = text.trim().split("\n");
@@ -430,6 +552,13 @@ export default function ChallengePage() {
   const fpsFrameCountRef = useRef<number>(0);
   const detectRateLastUpdateRef = useRef<number>(0);
   const detectRateFrameCountRef = useRef<number>(0);
+  const drawAccumMsRef = useRef<number>(0);
+  const drawCountRef = useRef<number>(0);
+  const detectAccumMsRef = useRef<number>(0);
+  const detectCountRef = useRef<number>(0);
+  const lightingAccumMsRef = useRef<number>(0);
+  const lightingCountRef = useRef<number>(0);
+  const videoResRef = useRef<string>("0x0");
   const uiLastCommitRef = useRef<number>(0);
   const lightingUiRef = useRef<LightingResult>({ status: "good", mean: 0, contrast: 0 });
   const detectionUiRef = useRef<DetectionResult>({
@@ -464,6 +593,10 @@ export default function ChallengePage() {
   const [showFps, setShowFps] = useState(false);
   const [fps, setFps] = useState(0);
   const [detectionRate, setDetectionRate] = useState(0);
+  const [drawMs, setDrawMs] = useState(0);
+  const [detectMs, setDetectMs] = useState(0);
+  const [lightingMs, setLightingMs] = useState(0);
+  const [videoRes, setVideoRes] = useState("0x0");
 
   const dismissInstructions = useCallback(() => {
     setShowInstructions(false);
@@ -488,9 +621,10 @@ export default function ChallengePage() {
 
     async function init() {
       try {
-        setLoadMsg("Loading sign database...");
-        const csvResp = await fetch("/mediapipe_signs_db.csv");
-        const csvText = await csvResp.text();
+        setLoadMsg("Checking dataset version...");
+        const datasetConfig = await fetchDatasetConfig();
+        setLoadMsg(`Loading sign database (${datasetConfig.version})...`);
+        const csvText = await loadCachedDatasetCsv(datasetConfig.datasetUrl, datasetConfig.version);
         const rows = parseCSV(csvText);
         // Match pygame recorder behavior (k=3, distance threshold=1.8).
         knnRef.current = new KNNClassifier(rows, 3, 1.8);
@@ -566,6 +700,13 @@ export default function ChallengePage() {
       fpsFrameCountRef.current = 0;
       detectRateLastUpdateRef.current = 0;
       detectRateFrameCountRef.current = 0;
+      drawAccumMsRef.current = 0;
+      drawCountRef.current = 0;
+      detectAccumMsRef.current = 0;
+      detectCountRef.current = 0;
+      lightingAccumMsRef.current = 0;
+      lightingCountRef.current = 0;
+      videoResRef.current = "0x0";
       uiLastCommitRef.current = 0;
       lightingUiRef.current = { status: "good", mean: 0, contrast: 0 };
       detectionUiRef.current = { label: "Idle", confidence: 0, distance: Number.POSITIVE_INFINITY };
@@ -575,6 +716,10 @@ export default function ChallengePage() {
       showFpsRef.current = false;
       latestLandmarksRef.current = [];
       lastTimeRef.current = 0;
+      setDrawMs(0);
+      setDetectMs(0);
+      setLightingMs(0);
+      setVideoRes("0x0");
     };
   }, []);
 
@@ -584,11 +729,22 @@ export default function ChallengePage() {
     fpsFrameCountRef.current = 0;
     detectRateLastUpdateRef.current = 0;
     detectRateFrameCountRef.current = 0;
+    drawAccumMsRef.current = 0;
+    drawCountRef.current = 0;
+    detectAccumMsRef.current = 0;
+    detectCountRef.current = 0;
+    lightingAccumMsRef.current = 0;
+    lightingCountRef.current = 0;
+    videoResRef.current = "0x0";
     uiLastCommitRef.current = 0;
     lastTimeRef.current = 0;
     latestLandmarksRef.current = [];
     setFps(0);
     setDetectionRate(0);
+    setDrawMs(0);
+    setDetectMs(0);
+    setLightingMs(0);
+    setVideoRes("0x0");
   }, [cameraActive]);
 
   useEffect(() => {
@@ -598,8 +754,17 @@ export default function ChallengePage() {
       fpsFrameCountRef.current = 0;
       detectRateLastUpdateRef.current = 0;
       detectRateFrameCountRef.current = 0;
+      drawAccumMsRef.current = 0;
+      drawCountRef.current = 0;
+      detectAccumMsRef.current = 0;
+      detectCountRef.current = 0;
+      lightingAccumMsRef.current = 0;
+      lightingCountRef.current = 0;
       setFps(0);
       setDetectionRate(0);
+      setDrawMs(0);
+      setDetectMs(0);
+      setLightingMs(0);
     }
   }, [showFps]);
 
@@ -620,6 +785,13 @@ export default function ChallengePage() {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
       }
+      const currentRes = `${video.videoWidth}x${video.videoHeight}`;
+      if (currentRes !== videoResRef.current) {
+        videoResRef.current = currentRes;
+        if (showFpsRef.current) setVideoRes(currentRes);
+      }
+
+      const drawStart = performance.now();
 
       ctx.save();
       ctx.scale(-1, 1);
@@ -632,6 +804,10 @@ export default function ChallengePage() {
           drawLandmarks(ctx, hand, canvas.width, canvas.height);
         }
       }
+      if (showFpsRef.current) {
+        drawAccumMsRef.current += performance.now() - drawStart;
+        drawCountRef.current += 1;
+      }
 
       if (showFpsRef.current) {
         if (!fpsLastUpdateRef.current) fpsLastUpdateRef.current = now;
@@ -639,8 +815,23 @@ export default function ChallengePage() {
         if (now - fpsLastUpdateRef.current >= FPS_UPDATE_INTERVAL_MS) {
           const elapsed = Math.max(1, now - fpsLastUpdateRef.current);
           setFps((fpsFrameCountRef.current * 1000) / elapsed);
+          if (drawCountRef.current > 0) {
+            setDrawMs(drawAccumMsRef.current / drawCountRef.current);
+          }
+          if (detectCountRef.current > 0) {
+            setDetectMs(detectAccumMsRef.current / detectCountRef.current);
+          }
+          if (lightingCountRef.current > 0) {
+            setLightingMs(lightingAccumMsRef.current / lightingCountRef.current);
+          }
           fpsFrameCountRef.current = 0;
           fpsLastUpdateRef.current = now;
+          drawAccumMsRef.current = 0;
+          drawCountRef.current = 0;
+          detectAccumMsRef.current = 0;
+          detectCountRef.current = 0;
+          lightingAccumMsRef.current = 0;
+          lightingCountRef.current = 0;
         }
       }
     }
@@ -672,6 +863,7 @@ export default function ChallengePage() {
 
       if (now - lightingLastTimeRef.current >= LIGHTING_INTERVAL_MS) {
         lightingLastTimeRef.current = now;
+        const lightingStart = performance.now();
 
         if (!lightingSampleCanvasRef.current) {
           const sampleCanvas = document.createElement("canvas");
@@ -707,11 +899,20 @@ export default function ChallengePage() {
             uiStateTouched = true;
           }
         }
+        if (showFpsRef.current) {
+          lightingAccumMsRef.current += performance.now() - lightingStart;
+          lightingCountRef.current += 1;
+        }
       }
 
       const lightingOk = lightingRef.current.status === "good";
 
+      const detectStart = performance.now();
       const result = hands.detectForVideo(video, now) as HandsResultShape;
+      if (showFpsRef.current) {
+        detectAccumMsRef.current += performance.now() - detectStart;
+        detectCountRef.current += 1;
+      }
       latestLandmarksRef.current = result.landmarks ?? [];
 
       const { features, numHands } = buildFeatures(result);
@@ -1090,6 +1291,10 @@ export default function ChallengePage() {
                 <div className="absolute top-14 right-4 z-10 rounded-md border border-cyan-400/40 bg-black/60 px-2 py-1 text-[10px] font-mono font-bold text-cyan-200 leading-4">
                   FPS: {fps.toFixed(1)}
                   <div>DET: {detectionRate.toFixed(1)}</div>
+                  <div>DMS: {detectMs.toFixed(1)}</div>
+                  <div>RMS: {drawMs.toFixed(1)}</div>
+                  <div>LMS: {lightingMs.toFixed(1)}</div>
+                  <div>RES: {videoRes}</div>
                 </div>
               )}
             </div>
