@@ -102,7 +102,9 @@ class RuntimeMixin:
         
         # IMPORTANT: Announcement Overlay Clicks
         # If showing announcements, we intercept clicks and keys
-        if self.show_announcements:
+        # If showing announcements, we intercept clicks and keys, BUT only if we are in the MENU state.
+        # This prevents it from blocking modals like LOGIN_MODAL which render on top.
+        if self.show_announcements and self.state == GameState.MENU:
             mouse_pos = pygame.mouse.get_pos()
             for event in events:
                 if event.type == pygame.QUIT:
@@ -635,9 +637,8 @@ class RuntimeMixin:
                 self.render_quit_confirm()
             elif self.state == GameState.WELCOME_MODAL:
                 # Render underlying background only (cleaner)
-                if hasattr(self, 'background') and self.background:
-                    # Scale to fit if needed
-                    self.screen.blit(self.background, (0, 0))
+                if hasattr(self, 'bg_image') and self.bg_image:
+                    self.screen.blit(self.bg_image, (0, 0))
                 else:
                     self.screen.fill(COLORS["bg_dark"])
                 self.render_welcome_modal(dt)

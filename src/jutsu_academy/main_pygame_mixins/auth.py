@@ -111,16 +111,19 @@ class AuthMixin:
         """Load Discord avatar from URL and round it."""
         if not self.discord_user:
             self.user_avatar = self._get_fallback_avatar()
+            self.user_avatar_hires = self._get_fallback_avatar(size=(128, 128))
             return
             
         try:
             user_id = self.discord_user.get("id")
             avatar_hash = self.discord_user.get("avatar")
             if user_id and avatar_hash:
-                avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
+                avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=128"
                 response = requests.get(avatar_url, timeout=5)
                 if response.status_code == 200:
                     self.user_avatar = self._create_rounded_avatar(response.content)
+                    # Store a high-res circular version for the welcome modal
+                    self.user_avatar_hires = self._create_circular_avatar(response.content, size=(128, 128))
                     print("[+] Avatar loaded and rounded")
                     return
         except Exception as e:
@@ -128,6 +131,30 @@ class AuthMixin:
             
         # Fallback
         self.user_avatar = self._get_fallback_avatar()
+        self.user_avatar_hires = self._get_fallback_avatar(size=(128, 128))
+
+    def _create_circular_avatar(self, img_data, size=(128, 128)):
+        """Create a circular avatar for the welcome modal."""
+        try:
+            from PIL import Image, ImageDraw
+            if isinstance(img_data, bytes):
+                pil_img = Image.open(BytesIO(img_data))
+            else:
+                pil_img = Image.open(img_data)
+
+            pil_img = pil_img.convert("RGBA").resize(size, Image.Resampling.LANCZOS)
+
+            # Circular mask
+            mask = Image.new('L', size, 0)
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse((0, 0, size[0], size[1]), fill=255)
+            pil_img.putalpha(mask)
+
+            data = pil_img.tobytes()
+            return pygame.image.fromstring(data, size, "RGBA")
+        except Exception as e:
+            print(f"[!] Circular avatar error: {e}")
+            return self._get_fallback_avatar(size)
 
     def start_discord_login(self):
         """Start Discord login in background thread."""
@@ -189,6 +216,7 @@ class AuthMixin:
 
     def _do_discord_login(self, attempt_id):
         """Perform Discord login (runs in thread)."""
+        auth = None
         try:
             from src.jutsu_academy.discord_auth import DiscordLogin
             # Create and store instance

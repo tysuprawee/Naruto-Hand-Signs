@@ -9,16 +9,16 @@
       "best_time": 1.2159347534179688e-05
     },
     "Fireball": {
-      "best_time": 6.304218292236328
+      "best_time": 5.216018915176392
     },
     "Chidori": {
       "best_time": 1.6928458213806152
     },
     "Water Dragon": {
-      "best_time": 18.61318612098694
+      "best_time": 13.820035696029663
     },
     "Phoenix Flower": {
-      "best_time": 11.43950605392456
+      "best_time": 8.21075963973999
     },
     "Sharingan": {
       "best_time": 6.20782208442688
@@ -30,24 +30,24 @@
       "best_time": 2.303658962249756
     },
     "Reaper Death Seal": {
-      "best_time": 9.912360906600952
+      "best_time": 8.577948808670044
     }
   },
   "quests": {
     "daily": {
-      "period": "2026-02-13",
+      "period": "2026-02-14",
       "quests": {
         "d_signs": {
-          "progress": 340,
-          "claimed": false
+          "progress": 30,
+          "claimed": true
         },
         "d_jutsus": {
-          "progress": 41,
-          "claimed": false
+          "progress": 28,
+          "claimed": true
         },
         "d_xp": {
-          "progress": 5340,
-          "claimed": false
+          "progress": 450,
+          "claimed": true
         }
       }
     },
@@ -55,16 +55,16 @@
       "period": "2026-W07",
       "quests": {
         "w_jutsus": {
-          "progress": 50,
-          "claimed": false
+          "progress": 53,
+          "claimed": true
         },
         "w_challenges": {
-          "progress": 7,
-          "claimed": false
+          "progress": 31,
+          "claimed": true
         },
         "w_xp": {
-          "progress": 6190,
-          "claimed": false
+          "progress": 6640,
+          "claimed": true
         }
       }
     }
