@@ -228,12 +228,19 @@ export default function Home() {
         </section>
 
         {/* Fire divider between hero and showcase */}
-        <div className="relative -mx-6 mb-32" style={{ height: '200px' }}>
-          {/* Top fade into background */}
-          <div className="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-ninja-bg to-transparent z-10 pointer-events-none" />
-          <FireShader height="200px" opacity={1} enableAudio={true} />
-          {/* Bottom fade into background */}
-          <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-ninja-bg to-transparent z-10 pointer-events-none" />
+        <div className="relative -mx-6 mb-32" style={{ height: "160px" }}>
+          <div
+            className="absolute inset-0"
+            style={{
+              WebkitMaskImage:
+                "linear-gradient(to bottom, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.32) 20%, rgba(0,0,0,0.72) 52%, rgba(0,0,0,0.96) 82%, rgba(0,0,0,1) 100%)",
+              maskImage:
+                "linear-gradient(to bottom, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.32) 20%, rgba(0,0,0,0.72) 52%, rgba(0,0,0,0.96) 82%, rgba(0,0,0,1) 100%)",
+            }}
+          >
+            <FireShader height="160px" opacity={1} enableAudio={false} />
+          </div>
+          <div className="absolute inset-x-0 bottom-0 h-px bg-ninja-border/70 z-20 pointer-events-none" />
         </div>
         {/* Game Introduction / Showcase */}
         <section id="showcase" className="mb-32 space-y-24">
@@ -350,13 +357,6 @@ export default function Home() {
         </section>
 
       </main>
-
-      {/* Fire edge above footer */}
-      <div className="relative" style={{ height: '160px' }}>
-        <div className="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-ninja-bg to-transparent z-10 pointer-events-none" />
-        <FireShader height="160px" opacity={1} enableAudio={false} />
-        <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-ninja-bg to-transparent z-10 pointer-events-none" />
-      </div>
 
       {/* Footer */}
       {/* Footer */}

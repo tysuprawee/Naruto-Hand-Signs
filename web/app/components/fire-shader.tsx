@@ -148,11 +148,13 @@ void main(){
     sparks=sparkLife*sparksGray*vec3(0.06,0.02,0.10);
   }
 
-  vec3 color=max(fire,sparks)+smoke*0.35;
-  float flameAlpha=clamp(f*4.0+fff,0.0,1.0);
-  float smokeAlpha=clamp(smoke.r*18.0,0.0,0.45);
-  float sparkAlpha=clamp(length(sparks)*10.0,0.0,0.35);
-  float alpha=clamp(flameAlpha+smokeAlpha+sparkAlpha,0.0,1.0);
+  vec3 color=max(fire,sparks)+smoke*0.28;
+  float flameAlpha=clamp(f*5.2+fff*1.4,0.0,1.0);
+  float plumeMask=smoothstep(0.07,0.45,f);
+  float smokeAlpha=clamp(smoke.r*6.0*plumeMask,0.0,0.12);
+  float sparkAlpha=clamp(length(sparks)*12.0,0.0,0.35);
+  float rawAlpha=clamp(flameAlpha+smokeAlpha+sparkAlpha,0.0,1.0);
+  float alpha=smoothstep(0.12,0.38,rawAlpha);
 
   gl_FragColor=vec4(color,alpha);
 }
