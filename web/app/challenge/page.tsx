@@ -776,7 +776,7 @@ export default function ChallengePage() {
               )}
             </div>
 
-            <div className="bg-ninja-card/50 border border-ninja-border rounded-xl p-4">
+            <div className="hidden lg:block bg-ninja-card/50 border border-ninja-border rounded-xl p-4">
               <p className="text-sm text-ninja-dim leading-relaxed">
                 <span className="text-ninja-accent font-bold">About this:</span>{" "}
                 This tester uses the same strategy as the main game for sign recognition: lighting quality gate,
@@ -840,6 +840,27 @@ export default function ChallengePage() {
                   </div>
                 )}
               </div>
+            </div>
+
+            <div className="lg:hidden bg-ninja-card/50 border border-ninja-border rounded-xl p-4">
+              <p className="text-sm text-ninja-dim leading-relaxed">
+                <span className="text-ninja-accent font-bold">About this:</span>{" "}
+                This tester uses the same strategy as the main game for sign recognition: lighting quality gate,
+                temporal vote consensus, and two-hand restriction. No score submission or database writes
+                run on this page.
+              </p>
+              <div
+                className={`mt-2 rounded-md border px-3 py-2 text-xs ${needsTwoHandsHint
+                  ? "border-amber-400/50 bg-amber-500/15 text-amber-200"
+                  : "border-ninja-border bg-ninja-bg/30 text-ninja-dim"
+                  }`}
+              >
+                Two hands are required for sign detection. Keep both hands fully visible in frame with
+                a little space between them.
+              </div>
+              <p className="text-xs text-ninja-dim/80 mt-2 font-mono">
+                Brightness: {lightingMean.toFixed(1)} | Contrast: {lightingContrast.toFixed(1)}
+              </p>
             </div>
 
             <div className="bg-ninja-card/30 border border-ninja-border rounded-xl p-4">
