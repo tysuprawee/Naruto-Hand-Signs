@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Camera, CheckCircle2, Hand, Loader2, Volume2, VolumeX } from "lucide-react";
+import { ArrowLeft, Camera, CheckCircle2, Hand, Loader2, Volume2, VolumeX, Lightbulb, AlertTriangle, X, Sparkles } from "lucide-react";
 import { KNNClassifier, normalizeHand } from "../../utils/knn";
 
 type SignName =
@@ -430,6 +430,11 @@ export default function ChallengePage() {
   const [lightingContrast, setLightingContrast] = useState(0);
   const [voteHits, setVoteHits] = useState(0);
   const [detectedHands, setDetectedHands] = useState(0);
+  const [showInstructions, setShowInstructions] = useState(true);
+
+  const dismissInstructions = useCallback(() => {
+    setShowInstructions(false);
+  }, []);
 
   const playSfx = useCallback(
     (src: string) => {
@@ -670,6 +675,105 @@ export default function ChallengePage() {
 
   return (
     <div className="min-h-screen bg-ninja-bg text-ninja-text font-sans">
+
+      {/* ── Instruction Modal ── */}
+      {showInstructions && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="relative w-full max-w-lg bg-ninja-bg border-2 border-ninja-border rounded-2xl shadow-2xl overflow-hidden">
+            {/* Accent top bar */}
+            <div className="h-1.5 w-full bg-gradient-to-r from-ninja-accent via-orange-400 to-red-500" />
+
+            {/* Close button */}
+            <button
+              onClick={dismissInstructions}
+              className="absolute top-4 right-4 text-ninja-dim hover:text-white transition-colors z-10"
+              aria-label="Close instructions"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="p-6 md:p-8 space-y-6">
+              {/* Header */}
+              <div className="space-y-2">
+                <h2 className="text-2xl font-black tracking-tight flex items-center gap-2">
+                  <Hand className="w-6 h-6 text-ninja-accent" />
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-ninja-accent to-orange-300">
+                    Before You Begin
+                  </span>
+                </h2>
+                <p className="text-sm text-ninja-dim">
+                  Quick tips to get the best detection results.
+                </p>
+              </div>
+
+              {/* Tips */}
+              <div className="space-y-4">
+                {/* Lighting */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
+                  <div className="mt-0.5 flex-shrink-0 w-9 h-9 rounded-lg bg-yellow-500/20 flex items-center justify-center">
+                    <Lightbulb className="w-5 h-5 text-yellow-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-yellow-300">Good Lighting Required</p>
+                    <p className="text-xs text-ninja-dim mt-0.5 leading-relaxed">
+                      Make sure your face and hands are well-lit. Avoid backlighting (like windows behind you). Front-facing light works best.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Hands */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
+                  <div className="mt-0.5 flex-shrink-0 w-9 h-9 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                    <Camera className="w-5 h-5 text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-blue-300">Show Both Hands</p>
+                    <p className="text-xs text-ninja-dim mt-0.5 leading-relaxed">
+                      Hold both hands clearly in front of the camera. If detection isn&apos;t working, try moving your hands closer or adjusting the angle until they&apos;re tracked.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Detection tips */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-green-500/10 border border-green-500/20">
+                  <div className="mt-0.5 flex-shrink-0 w-9 h-9 rounded-lg bg-green-500/20 flex items-center justify-center">
+                    <Sparkles className="w-5 h-5 text-green-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-green-300">Hold Signs Steady</p>
+                    <p className="text-xs text-ninja-dim mt-0.5 leading-relaxed">
+                      Once your hands are detected, form the sign and hold it still for about half a second. The system needs a moment to confirm your sign.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Demo disclaimer */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-ninja-card/60 border border-ninja-border">
+                  <div className="mt-0.5 flex-shrink-0 w-9 h-9 rounded-lg bg-orange-500/15 flex items-center justify-center">
+                    <AlertTriangle className="w-5 h-5 text-orange-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-orange-300">Demo Version</p>
+                    <p className="text-xs text-ninja-dim mt-0.5 leading-relaxed">
+                      This is a demo version of the Sign Tester and may be glitchy at times. Detection accuracy can vary depending on your device, browser, and environment.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* CTA */}
+              <button
+                onClick={dismissInstructions}
+                className="w-full h-12 bg-ninja-accent hover:bg-ninja-accent-glow text-white text-base font-bold rounded-lg flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(255,120,50,0.25)] hover:shadow-[0_0_30px_rgba(255,120,50,0.45)] cursor-pointer"
+              >
+                <CheckCircle2 className="w-5 h-5" />
+                Got It, Let&apos;s Go
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="fixed top-0 w-full z-50 bg-ninja-bg/90 backdrop-blur-md border-b border-ninja-border">
         <div className="container mx-auto flex h-14 items-center justify-between px-4">
           <Link
