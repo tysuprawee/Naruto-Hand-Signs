@@ -174,6 +174,10 @@ const RESTRICTED_SIGNS = true; // Match pygame default behavior
 const LIGHTING_MIN = 45.0;
 const LIGHTING_MAX = 210.0;
 const LIGHTING_MIN_CONTRAST = 22.0;
+const LIGHTING_INTERVAL_MS = 250;
+const LIGHTING_SAMPLE_WIDTH = 96;
+const LIGHTING_SAMPLE_HEIGHT = 72;
+const FPS_UPDATE_INTERVAL_MS = 500;
 
 const VOTE_WINDOW_SIZE = 5;
 const VOTE_REQUIRED_HITS = 3;
@@ -411,6 +415,12 @@ export default function ChallengePage() {
   const holdRef = useRef<{ label: string; count: number }>({ label: "", count: 0 });
   const triggeredSignRef = useRef<string>("");
   const voteWindowRef = useRef<VoteEntry[]>([]);
+  const lightingLastTimeRef = useRef<number>(0);
+  const lightingRef = useRef<LightingResult>({ status: "good", mean: 0, contrast: 0 });
+  const lightingSampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lightingSampleCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const fpsLastUpdateRef = useRef<number>(0);
+  const fpsFrameCountRef = useRef<number>(0);
 
   const [loading, setLoading] = useState(true);
   const [loadMsg, setLoadMsg] = useState("Initializing...");
@@ -431,6 +441,8 @@ export default function ChallengePage() {
   const [voteHits, setVoteHits] = useState(0);
   const [detectedHands, setDetectedHands] = useState(0);
   const [showInstructions, setShowInstructions] = useState(true);
+  const [showFps, setShowFps] = useState(false);
+  const [fps, setFps] = useState(0);
 
   const dismissInstructions = useCallback(() => {
     setShowInstructions(false);
@@ -524,8 +536,21 @@ export default function ChallengePage() {
       if (handsRef.current && typeof handsRef.current.close === "function") {
         handsRef.current.close();
       }
+      lightingSampleCtxRef.current = null;
+      lightingSampleCanvasRef.current = null;
+      lightingLastTimeRef.current = 0;
+      lightingRef.current = { status: "good", mean: 0, contrast: 0 };
+      fpsLastUpdateRef.current = 0;
+      fpsFrameCountRef.current = 0;
     };
   }, []);
+
+  useEffect(() => {
+    if (cameraActive) return;
+    fpsLastUpdateRef.current = 0;
+    fpsFrameCountRef.current = 0;
+    setFps(0);
+  }, [cameraActive]);
 
   useEffect(() => {
     if (!cameraActive) return;
@@ -544,6 +569,15 @@ export default function ChallengePage() {
       if (now - lastTimeRef.current < DETECTION_INTERVAL_MS) return;
       lastTimeRef.current = now;
 
+      if (!fpsLastUpdateRef.current) fpsLastUpdateRef.current = now;
+      fpsFrameCountRef.current += 1;
+      if (now - fpsLastUpdateRef.current >= FPS_UPDATE_INTERVAL_MS) {
+        const elapsed = Math.max(1, now - fpsLastUpdateRef.current);
+        setFps((fpsFrameCountRef.current * 1000) / elapsed);
+        fpsFrameCountRef.current = 0;
+        fpsLastUpdateRef.current = now;
+      }
+
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
@@ -555,12 +589,35 @@ export default function ChallengePage() {
       ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
       ctx.restore();
 
-      const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      const lighting = evaluateLighting(frameData);
-      const lightingOk = lighting.status === "good";
-      setLightingStatus(lighting.status);
-      setLightingMean(lighting.mean);
-      setLightingContrast(lighting.contrast);
+      if (now - lightingLastTimeRef.current >= LIGHTING_INTERVAL_MS) {
+        lightingLastTimeRef.current = now;
+
+        if (!lightingSampleCanvasRef.current) {
+          const sampleCanvas = document.createElement("canvas");
+          sampleCanvas.width = LIGHTING_SAMPLE_WIDTH;
+          sampleCanvas.height = LIGHTING_SAMPLE_HEIGHT;
+          lightingSampleCanvasRef.current = sampleCanvas;
+          lightingSampleCtxRef.current = sampleCanvas.getContext("2d", { willReadFrequently: true });
+        }
+
+        const sampleCtx = lightingSampleCtxRef.current;
+        if (sampleCtx) {
+          sampleCtx.drawImage(video, 0, 0, LIGHTING_SAMPLE_WIDTH, LIGHTING_SAMPLE_HEIGHT);
+          const frameData = sampleCtx.getImageData(
+            0,
+            0,
+            LIGHTING_SAMPLE_WIDTH,
+            LIGHTING_SAMPLE_HEIGHT
+          ).data;
+          const lighting = evaluateLighting(frameData);
+          lightingRef.current = lighting;
+          setLightingStatus(lighting.status);
+          setLightingMean(lighting.mean);
+          setLightingContrast(lighting.contrast);
+        }
+      }
+
+      const lightingOk = lightingRef.current.status === "good";
 
       const result = hands.detectForVideo(video, now) as HandsResultShape;
 
@@ -871,11 +928,29 @@ export default function ChallengePage() {
 
               {cameraActive && (
                 <div className="absolute top-4 right-4 z-10 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowFps((prev) => !prev)}
+                    className={`rounded-md border px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider transition-colors ${showFps
+                      ? "border-cyan-400/70 bg-cyan-500/20 text-cyan-200"
+                      : "border-white/15 bg-black/45 text-white/70 hover:text-white"
+                      }`}
+                    aria-pressed={showFps}
+                    aria-label="Toggle FPS display"
+                  >
+                    FPS
+                  </button>
                   <span className="relative flex h-3 w-3">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
                     <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
                   </span>
                   <span className="text-xs font-mono text-red-400 uppercase">Live</span>
+                </div>
+              )}
+
+              {cameraActive && showFps && (
+                <div className="absolute top-14 right-4 z-10 rounded-md border border-cyan-400/40 bg-black/60 px-2 py-1 text-[10px] font-mono font-bold text-cyan-200">
+                  FPS: {fps.toFixed(1)}
                 </div>
               )}
             </div>
