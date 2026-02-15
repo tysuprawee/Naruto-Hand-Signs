@@ -178,6 +178,11 @@ const LIGHTING_INTERVAL_MS = 250;
 const LIGHTING_SAMPLE_WIDTH = 96;
 const LIGHTING_SAMPLE_HEIGHT = 72;
 const FPS_UPDATE_INTERVAL_MS = 500;
+const UI_UPDATE_INTERVAL_MS = 160;
+const LIGHTING_MEAN_EPSILON = 1.5;
+const LIGHTING_CONTRAST_EPSILON = 1.0;
+const DETECTION_CONFIDENCE_EPSILON = 0.03;
+const DETECTION_DISTANCE_EPSILON = 0.2;
 
 const VOTE_WINDOW_SIZE = 5;
 const VOTE_REQUIRED_HITS = 3;
@@ -410,8 +415,10 @@ export default function ChallengePage() {
   const knnRef = useRef<KNNClassifier | null>(null);
   const handsRef = useRef<HandLandmarkerLike | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const rafIdRef = useRef<number>(0);
+  const renderRafIdRef = useRef<number>(0);
+  const detectRafIdRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
+  const latestLandmarksRef = useRef<Landmark[][]>([]);
   const holdRef = useRef<{ label: string; count: number }>({ label: "", count: 0 });
   const triggeredSignRef = useRef<string>("");
   const voteWindowRef = useRef<VoteEntry[]>([]);
@@ -421,6 +428,19 @@ export default function ChallengePage() {
   const lightingSampleCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const fpsLastUpdateRef = useRef<number>(0);
   const fpsFrameCountRef = useRef<number>(0);
+  const detectRateLastUpdateRef = useRef<number>(0);
+  const detectRateFrameCountRef = useRef<number>(0);
+  const uiLastCommitRef = useRef<number>(0);
+  const lightingUiRef = useRef<LightingResult>({ status: "good", mean: 0, contrast: 0 });
+  const detectionUiRef = useRef<DetectionResult>({
+    label: "Idle",
+    confidence: 0,
+    distance: Number.POSITIVE_INFINITY,
+  });
+  const voteHitsUiRef = useRef<number>(0);
+  const detectedHandsUiRef = useRef<number>(0);
+  const confirmedSignUiRef = useRef<string | null>(null);
+  const showFpsRef = useRef<boolean>(false);
 
   const [loading, setLoading] = useState(true);
   const [loadMsg, setLoadMsg] = useState("Initializing...");
@@ -443,6 +463,7 @@ export default function ChallengePage() {
   const [showInstructions, setShowInstructions] = useState(true);
   const [showFps, setShowFps] = useState(false);
   const [fps, setFps] = useState(0);
+  const [detectionRate, setDetectionRate] = useState(0);
 
   const dismissInstructions = useCallback(() => {
     setShowInstructions(false);
@@ -528,7 +549,8 @@ export default function ChallengePage() {
 
     return () => {
       cancelled = true;
-      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+      if (renderRafIdRef.current) cancelAnimationFrame(renderRafIdRef.current);
+      if (detectRafIdRef.current) cancelAnimationFrame(detectRafIdRef.current);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -542,6 +564,17 @@ export default function ChallengePage() {
       lightingRef.current = { status: "good", mean: 0, contrast: 0 };
       fpsLastUpdateRef.current = 0;
       fpsFrameCountRef.current = 0;
+      detectRateLastUpdateRef.current = 0;
+      detectRateFrameCountRef.current = 0;
+      uiLastCommitRef.current = 0;
+      lightingUiRef.current = { status: "good", mean: 0, contrast: 0 };
+      detectionUiRef.current = { label: "Idle", confidence: 0, distance: Number.POSITIVE_INFINITY };
+      voteHitsUiRef.current = 0;
+      detectedHandsUiRef.current = 0;
+      confirmedSignUiRef.current = null;
+      showFpsRef.current = false;
+      latestLandmarksRef.current = [];
+      lastTimeRef.current = 0;
     };
   }, []);
 
@@ -549,45 +582,93 @@ export default function ChallengePage() {
     if (cameraActive) return;
     fpsLastUpdateRef.current = 0;
     fpsFrameCountRef.current = 0;
+    detectRateLastUpdateRef.current = 0;
+    detectRateFrameCountRef.current = 0;
+    uiLastCommitRef.current = 0;
+    lastTimeRef.current = 0;
+    latestLandmarksRef.current = [];
     setFps(0);
+    setDetectionRate(0);
   }, [cameraActive]);
+
+  useEffect(() => {
+    showFpsRef.current = showFps;
+    if (!showFps) {
+      fpsLastUpdateRef.current = 0;
+      fpsFrameCountRef.current = 0;
+      detectRateLastUpdateRef.current = 0;
+      detectRateFrameCountRef.current = 0;
+      setFps(0);
+      setDetectionRate(0);
+    }
+  }, [showFps]);
 
   useEffect(() => {
     if (!cameraActive) return;
 
-    function detect() {
-      rafIdRef.current = requestAnimationFrame(detect);
-
+    function renderFrame(now: number) {
+      renderRafIdRef.current = requestAnimationFrame(renderFrame);
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      const hands = handsRef.current;
-      const knn = knnRef.current;
-      if (!video || !canvas || !hands || !knn) return;
+      if (!video || !canvas) return;
       if (video.readyState < 2) return;
-
-      const now = performance.now();
-      if (now - lastTimeRef.current < DETECTION_INTERVAL_MS) return;
-      lastTimeRef.current = now;
-
-      if (!fpsLastUpdateRef.current) fpsLastUpdateRef.current = now;
-      fpsFrameCountRef.current += 1;
-      if (now - fpsLastUpdateRef.current >= FPS_UPDATE_INTERVAL_MS) {
-        const elapsed = Math.max(1, now - fpsLastUpdateRef.current);
-        setFps((fpsFrameCountRef.current * 1000) / elapsed);
-        fpsFrameCountRef.current = 0;
-        fpsLastUpdateRef.current = now;
-      }
 
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
 
       ctx.save();
       ctx.scale(-1, 1);
       ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
       ctx.restore();
+
+      const landmarks = latestLandmarksRef.current;
+      if (landmarks.length > 0) {
+        for (const hand of landmarks) {
+          drawLandmarks(ctx, hand, canvas.width, canvas.height);
+        }
+      }
+
+      if (showFpsRef.current) {
+        if (!fpsLastUpdateRef.current) fpsLastUpdateRef.current = now;
+        fpsFrameCountRef.current += 1;
+        if (now - fpsLastUpdateRef.current >= FPS_UPDATE_INTERVAL_MS) {
+          const elapsed = Math.max(1, now - fpsLastUpdateRef.current);
+          setFps((fpsFrameCountRef.current * 1000) / elapsed);
+          fpsFrameCountRef.current = 0;
+          fpsLastUpdateRef.current = now;
+        }
+      }
+    }
+
+    function detectFrame(now: number) {
+      detectRafIdRef.current = requestAnimationFrame(detectFrame);
+
+      const video = videoRef.current;
+      const hands = handsRef.current;
+      const knn = knnRef.current;
+      if (!video || !hands || !knn) return;
+      if (video.readyState < 2) return;
+
+      if (now - lastTimeRef.current < DETECTION_INTERVAL_MS) return;
+      lastTimeRef.current = now;
+      const uiTickDue = now - uiLastCommitRef.current >= UI_UPDATE_INTERVAL_MS;
+      let uiStateTouched = false;
+
+      if (showFpsRef.current) {
+        if (!detectRateLastUpdateRef.current) detectRateLastUpdateRef.current = now;
+        detectRateFrameCountRef.current += 1;
+        if (now - detectRateLastUpdateRef.current >= FPS_UPDATE_INTERVAL_MS) {
+          const elapsed = Math.max(1, now - detectRateLastUpdateRef.current);
+          setDetectionRate((detectRateFrameCountRef.current * 1000) / elapsed);
+          detectRateFrameCountRef.current = 0;
+          detectRateLastUpdateRef.current = now;
+        }
+      }
 
       if (now - lightingLastTimeRef.current >= LIGHTING_INTERVAL_MS) {
         lightingLastTimeRef.current = now;
@@ -611,35 +692,60 @@ export default function ChallengePage() {
           ).data;
           const lighting = evaluateLighting(frameData);
           lightingRef.current = lighting;
-          setLightingStatus(lighting.status);
-          setLightingMean(lighting.mean);
-          setLightingContrast(lighting.contrast);
+          const prevLighting = lightingUiRef.current;
+          const statusChanged = lighting.status !== prevLighting.status;
+          const meanChanged =
+            Math.abs(lighting.mean - prevLighting.mean) >= LIGHTING_MEAN_EPSILON;
+          const contrastChanged =
+            Math.abs(lighting.contrast - prevLighting.contrast) >= LIGHTING_CONTRAST_EPSILON;
+
+          if (statusChanged || meanChanged || contrastChanged) {
+            lightingUiRef.current = lighting;
+            setLightingStatus(lighting.status);
+            setLightingMean(lighting.mean);
+            setLightingContrast(lighting.contrast);
+            uiStateTouched = true;
+          }
         }
       }
 
       const lightingOk = lightingRef.current.status === "good";
 
       const result = hands.detectForVideo(video, now) as HandsResultShape;
-
-      if (result.landmarks && result.landmarks.length > 0) {
-        for (const hand of result.landmarks) {
-          drawLandmarks(ctx, hand, canvas.width, canvas.height);
-        }
-      }
+      latestLandmarksRef.current = result.landmarks ?? [];
 
       const { features, numHands } = buildFeatures(result);
-      setDetectedHands(numHands);
+      if (numHands !== detectedHandsUiRef.current) {
+        detectedHandsUiRef.current = numHands;
+        setDetectedHands(numHands);
+        uiStateTouched = true;
+      }
 
       if (numHands < 1) {
         voteWindowRef.current = [];
         triggeredSignRef.current = "";
-        setVoteHits(0);
+        if (voteHitsUiRef.current !== 0) {
+          voteHitsUiRef.current = 0;
+          setVoteHits(0);
+          uiStateTouched = true;
+        }
         holdRef.current = { label: "", count: 0 };
-        setDetection({
+        const noHandsDetection: DetectionResult = {
           label: "No hands",
           confidence: 0,
           distance: Number.POSITIVE_INFINITY,
-        });
+        };
+        const prevDetection = detectionUiRef.current;
+        if (
+          prevDetection.label !== noHandsDetection.label ||
+          prevDetection.confidence !== noHandsDetection.confidence ||
+          Number.isFinite(prevDetection.distance)
+        ) {
+          detectionUiRef.current = noHandsDetection;
+          setDetection(noHandsDetection);
+          uiStateTouched = true;
+        }
+        if (uiStateTouched) uiLastCommitRef.current = now;
         return;
       }
 
@@ -659,22 +765,49 @@ export default function ChallengePage() {
 
       const vote = applyTemporalVote(voteWindowRef.current, rawSign, rawConf, allowDetection, now);
       voteWindowRef.current = vote.window;
-      setVoteHits(vote.hits);
+      if (vote.hits !== voteHitsUiRef.current) {
+        voteHitsUiRef.current = vote.hits;
+        setVoteHits(vote.hits);
+        uiStateTouched = true;
+      }
 
       const displayLabel = toDisplayLabel(vote.label);
-      setDetection({
+      const nextDetection: DetectionResult = {
         label: displayLabel,
         confidence: vote.confidence,
         distance: Number(rawPrediction.distance ?? Number.POSITIVE_INFINITY),
-      });
+      };
+      const prevDetection = detectionUiRef.current;
+      const labelChanged = nextDetection.label !== prevDetection.label;
+      const confidenceChanged =
+        Math.abs(nextDetection.confidence - prevDetection.confidence) >=
+        DETECTION_CONFIDENCE_EPSILON;
+      const prevDistFinite = Number.isFinite(prevDetection.distance);
+      const nextDistFinite = Number.isFinite(nextDetection.distance);
+      const distanceChanged =
+        prevDistFinite !== nextDistFinite ||
+        (prevDistFinite &&
+          nextDistFinite &&
+          Math.abs(nextDetection.distance - prevDetection.distance) >=
+            DETECTION_DISTANCE_EPSILON);
+      if (labelChanged || (uiTickDue && (confidenceChanged || distanceChanged))) {
+        detectionUiRef.current = nextDetection;
+        setDetection(nextDetection);
+        uiStateTouched = true;
+      }
 
       if (vote.label !== "idle" && vote.label !== "unknown" && vote.confidence > 0) {
         const liveConfirmed = toDisplayLabel(vote.label);
         // Show detected valid sign immediately in the right panel.
-        setConfirmedSign(liveConfirmed);
+        if (confirmedSignUiRef.current !== liveConfirmed) {
+          confirmedSignUiRef.current = liveConfirmed;
+          setConfirmedSign(liveConfirmed);
+          uiStateTouched = true;
+        }
 
         // Prevent repeated trigger while user keeps holding the same sign.
         if (triggeredSignRef.current === vote.label) {
+          if (uiStateTouched) uiLastCommitRef.current = now;
           return;
         }
 
@@ -706,12 +839,17 @@ export default function ChallengePage() {
         triggeredSignRef.current = "";
         holdRef.current = { label: "", count: 0 };
       }
+
+      if (uiStateTouched) uiLastCommitRef.current = now;
     }
 
-    detect();
+    renderRafIdRef.current = requestAnimationFrame(renderFrame);
+    detectRafIdRef.current = requestAnimationFrame(detectFrame);
 
     return () => {
-      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+      if (renderRafIdRef.current) cancelAnimationFrame(renderRafIdRef.current);
+      if (detectRafIdRef.current) cancelAnimationFrame(detectRafIdRef.current);
+      latestLandmarksRef.current = [];
     };
   }, [cameraActive, playSfx]);
 
@@ -949,8 +1087,9 @@ export default function ChallengePage() {
               )}
 
               {cameraActive && showFps && (
-                <div className="absolute top-14 right-4 z-10 rounded-md border border-cyan-400/40 bg-black/60 px-2 py-1 text-[10px] font-mono font-bold text-cyan-200">
+                <div className="absolute top-14 right-4 z-10 rounded-md border border-cyan-400/40 bg-black/60 px-2 py-1 text-[10px] font-mono font-bold text-cyan-200 leading-4">
                   FPS: {fps.toFixed(1)}
+                  <div>DET: {detectionRate.toFixed(1)}</div>
                 </div>
               )}
             </div>
