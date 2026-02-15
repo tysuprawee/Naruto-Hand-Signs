@@ -5,6 +5,8 @@ import Link from "next/link";
 import { Sword, Scroll, ArrowRight, Video, Trophy, UploadCloud, Youtube, Instagram, Shield, Info, Hand } from "lucide-react";
 
 import { ModalProvider, useModal } from "./components/modal-provider";
+import FireShader from "./components/fire-shader";
+import AshParticles from "./components/ash-particles";
 
 export default function Home() {
   const { openModal, trackClick } = useModal();
@@ -37,6 +39,11 @@ export default function Home() {
           filter: 'grayscale(100%) contrast(120%)' // Stylized look
         }}
       ></div>
+
+      {/* Floating ash/ember particles */}
+      <div className="fixed inset-0 z-[1] pointer-events-none">
+        <AshParticles particleCount={60} />
+      </div>
 
       {/* Header */}
       <header className="fixed top-0 w-full z-50 bg-ninja-bg/80 backdrop-blur-md border-b border-ninja-border">
@@ -91,12 +98,26 @@ export default function Home() {
               </div>
             </div>
 
-            <h1 className="text-5xl md:text-7xl font-black tracking-tight leading-[1.1] text-transparent bg-clip-text bg-gradient-to-b from-white via-zinc-100 to-zinc-300 drop-shadow-[0_2px_18px_rgba(0,0,0,0.95)]">
-              MASTER YOUR <br />
-              <span className="inline-block text-orange-300">
-                JUTSUS
-              </span>
-            </h1>
+            <div className="relative inline-block isolate">
+              <h1 className="relative z-10 text-5xl md:text-7xl font-black tracking-tight leading-[1.1] text-transparent bg-clip-text bg-gradient-to-b from-white via-zinc-100 to-zinc-300 drop-shadow-[0_2px_18px_rgba(0,0,0,0.95)]">
+                MASTER YOUR <br />
+                <span className="inline-block text-orange-300">
+                  JUTSUS
+                </span>
+              </h1>
+
+              <div
+                className="pointer-events-none absolute -inset-x-[6%] -top-[22%] -bottom-[30%] -left-[50%] z-20 mix-blend-multiply opacity-100"
+                style={{
+                  WebkitMaskImage:
+                    "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.98) 22%, rgba(0,0,0,0.92) 58%, rgba(0,0,0,0.35) 78%, rgba(0,0,0,0) 100%)",
+                  maskImage:
+                    "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.98) 22%, rgba(0,0,0,0.92) 58%, rgba(0,0,0,0.35) 78%, rgba(0,0,0,0) 100%)",
+                }}
+              >
+                <FireShader className="h-full" height="100%" opacity={1} enableAudio={false} />
+              </div>
+            </div>
 
             <p className="text-xl text-zinc-200/90 max-w-lg leading-relaxed drop-shadow-[0_1px_6px_rgba(0,0,0,0.75)]">
               Train real hand signs using AI computer vision. Level up, unlock jutsus, and climb the ranks from Student to Hokage.
@@ -206,6 +227,14 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Fire divider between hero and showcase */}
+        <div className="relative -mx-6 mb-32" style={{ height: '200px' }}>
+          {/* Top fade into background */}
+          <div className="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-ninja-bg to-transparent z-10 pointer-events-none" />
+          <FireShader height="200px" opacity={1} enableAudio={true} />
+          {/* Bottom fade into background */}
+          <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-ninja-bg to-transparent z-10 pointer-events-none" />
+        </div>
         {/* Game Introduction / Showcase */}
         <section id="showcase" className="mb-32 space-y-24">
           <div className="flex flex-col md:flex-row items-center gap-12">
@@ -321,6 +350,13 @@ export default function Home() {
         </section>
 
       </main>
+
+      {/* Fire edge above footer */}
+      <div className="relative" style={{ height: '160px' }}>
+        <div className="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-ninja-bg to-transparent z-10 pointer-events-none" />
+        <FireShader height="160px" opacity={1} enableAudio={false} />
+        <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-ninja-bg to-transparent z-10 pointer-events-none" />
+      </div>
 
       {/* Footer */}
       {/* Footer */}
