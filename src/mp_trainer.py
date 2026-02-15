@@ -4,6 +4,9 @@ import numpy as np
 import csv
 import time
 import math
+import argparse
+import random
+import os
 from pathlib import Path
 
 # MediaPipe Tasks API Imports (Fix for missing mediapipe.solutions)
@@ -14,6 +17,39 @@ from mediapipe.tasks.python import vision
 DATA_FILE = "src/mediapipe_signs_db.csv"
 LABELS = ["Idle", "Tiger", "Ram", "Snake", "Horse", "Rat", "Boar", "Dog", "Bird", "Monkey", "Ox", "Dragon", "Hare", "Clap"]
 MODEL_PATH = "models/hand_landmarker.task"
+DEFAULT_MAX_TRAIN_ROWS = 8000
+
+
+def open_camera(camera_index=0, width=640, height=480):
+    """
+    Open a camera backend that can actually deliver frames.
+    Some Windows backends report opened=True but return empty reads forever.
+    """
+    backends = [("DSHOW", cv2.CAP_DSHOW), ("DEFAULT", None)]
+    if hasattr(cv2, "CAP_MSMF"):
+        backends.append(("MSMF", cv2.CAP_MSMF))
+
+    for backend_name, backend in backends:
+        cap = cv2.VideoCapture(camera_index) if backend is None else cv2.VideoCapture(camera_index, backend)
+        if not cap.isOpened():
+            cap.release()
+            continue
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+        # Warm up and verify real frame delivery.
+        for _ in range(20):
+            ok, _ = cap.read()
+            if ok:
+                print(f"[+] Camera {camera_index} opened via {backend_name}.")
+                return cap
+            time.sleep(0.03)
+
+        print(f"[!] Camera {camera_index} via {backend_name} opened but returned no frames; trying next backend...")
+        cap.release()
+
+    return None
 
 class SignRecorder:
     def __init__(self):
@@ -47,31 +83,62 @@ class SignRecorder:
     def _load_and_train(self):
         """Train a KNN model in memory if CSV has data."""
         try:
-            if not Path(DATA_FILE).exists(): return
-            with open(DATA_FILE, 'r') as f:
+            if not Path(DATA_FILE).exists():
+                return
+
+            max_rows = max(500, int(os.getenv("MP_TRAINER_MAX_ROWS", str(DEFAULT_MAX_TRAIN_ROWS))))
+            sampled_rows = []
+            total_rows = 0
+
+            # Reservoir sample to avoid loading the full DB into RAM.
+            with open(DATA_FILE, 'r', newline='') as f:
                 reader = csv.reader(f)
-                header = next(reader) # Skip header
-                data = list(reader)
-                
-            if len(data) > 5:
-                print(f"[+] Training on {len(data)} examples...")
-                X = []
-                y = []
-                for row in data:
-                    y.append(row[0])
-                    coords = [float(x) for x in row[1:]]
-                    X.append(coords)
-                
-                self.knn = cv2.ml.KNearest_create()
-                self.knn_labels = list(set(y))
-                self.knn_labels.sort()
-                
-                y_int = [self.knn_labels.index(lbl) for lbl in y]
-                self.knn.train(np.array(X, dtype=np.float32), cv2.ml.ROW_SAMPLE, np.array(y_int, dtype=np.int32))
-                print(f"[+] Training complete. Classes: {self.knn_labels}")
-            else:
+                next(reader, None)  # header
+                for row in reader:
+                    if len(row) < 127:
+                        continue
+                    total_rows += 1
+                    if len(sampled_rows) < max_rows:
+                        sampled_rows.append(row)
+                    else:
+                        j = random.randint(0, total_rows - 1)
+                        if j < max_rows:
+                            sampled_rows[j] = row
+
+            if total_rows <= 5:
                 print("[!] Not enough data to train yet. Record some signs!")
                 self.knn = None
+                return
+
+            if total_rows > max_rows:
+                print(f"[+] Training on sampled {len(sampled_rows)}/{total_rows} examples (set MP_TRAINER_MAX_ROWS to change).")
+            else:
+                print(f"[+] Training on {total_rows} examples...")
+
+            X_rows = []
+            y = []
+            for row in sampled_rows:
+                try:
+                    coords = np.asarray(row[1:127], dtype=np.float32)
+                except ValueError:
+                    continue
+                if coords.shape[0] != 126:
+                    continue
+                y.append(row[0])
+                X_rows.append(coords)
+
+            if len(X_rows) <= 5:
+                print("[!] Not enough valid rows to train after filtering.")
+                self.knn = None
+                return
+
+            X = np.vstack(X_rows)
+            self.knn = cv2.ml.KNearest_create()
+            self.knn_labels = sorted(set(y))
+            label_to_idx = {label: idx for idx, label in enumerate(self.knn_labels)}
+            y_int = np.array([label_to_idx[lbl] for lbl in y], dtype=np.int32)
+            self.knn.train(X, cv2.ml.ROW_SAMPLE, y_int)
+            print(f"[+] Training complete. Classes: {self.knn_labels}")
         except Exception as e:
             print(f"[!] Error loading DB: {e}")
             self.knn = None
@@ -230,7 +297,7 @@ def draw_hand_landmarks(image, hand_landmarks):
             cx, cy = int(lm.x * w), int(lm.y * h)
             cv2.circle(image, (cx, cy), 4, (0, 0, 255), -1)
 
-def main():
+def main(camera_index=0):
     # Setup Tasks API Detector
     base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
     options = vision.HandLandmarkerOptions(
@@ -242,12 +309,11 @@ def main():
     )
     detector = vision.HandLandmarker.create_from_options(options)
 
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-         cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap = open_camera(camera_index, width=640, height=480)
+    if cap is None:
+        print(f"[-] Could not read frames from camera {camera_index} on any backend (DSHOW/DEFAULT/MSMF).")
+        detector.close()
+        return
          
     recorder = SignRecorder()
     
@@ -262,9 +328,19 @@ def main():
     print(" [Q] - Quit")
     print("="*50)
 
+    read_failures = 0
     while cap.isOpened():
         success, image = cap.read()
-        if not success: continue
+        if not success:
+            read_failures += 1
+            if read_failures == 1:
+                print("[!] Camera read failed. Waiting for frames...")
+            if read_failures >= 120:
+                print("[-] Camera kept failing to deliver frames. Exiting.")
+                break
+            time.sleep(0.01)
+            continue
+        read_failures = 0
 
         image = cv2.flip(image, 1)
         h, w, _ = image.shape
@@ -373,4 +449,7 @@ def main():
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="MediaPipe Jutsu Trainer")
+    parser.add_argument("--camera", "-c", type=int, default=0, help="Camera index (default: 0)")
+    args = parser.parse_args()
+    main(camera_index=args.camera)
