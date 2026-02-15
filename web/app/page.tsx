@@ -2,16 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Sword, Scroll, ArrowRight, Video, Trophy, UploadCloud, Youtube, Instagram, Shield, Info } from "lucide-react";
+import { Sword, Scroll, ArrowRight, Video, Trophy, UploadCloud, Youtube, Instagram, Shield, Info, Hand } from "lucide-react";
 
 import { ModalProvider, useModal } from "./components/modal-provider";
 
 export default function Home() {
   const { openModal, trackClick } = useModal();
   const targetDate = useMemo(() => new Date(2026, 1, 21, 21, 0, 0), []);
-  const [timeLeft, setTimeLeft] = useState(() => getTimeLeft(targetDate));
+  const [timeLeft, setTimeLeft] = useState<ReturnType<typeof getTimeLeft> | null>(null);
 
   useEffect(() => {
+    setTimeLeft(getTimeLeft(targetDate));
     const timer = window.setInterval(() => {
       setTimeLeft(getTimeLeft(targetDate));
     }, 1000);
@@ -19,9 +20,11 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [targetDate]);
 
-  const countdownLabel = timeLeft.expired
-    ? "LIVE NOW"
-    : `${pad(timeLeft.days)}D ${pad(timeLeft.hours)}H ${pad(timeLeft.minutes)}M ${pad(timeLeft.seconds)}S`;
+  const countdownLabel = !timeLeft
+    ? "LOADING…"
+    : timeLeft.expired
+      ? "LIVE NOW"
+      : `${pad(timeLeft.days)}D ${pad(timeLeft.hours)}H ${pad(timeLeft.minutes)}M ${pad(timeLeft.seconds)}S`;
 
   return (
     <div className="min-h-screen bg-ninja-bg text-ninja-text font-sans selection:bg-ninja-accent selection:text-white">
@@ -47,6 +50,10 @@ export default function Home() {
           <nav className="hidden md:flex gap-8 text-sm font-medium text-zinc-200/90">
             <Link href="#showcase" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Features</Link>
             <Link href="#dev" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Dev</Link>
+            <Link href="/challenge" className="flex items-center gap-2 text-green-400 font-bold hover:text-green-300 transition-colors">
+              <Hand className="w-4 h-4" />
+              Sign Tester
+            </Link>
             <Link href="/leaderboard" className="flex items-center gap-2 text-ninja-accent font-bold hover:text-ninja-accent-glow transition-colors">
               <Trophy className="w-4 h-4" />
               Leaderboard
@@ -106,6 +113,15 @@ export default function Home() {
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </Link> */}
 
+
+              <Link
+                href="/challenge"
+                className="group h-14 px-8 bg-green-600/20 hover:bg-green-600/30 border border-green-500/40 text-green-400 hover:text-green-300 text-lg font-bold rounded-lg flex items-center gap-3 transition-all shadow-[0_0_20px_rgba(50,200,120,0.15)] hover:shadow-[0_0_30px_rgba(50,200,120,0.25)] hover:-translate-y-0.5"
+              >
+                <Hand className="w-5 h-5" />
+                TRY SIGN TESTER
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </Link>
 
               <Link
                 href="/leaderboard"

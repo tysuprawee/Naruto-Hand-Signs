@@ -614,13 +614,18 @@ class RenderingMixin:
             pygame.draw.circle(ring_surf, (*COLORS["success"], ring_alpha), (ring_size, ring_size), ring_size, 3)
             self.screen.blit(ring_surf, (center_x - ring_size, avatar_y - ring_size))
 
-        if self.user_avatar:
-            # Scale and blit avatar
+        if getattr(self, 'user_avatar_hires', None):
+            # Use the pre-rendered high-res circular avatar
+            av_rect = self.user_avatar_hires.get_rect(center=(center_x, avatar_y))
+            
+            # Ring border
+            pygame.draw.circle(self.screen, COLORS["success"], (center_x, avatar_y), 68, 3)
+            self.screen.blit(self.user_avatar_hires, av_rect)
+        elif self.user_avatar:
+            # Fallback: scale the small avatar
             av_size = 110
             scaled_avatar = pygame.transform.smoothscale(self.user_avatar, (av_size, av_size))
             av_rect = scaled_avatar.get_rect(center=(center_x, avatar_y))
-            
-            # Mask border
             pygame.draw.circle(self.screen, COLORS["success"], (center_x, avatar_y), 60, 3)
             self.screen.blit(scaled_avatar, av_rect)
         else:
@@ -667,9 +672,11 @@ class RenderingMixin:
 
         pygame.draw.rect(self.screen, base_color, self.welcome_ok_rect, border_radius=15)
         
-        # Inner gloss/shine for button
-        shine_rect = pygame.Rect(btn_x + 5, btn_y + 5, btn_w - 10, btn_h // 2.5)
-        pygame.draw.rect(self.screen, (255, 255, 255, 40), shine_rect, border_radius=12)
+        # Inner gloss/shine for button (use temp surface for proper alpha)
+        shine_h = int(btn_h // 2.5)
+        shine_surf = pygame.Surface((btn_w - 10, shine_h), pygame.SRCALPHA)
+        pygame.draw.rect(shine_surf, (255, 255, 255, 35), shine_surf.get_rect(), border_radius=12)
+        self.screen.blit(shine_surf, (btn_x + 5, btn_y + 5))
         
         # Button Text
         btn_txt = self.fonts["title_sm"].render("ENTER ACADEMY", True, (255, 255, 255))
