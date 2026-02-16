@@ -50,6 +50,8 @@ class GameplayMixin:
         self.smooth_hand_pos = None
         self.smooth_hand_effect_scale = None
         self.hand_effect_scale = 1.0
+        if pygame.mixer.get_init():
+            pygame.mixer.stop()
 
         if reset_calibration:
             self.calibration_active = False
@@ -398,7 +400,10 @@ class GameplayMixin:
 
     def stop_game(self, return_to_library=False):
         """Stop the game and return to menu."""
-        if hasattr(self, "_challenge_reset_proof"):
+        submitted_on_exit = False
+        if hasattr(self, "_submit_challenge_score_on_exit"):
+            submitted_on_exit = bool(self._submit_challenge_score_on_exit(blocking=False))
+        if hasattr(self, "_challenge_reset_proof") and (not submitted_on_exit):
             self._challenge_reset_proof()
         self._reset_active_effects(reset_calibration=True)
         self._stop_camera()

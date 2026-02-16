@@ -662,6 +662,8 @@ class RuntimeMixin:
         if getattr(self, "_cleanup_done", False):
             return
         self._cleanup_done = True
+        if hasattr(self, "_submit_challenge_score_on_exit"):
+            self._submit_challenge_score_on_exit(blocking=True)
         if hasattr(self, "_reset_active_effects"):
             self._reset_active_effects(reset_calibration=True)
         self._stop_camera()

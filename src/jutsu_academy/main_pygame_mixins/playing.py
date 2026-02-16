@@ -216,6 +216,32 @@ class PlayingMixin:
             self.challenge_submitting = True
             threading.Thread(target=self._submit_challenge_score, daemon=True).start()
 
+    def _challenge_score_ready_for_submit(self):
+        if self.game_mode != "challenge":
+            return False
+        if self.challenge_submitting or self.submission_complete:
+            return False
+        try:
+            final_time = float(getattr(self, "challenge_final_time", 0.0) or 0.0)
+        except Exception:
+            final_time = 0.0
+        if final_time <= 0.0:
+            return False
+        state = str(getattr(self, "challenge_state", "waiting") or "waiting")
+        return bool(self.jutsu_active) or state in {"active", "results"}
+
+    def _submit_challenge_score_on_exit(self, blocking=False):
+        """Submit challenge score when player exits before results auto-submit finishes."""
+        if not self._challenge_score_ready_for_submit():
+            return False
+        self.challenge_state = "results"
+        self.challenge_submitting = True
+        if blocking:
+            self._submit_challenge_score()
+        else:
+            threading.Thread(target=self._submit_challenge_score, daemon=True).start()
+        return True
+
     def _submit_challenge_score(self):
         """Background thread to submit score and calculate local rank."""
         try:

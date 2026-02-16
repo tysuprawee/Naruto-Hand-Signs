@@ -29,6 +29,48 @@ class RenderingMixin:
                 high = mid - 1
         return best
 
+    def _font_for_size(self, px_size):
+        cache = getattr(self, "_dynamic_font_cache", None)
+        if cache is None:
+            cache = {}
+            self._dynamic_font_cache = cache
+        key = int(px_size)
+        if key not in cache:
+            cache[key] = pygame.font.Font(None, key)
+        return cache[key]
+
+    def _wrap_text_to_width(self, font, text, max_width):
+        words = str(text or "").split()
+        if not words:
+            return [""]
+
+        lines = [words[0]]
+        for word in words[1:]:
+            candidate = f"{lines[-1]} {word}"
+            if font.size(candidate)[0] <= max_width:
+                lines[-1] = candidate
+            else:
+                lines.append(word)
+        return lines
+
+    def _fit_full_name_lines(self, text, max_width, max_lines=2, max_height=30):
+        """Fit full name without ellipsis by shrinking and wrapping."""
+        for size in (24, 22, 20, 18, 16, 15, 14, 13, 12, 11, 10):
+            font = self._font_for_size(size)
+            lines = self._wrap_text_to_width(font, text, max_width)
+            if len(lines) > max_lines:
+                continue
+            if max_height is not None and (len(lines) * font.get_linesize()) > max_height:
+                continue
+            return font, lines
+
+        # Final fallback: keep full text by using smallest font and merging overflow into line 2.
+        font = self._font_for_size(10)
+        lines = self._wrap_text_to_width(font, text, max_width)
+        if len(lines) <= max_lines:
+            return font, lines
+        return font, lines[: max_lines - 1] + [" ".join(lines[max_lines - 1 :])]
+
     def render_maintenance_required(self):
         """Render hard-blocking maintenance gate when service is unavailable."""
         if self.bg_image:
@@ -1561,28 +1603,32 @@ class RenderingMixin:
                 pygame.draw.rect(card_bg, border, card_bg.get_rect(), 2, border_radius=10)
                 self.screen.blit(card_bg, card_rect.topleft)
 
-                name_text = self._fit_single_line_text(
-                    self.fonts["body_sm"],
+                name_font, name_lines = self._fit_full_name_lines(
                     jutsu_name.upper(),
                     card_w - 52,
+                    max_lines=2,
+                    max_height=30,
                 )
-                name_surf = self.fonts["body_sm"].render(name_text, True, COLORS["text"])
-                self.screen.blit(name_surf, (card_rect.x + 10, card_rect.y + 10))
+                line_height = max(10, name_font.get_linesize() - 2)
+                for line_idx, line_text in enumerate(name_lines):
+                    line_surf = name_font.render(line_text, True, COLORS["text"])
+                    self.screen.blit(line_surf, (card_rect.x + 10, card_rect.y + 8 + line_idx * line_height))
 
-                status_text = self._fit_single_line_text(self.fonts["tiny"], status, card_w - 20)
-                status_surf = self.fonts["tiny"].render(status_text, True, status_color)
-                self.screen.blit(status_surf, (card_rect.x + 10, card_rect.y + 38))
+                status_y = card_rect.y + card_h - 34
+                status_surf = self.fonts["tiny"].render(status, True, status_color)
+                self.screen.blit(status_surf, (card_rect.x + 10, status_y))
 
                 seq_len = len(jutsu_data.get("sequence", []))
+                seq_y = card_rect.y + card_h - 20
                 seq_surf = self.fonts["tiny"].render(f"SIGNS: {seq_len}", True, COLORS["text_dim"])
-                self.screen.blit(seq_surf, (card_rect.x + 10, card_rect.y + 54))
+                self.screen.blit(seq_surf, (card_rect.x + 10, seq_y))
 
                 tier = self._get_mastery_tier(jutsu_name)
                 badge = self.mastery_icons.get(tier, self.mastery_icons.get("none"))
                 if badge:
                     self.screen.blit(badge, (card_rect.right - 34, card_rect.y + 6))
                 tier_text = self.fonts["tiny"].render(f"M: {tier.upper()}", True, COLORS["text_dim"])
-                self.screen.blit(tier_text, (card_rect.x + 92, card_rect.y + 54))
+                self.screen.blit(tier_text, (card_rect.x + 92, seq_y))
 
                 self.library_item_rects.append({
                     "rect": card_rect,
