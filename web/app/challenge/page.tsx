@@ -82,6 +82,7 @@ interface HandLandmarkerLike {
 interface DatasetConfig {
   version: string;
   datasetUrl: string;
+  checksumShort: string;
 }
 
 const ALL_SIGNS: SignName[] = [
@@ -202,10 +203,18 @@ const DATASET_CACHE_NAMESPACE = "challenge-sign-db-cache-v1";
 const DATASET_CACHE_KEY_PREFIX = "/mediapipe_signs_db.csv?dataset_version=";
 const DATASET_VERSION_STORAGE_KEY = "challenge_dataset_version";
 const DATASET_FALLBACK_VERSION = "legacy";
+const DATASET_CHECKSUM_UNKNOWN = "----";
 
 function normalizeDatasetVersion(raw: string | null | undefined): string {
   const cleaned = String(raw ?? "").trim();
   return cleaned || DATASET_FALLBACK_VERSION;
+}
+
+function shortChecksum(raw: string | null | undefined): string {
+  const value = String(raw ?? "").trim();
+  if (!value) return DATASET_CHECKSUM_UNKNOWN;
+  if (value.length <= 8) return value;
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
 function readStoredDatasetVersion(): string {
@@ -229,13 +238,17 @@ function writeStoredDatasetVersion(version: string): void {
 async function fetchDatasetConfig(): Promise<DatasetConfig> {
   const fallbackVersion = readStoredDatasetVersion();
   if (!supabase) {
-    return { version: fallbackVersion, datasetUrl: DATASET_CSV_URL };
+    return {
+      version: fallbackVersion,
+      datasetUrl: DATASET_CSV_URL,
+      checksumShort: DATASET_CHECKSUM_UNKNOWN,
+    };
   }
 
   try {
     const { data, error } = await supabase
       .from("app_config")
-      .select("version,url")
+      .select("version,url,checksum")
       .eq("type", DATASET_CONFIG_TYPE)
       .eq("is_active", true)
       .order("priority", { ascending: false })
@@ -245,15 +258,20 @@ async function fetchDatasetConfig(): Promise<DatasetConfig> {
     if (error) throw error;
 
     const first = Array.isArray(data) && data.length > 0
-      ? (data[0] as { version?: string | null; url?: string | null })
+      ? (data[0] as { version?: string | null; url?: string | null; checksum?: string | null })
       : null;
     const version = normalizeDatasetVersion(first?.version ?? fallbackVersion);
     const datasetUrl = String(first?.url ?? DATASET_CSV_URL).trim() || DATASET_CSV_URL;
+    const checksumShort = shortChecksum(first?.checksum);
     writeStoredDatasetVersion(version);
-    return { version, datasetUrl };
+    return { version, datasetUrl, checksumShort };
   } catch (err) {
     console.warn("Dataset version lookup failed, using cached fallback version.", err);
-    return { version: fallbackVersion, datasetUrl: DATASET_CSV_URL };
+    return {
+      version: fallbackVersion,
+      datasetUrl: DATASET_CSV_URL,
+      checksumShort: DATASET_CHECKSUM_UNKNOWN,
+    };
   }
 }
 
@@ -274,18 +292,43 @@ async function loadCachedDatasetCsv(datasetUrl: string, datasetVersion: string):
     return await fetchDatasetText();
   }
 
-  const cache = await window.caches.open(DATASET_CACHE_NAMESPACE);
+  let cache: Cache | null = null;
+  try {
+    cache = await window.caches.open(DATASET_CACHE_NAMESPACE);
+  } catch (err) {
+    console.warn("Dataset cache unavailable; continuing without Cache API.", err);
+    return await fetchDatasetText();
+  }
+
   const cached = await cache.match(cacheKey);
   if (cached) {
     return await cached.text();
   }
 
+  let networkText = "";
   try {
-    const networkResp = await fetch(resolvedUrl, { cache: "no-store" });
-    if (!networkResp.ok) {
-      throw new Error(`Dataset fetch failed (${networkResp.status})`);
+    networkText = await fetchDatasetText();
+  } catch (networkErr) {
+    // Network failed: try any previously cached dataset as fallback.
+    const keys = await cache.keys();
+    for (const request of keys) {
+      if (request.url.includes(DATASET_CACHE_KEY_PREFIX)) {
+        const fallbackCached = await cache.match(request);
+        if (fallbackCached) {
+          return await fallbackCached.text();
+        }
+      }
     }
-    await cache.put(cacheKey, networkResp.clone());
+    throw networkErr;
+  }
+
+  try {
+    const cacheResp = new Response(networkText, {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+      },
+    });
+    await cache.put(cacheKey, cacheResp);
 
     // Keep only the currently active dataset cache entry.
     const keys = await cache.keys();
@@ -297,20 +340,12 @@ async function loadCachedDatasetCsv(datasetUrl: string, datasetVersion: string):
         await cache.delete(request);
       }
     }
-
-    return await networkResp.text();
-  } catch (err) {
-    const keys = await cache.keys();
-    for (const request of keys) {
-      if (request.url.includes(DATASET_CACHE_KEY_PREFIX)) {
-        const fallbackCached = await cache.match(request);
-        if (fallbackCached) {
-          return await fallbackCached.text();
-        }
-      }
-    }
-    throw err;
+  } catch (cacheErr) {
+    // Some webviews/private modes reject large Cache writes; keep app functional.
+    console.warn("Dataset cache write failed; continuing without cache.", cacheErr);
   }
+
+  return networkText;
 }
 
 function parseCSV(text: string): Record<string, string | number>[] {
@@ -597,6 +632,8 @@ export default function ChallengePage() {
   const [detectMs, setDetectMs] = useState(0);
   const [lightingMs, setLightingMs] = useState(0);
   const [videoRes, setVideoRes] = useState("0x0");
+  const [datasetVersionUsed, setDatasetVersionUsed] = useState(DATASET_FALLBACK_VERSION);
+  const [datasetChecksumShort, setDatasetChecksumShort] = useState(DATASET_CHECKSUM_UNKNOWN);
 
   const dismissInstructions = useCallback(() => {
     setShowInstructions(false);
@@ -623,7 +660,11 @@ export default function ChallengePage() {
       try {
         setLoadMsg("Checking dataset version...");
         const datasetConfig = await fetchDatasetConfig();
-        setLoadMsg(`Loading sign database (${datasetConfig.version})...`);
+        setDatasetVersionUsed(datasetConfig.version);
+        setDatasetChecksumShort(datasetConfig.checksumShort);
+        setLoadMsg(
+          `Loading sign database (${datasetConfig.version}, ${datasetConfig.checksumShort})...`
+        );
         const csvText = await loadCachedDatasetCsv(datasetConfig.datasetUrl, datasetConfig.version);
         const rows = parseCSV(csvText);
         // Match pygame recorder behavior (k=3, distance threshold=1.8).
@@ -1295,6 +1336,8 @@ export default function ChallengePage() {
                   <div>RMS: {drawMs.toFixed(1)}</div>
                   <div>LMS: {lightingMs.toFixed(1)}</div>
                   <div>RES: {videoRes}</div>
+                  <div>VER: {datasetVersionUsed}</div>
+                  <div>CHK: {datasetChecksumShort}</div>
                 </div>
               )}
             </div>
