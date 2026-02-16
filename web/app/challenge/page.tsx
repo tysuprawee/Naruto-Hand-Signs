@@ -191,8 +191,8 @@ const LIGHTING_CONTRAST_EPSILON = 1.0;
 const DETECTION_CONFIDENCE_EPSILON = 0.03;
 const DETECTION_DISTANCE_EPSILON = 0.2;
 
-const VOTE_WINDOW_SIZE = 5;
-const VOTE_REQUIRED_HITS = 3;
+const VOTE_WINDOW_SIZE = 2;
+const VOTE_REQUIRED_HITS = 2;
 const VOTE_MIN_CONFIDENCE = 0.45;
 const VOTE_ENTRY_TTL_MS = 700;
 
@@ -495,7 +495,7 @@ function applyTemporalVote(
   }
 
   const avgConf = bestHits > 0 ? bestConfSum / bestHits : 0;
-  // Keep pygame-style vote+confidence gate, but if consensus is 5/5
+  // Keep pygame-style vote+confidence gate, but if consensus is 2/2
   // we still accept to avoid "5/5 but no change" UX stalls.
   const hasHardConsensus = bestHits >= VOTE_WINDOW_SIZE;
   if ((bestHits >= VOTE_REQUIRED_HITS && avgConf >= VOTE_MIN_CONFIDENCE) || hasHardConsensus) {
@@ -1031,7 +1031,7 @@ export default function ChallengePage() {
         (prevDistFinite &&
           nextDistFinite &&
           Math.abs(nextDetection.distance - prevDetection.distance) >=
-            DETECTION_DISTANCE_EPSILON);
+          DETECTION_DISTANCE_EPSILON);
       if (labelChanged || (uiTickDue && (confidenceChanged || distanceChanged))) {
         detectionUiRef.current = nextDetection;
         setDetection(nextDetection);
