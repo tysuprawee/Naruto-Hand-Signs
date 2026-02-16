@@ -972,11 +972,26 @@ class RenderingMixin:
         )
 
         cb_y = controls_top + 266
-        for key in ["debug_hands", "restricted"]:
+        for key in ["debug_hands", "restricted", "fullscreen"]:
             cb = self.settings_checkboxes[key]
             cb.rect.x = controls_cx - 150
             cb.rect.y = cb_y
-            cb_y += 40
+            cb_y += 36
+
+        # Resolution dropdown layout
+        res_label = self.fonts["body_sm"].render("Resolution:", True, COLORS["text"])
+        res_label_y = cb_y + 6
+        self.screen.blit(res_label, (left_rect.x + 16, res_label_y))
+
+        self.resolution_dropdown.x = controls_cx - 115
+        self.resolution_dropdown.y = cb_y + 2
+        self.resolution_dropdown.width = min(280, left_rect.width - 44)
+        self.resolution_dropdown.rect = pygame.Rect(
+            self.resolution_dropdown.x,
+            self.resolution_dropdown.y,
+            self.resolution_dropdown.width,
+            self.resolution_dropdown.height,
+        )
 
         scan_btn = self.settings_buttons["scan_cameras"]
         scan_btn.rect.width = 120
@@ -1051,8 +1066,9 @@ class RenderingMixin:
         for btn in self.settings_buttons.values():
             btn.render(self.screen)
 
-        # Render dropdown last so its options are always in front
+        # Render dropdowns last so their options are always in front
         self.camera_dropdown.render(self.screen)
+        self.resolution_dropdown.render(self.screen)
 
     def render_practice_select(self):
         """Render practice mode selection in grouped 'Select Your Path' style."""

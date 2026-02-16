@@ -30,6 +30,20 @@ class GameplayMixin:
         self.last_vote_hits = 0
         self.sign_vote_window = []
 
+    def toggle_detection_model(self):
+        """Switch active sign detector backend."""
+        using_mp = bool(self.settings.get("use_mediapipe_signs", False))
+
+        # Safety fallback: if YOLO failed to load, keep MediaPipe selected.
+        if using_mp and self.model is None:
+            self.settings["use_mediapipe_signs"] = True
+            return "mediapipe"
+
+        self.settings["use_mediapipe_signs"] = not using_mp
+        self._reset_detection_filters()
+        self.last_mp_result = None
+        return "mediapipe" if self.settings.get("use_mediapipe_signs", False) else "yolo"
+
     def _reset_active_effects(self, reset_calibration=True):
         """Reset effect/audio/video runtime state for safe screen transitions."""
         self.fire_particles.emitting = False
@@ -428,7 +442,7 @@ class GameplayMixin:
     def detect_and_process(self, frame):
         """Run detection and check sequence."""
         if self.model is None:
-            return frame, None
+            return frame, None, 0.0
         
         results = self.model(frame, stream=True, verbose=False, imgsz=320)
         detected_class = None
@@ -454,7 +468,7 @@ class GameplayMixin:
                 cv2.putText(frame, f"{cls_name} {conf:.2f}", (x1, y1 - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         
-        return frame, detected_class
+        return frame, detected_class, highest_conf
 
     def detect_hands(self, frame):
         """Detect hand landmarks for skeleton visualization and tracking."""

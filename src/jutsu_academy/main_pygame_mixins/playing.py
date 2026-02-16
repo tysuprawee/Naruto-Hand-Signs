@@ -391,17 +391,31 @@ class PlayingMixin:
                     # MediaPipe + quality gate + temporal consensus
                     detected = self.predict_sign_with_filters(frame, lighting_ok)
                 else:
-                    # Legacy Phase: Use YOLO for hand sign recognition (bounding boxes)
-                    frame, detected = self.detect_and_process(frame)
-                    detected = str(detected or "idle").lower()
+                    # YOLO mode: still run temporal vote + lighting gate for stability.
+                    frame, yolo_sign, yolo_conf = self.detect_and_process(frame)
+                    raw_sign = str(yolo_sign or "idle").strip().lower()
+                    raw_conf = float(max(0.0, yolo_conf))
+                    allow_detection = bool(lighting_ok) and raw_sign not in ("", "idle")
+                    stable_sign, stable_conf = self._apply_temporal_vote(raw_sign, raw_conf, allow_detection)
+
+                    self.raw_detected_sign = raw_sign
+                    self.raw_detected_confidence = raw_conf
+                    self.detected_sign = stable_sign
+                    self.detected_confidence = float(stable_conf)
+                    self.last_detected_hands = 1 if raw_sign not in ("", "idle") else 0
+                    self._update_calibration_sample(raw_sign, raw_conf, self.last_detected_hands)
+                    detected = stable_sign
             else:
                 # Effect Phase: switch to MediaPipe for precise tracking
                 self.detect_hands(frame)
                 self.detect_face(frame)
         else:
             self._apply_temporal_vote("idle", 0.0, False)
+            self.raw_detected_sign = "idle"
+            self.raw_detected_confidence = 0.0
             self.detected_sign = "idle"
             self.detected_confidence = 0.0
+            self.last_detected_hands = 0
 
         # 3. Process Sequence
         self.effect_orchestrator.on_sign_detected(
@@ -647,6 +661,7 @@ class PlayingMixin:
             self.screen.blit(pred_txt, (lx, ly))
 
         # Detection diagnostics (quality gate + voting + calibration state)
+        detector_name = "MEDIAPIPE" if self.settings.get("use_mediapipe_signs", False) else "YOLO"
         light_color = COLORS["success"] if lighting_ok else COLORS["error"]
         light_text = self.lighting_status.replace("_", " ").upper()
         vote_text = f"VOTE {self.last_vote_hits}/{self.vote_window_size}"
@@ -663,6 +678,7 @@ class PlayingMixin:
             calib_text = "PRESS C TO CALIBRATE"
 
         info_lines = [
+            f"MODEL: {detector_name}",
             f"LIGHT: {light_text}",
             f"{vote_text} • {int(self.detected_confidence * 100)}%",
             calib_text,
@@ -885,12 +901,25 @@ class PlayingMixin:
         fps_surf = self.fonts["tiny"].render(fps_txt, True, COLORS["success"])
         self.screen.blit(fps_surf, (cam_x + new_w - fps_surf.get_width() - 5, cam_y - 18))
 
-        # Toggle diagnostics panel button (outside camera zone, in top HUD).
-        self.diag_toggle_rect = pygame.Rect(SCREEN_WIDTH - 142, 6, 126, 30)
+        # HUD toggles (outside camera zone): model switch + diagnostics panel.
+        top_controls_y = hud_h + 8
+        self.model_toggle_rect = pygame.Rect(SCREEN_WIDTH - 334, top_controls_y, 182, 30)
+        self.diag_toggle_rect = pygame.Rect(SCREEN_WIDTH - 142, top_controls_y, 126, 30)
         mouse_pos = pygame.mouse.get_pos()
+        model_hover = self.model_toggle_rect.collidepoint(mouse_pos)
         diag_hover = self.diag_toggle_rect.collidepoint(mouse_pos)
-        if diag_hover:
+        if model_hover or diag_hover:
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
+
+        use_mediapipe = bool(self.settings.get("use_mediapipe_signs", False))
+        model_btn_col = COLORS["bg_hover"] if model_hover else COLORS["bg_card"]
+        model_border = COLORS["success"] if use_mediapipe else COLORS["accent"]
+        pygame.draw.rect(self.screen, model_btn_col, self.model_toggle_rect, border_radius=8)
+        pygame.draw.rect(self.screen, model_border, self.model_toggle_rect, 1, border_radius=8)
+        model_text = "MODEL: MEDIAPIPE" if use_mediapipe else "MODEL: YOLO"
+        model_surf = self.fonts["small"].render(model_text, True, COLORS["text"])
+        self.screen.blit(model_surf, model_surf.get_rect(center=self.model_toggle_rect.center))
+
         btn_col = COLORS["bg_hover"] if diag_hover else COLORS["bg_card"]
         pygame.draw.rect(self.screen, btn_col, self.diag_toggle_rect, border_radius=8)
         pygame.draw.rect(self.screen, COLORS["border"], self.diag_toggle_rect, 1, border_radius=8)

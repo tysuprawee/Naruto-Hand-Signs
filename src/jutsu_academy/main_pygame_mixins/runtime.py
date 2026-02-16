@@ -181,6 +181,9 @@ class RuntimeMixin:
                     elif event.key == pygame.K_c:
                         self.start_calibration(manual=True)
                         self.play_sound("click")
+                    elif event.key == pygame.K_m:
+                        self.toggle_detection_model()
+                        self.play_sound("click")
                     elif event.key == pygame.K_SPACE:
                         if self.game_mode == "challenge":
                             if self.challenge_state == "waiting":
@@ -376,10 +379,14 @@ class RuntimeMixin:
                 self.settings["camera_idx"] = self.camera_dropdown.selected_idx
                 if self.settings_preview_enabled:
                     self._start_settings_camera_preview(self.camera_dropdown.selected_idx)
+
+            # Resolution dropdown
+            self.resolution_dropdown.update(mouse_pos, mouse_click, self.play_sound)
             
             # Keep restricted signs always ON and non-interactive.
             self.settings_checkboxes["restricted"].checked = True
             self.settings_checkboxes["debug_hands"].update(mouse_pos, mouse_click, self.play_sound)
+            self.settings_checkboxes["fullscreen"].update(mouse_pos, mouse_click, self.play_sound)
             
             for name, btn in self.settings_buttons.items():
                 if btn.update(mouse_pos, mouse_click, mouse_down, self.play_sound):
@@ -402,6 +409,20 @@ class RuntimeMixin:
                         self.settings["camera_idx"] = self.camera_dropdown.selected_idx
                         self.settings["debug_hands"] = self.settings_checkboxes["debug_hands"].checked
                         self.settings["restricted_signs"] = True
+
+                        # Resolution & fullscreen
+                        self.settings["resolution_idx"] = self.resolution_dropdown.selected_idx
+                        self.settings["fullscreen"] = self.settings_checkboxes["fullscreen"].checked
+
+                        res_idx = self.settings["resolution_idx"]
+                        if 0 <= res_idx < len(RESOLUTION_OPTIONS):
+                            _, rw, rh = RESOLUTION_OPTIONS[res_idx]
+                        else:
+                            _, rw, rh = RESOLUTION_OPTIONS[0]
+                        self.screen_w = rw
+                        self.screen_h = rh
+                        self.fullscreen = self.settings["fullscreen"]
+                        self._apply_display_mode()
                         
                         if not self.is_muted:
                             pygame.mixer.music.set_volume(self._effective_music_volume(self.settings["music_vol"]))
@@ -552,6 +573,10 @@ class RuntimeMixin:
                         self.state = GameState.PRACTICE_SELECT
         
         elif self.state == GameState.PLAYING:
+            if mouse_click and hasattr(self, "model_toggle_rect") and self.model_toggle_rect.collidepoint(mouse_pos):
+                self.toggle_detection_model()
+                self.play_sound("click")
+                return
             if mouse_click and hasattr(self, "diag_toggle_rect") and self.diag_toggle_rect.collidepoint(mouse_pos):
                 self.show_detection_panel = not bool(getattr(self, "show_detection_panel", True))
                 self.play_sound("click")

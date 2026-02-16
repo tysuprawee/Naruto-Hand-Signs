@@ -12,7 +12,7 @@ log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
 class DiscordLogin:
-    def __init__(self, client_id, client_secret, redirect_uri="http://localhost:5000/callback"):
+    def __init__(self, client_id, client_secret, redirect_uri="http://localhost:5050/callback"):
         self.client_id = client_id
         self.client_secret = client_secret
         self.redirect_uri = redirect_uri
@@ -499,10 +499,10 @@ class DiscordLogin:
         print(f"[AUTH] Starting Discord Login Flow (timeout={timeout}s)...")
         try:
             # Start server in thread
-            self.server = make_server('localhost', 5000, self.app, threaded=True)
+            self.server = make_server('localhost', 5050, self.app, threaded=True)
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
             self.thread.start()
-            print("[AUTH] Local callback server started on port 5000")
+            print("[AUTH] Local callback server started on port 5050")
             
             # Wait for auth with timeout
             print("[AUTH] Waiting for user to authorize in browser...")

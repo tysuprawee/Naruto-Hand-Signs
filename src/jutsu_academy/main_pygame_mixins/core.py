@@ -210,8 +210,12 @@ class CoreMixin:
 
         pygame.init()
         pygame.display.set_caption("Jutsu Academy")
-        
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+
+        # Apply resolution/fullscreen from settings (overwritten below by load_settings)
+        self.screen_w = SCREEN_WIDTH
+        self.screen_h = SCREEN_HEIGHT
+        self.fullscreen = False
+        self.screen = pygame.display.set_mode((self.screen_w, self.screen_h))
         self.clock = pygame.time.Clock()
         self.running = True
         
@@ -245,12 +249,26 @@ class CoreMixin:
             "sfx_vol": 0.7,
             "camera_idx": 0,
             "debug_hands": False,
-            "use_mediapipe_signs": True,
-            "restricted_signs": True
+            "use_mediapipe_signs": False,
+            "restricted_signs": True,
+            "resolution_idx": 0,
+            "fullscreen": False,
         }
         self.load_settings()
-        self.settings["use_mediapipe_signs"] = True
+        self.settings["use_mediapipe_signs"] = False
         self.settings["restricted_signs"] = True
+
+        # Apply saved resolution/fullscreen *after* load_settings
+        res_idx = self.settings.get("resolution_idx", 0)
+        if 0 <= res_idx < len(RESOLUTION_OPTIONS):
+            _, rw, rh = RESOLUTION_OPTIONS[res_idx]
+        else:
+            _, rw, rh = RESOLUTION_OPTIONS[0]
+            self.settings["resolution_idx"] = 0
+        self.screen_w = rw
+        self.screen_h = rh
+        self.fullscreen = bool(self.settings.get("fullscreen", False))
+        self._apply_display_mode()
         
         # Camera list (startup-safe; no hardware probe here)
         self.cameras = self._scan_cameras(probe=False)
@@ -406,6 +424,7 @@ class CoreMixin:
         self.vote_min_confidence = 0.45
         self.vote_entry_ttl_s = 0.7
         self.show_detection_panel = True
+        self.model_toggle_rect = pygame.Rect(0, 0, 0, 0)
         self.diag_toggle_rect = pygame.Rect(0, 0, 0, 0)
 
         # Lighting quality gate
@@ -528,6 +547,66 @@ class CoreMixin:
             self.state = GameState.TUTORIAL
         
         print("[+] Jutsu Academy initialized!")
+
+    def _sync_screen_constants(self, width, height):
+        """Propagate current screen dimensions to all pygame modules using shared constants."""
+        import src.jutsu_academy.main_pygame_shared as _shared
+
+        w = max(640, int(width))
+        h = max(480, int(height))
+        _shared.SCREEN_WIDTH = w
+        _shared.SCREEN_HEIGHT = h
+
+        for mod_name, mod in list(sys.modules.items()):
+            if not mod_name.startswith("src.jutsu_academy.main_pygame"):
+                continue
+            if hasattr(mod, "SCREEN_WIDTH"):
+                setattr(mod, "SCREEN_WIDTH", w)
+            if hasattr(mod, "SCREEN_HEIGHT"):
+                setattr(mod, "SCREEN_HEIGHT", h)
+
+        self.screen_w = w
+        self.screen_h = h
+
+    def _rebuild_ui_for_screen_size(self):
+        """Recreate static UI rects after display size changes."""
+        if not hasattr(self, "menu_buttons"):
+            return
+
+        self._create_menu_ui()
+        self._create_settings_ui()
+        self._create_practice_select_ui()
+        self._create_about_ui()
+        self._create_leaderboard_ui()
+        self._create_library_ui()
+        self._create_quest_ui()
+        self._create_tutorial_ui()
+
+        if hasattr(self, "playing_back_button"):
+            self.playing_back_button = Button(24, 20, 120, 42, "< BACK", font_size=22, color=COLORS["bg_card"])
+
+    def _apply_display_mode(self):
+        """Recreate display mode and ensure fullscreen always fits the actual monitor size."""
+        flags = 0
+
+        if self.fullscreen:
+            # Desktop fullscreen: (0, 0) lets SDL/Pygame choose native monitor resolution.
+            flags |= pygame.FULLSCREEN
+            self.screen = pygame.display.set_mode((0, 0), flags)
+        else:
+            target_w = max(640, int(getattr(self, "screen_w", SCREEN_WIDTH)))
+            target_h = max(480, int(getattr(self, "screen_h", SCREEN_HEIGHT)))
+            self.screen = pygame.display.set_mode((target_w, target_h), flags)
+
+        actual_w, actual_h = self.screen.get_size()
+        self._sync_screen_constants(actual_w, actual_h)
+        pygame.display.set_caption("Jutsu Academy")
+
+        # Re-load background crop at new resolution to avoid edge blank space.
+        if hasattr(self, "_load_background"):
+            self._load_background()
+
+        self._rebuild_ui_for_screen_size()
 
     def show_alert(self, title, message, button_text="OK"):
         """Queue a reusable alert modal."""

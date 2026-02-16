@@ -349,7 +349,7 @@ class AssetsMixin:
                     saved = json.load(f)
                     had_legacy_keys = ("use_mediapipe_signs" in saved) or ("restricted_signs" in saved)
                     # Keep only persisted user-editable keys.
-                    allowed_keys = {"music_vol", "sfx_vol", "camera_idx", "debug_hands"}
+                    allowed_keys = {"music_vol", "sfx_vol", "camera_idx", "debug_hands", "resolution_idx", "fullscreen"}
                     sanitized = {k: v for k, v in saved.items() if k in allowed_keys}
                     self.settings.update(sanitized)
                     if had_legacy_keys:
@@ -357,8 +357,8 @@ class AssetsMixin:
                             json.dump(sanitized, out_f, indent=2)
             except:
                 pass
-        # Force ON at runtime (not persisted in settings JSON).
-        self.settings["use_mediapipe_signs"] = True
+        # Runtime default detector.
+        self.settings["use_mediapipe_signs"] = False
         self.settings["restricted_signs"] = True
 
     def save_settings(self):
@@ -372,6 +372,8 @@ class AssetsMixin:
                     "sfx_vol": self.settings.get("sfx_vol", 0.7),
                     "camera_idx": self.settings.get("camera_idx", 0),
                     "debug_hands": self.settings.get("debug_hands", False),
+                    "resolution_idx": self.settings.get("resolution_idx", 0),
+                    "fullscreen": self.settings.get("fullscreen", False),
                 }
                 json.dump(persisted, f, indent=2)
         except:

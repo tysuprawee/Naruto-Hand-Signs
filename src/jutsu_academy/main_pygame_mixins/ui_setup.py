@@ -42,13 +42,21 @@ class UISetupMixin:
         
         self.settings_checkboxes = {
             "debug_hands": Checkbox(cx - 150, cy + 290, 24, "Show Hand Skeleton", self.settings["debug_hands"]),
-            "restricted": Checkbox(cx - 150, cy + 370, 24, "Restricted Signs (Require 2 Hands) - Always On", True),
+            "restricted": Checkbox(cx - 150, cy + 330, 24, "Restricted Signs (Require 2 Hands) - Always On", True),
+            "fullscreen": Checkbox(cx - 150, cy + 370, 24, "Fullscreen", self.settings.get("fullscreen", False)),
         }
+
+        # Resolution dropdown
+        res_labels = [r[0] for r in RESOLUTION_OPTIONS]
+        res_idx = self.settings.get("resolution_idx", 0)
+        if res_idx < 0 or res_idx >= len(res_labels):
+            res_idx = 0
+        self.resolution_dropdown = Dropdown(cx - 60, cy + 410, 230, res_labels, res_idx)
         
         self.settings_buttons = {
             "preview_toggle": Button(cx - 100, cy + 395, 220, 44, "ENABLE PREVIEW", color=COLORS["bg_card"]),
             "scan_cameras": Button(cx - 100, cy + 350, 220, 40, "SCAN CAMERAS", color=COLORS["bg_card"]),
-            "back": Button(cx - 100, cy + 450, 220, 52, "SAVE & BACK"),
+            "back": Button(cx - 100, cy + 500, 220, 52, "SAVE & BACK"),
         }
 
     def _refresh_settings_camera_options(self, force=False):
