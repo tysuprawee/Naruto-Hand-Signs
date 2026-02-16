@@ -48,7 +48,7 @@ This project allows you to:
 ### 📜 Quest System & Progression
 - **Daily & Weekly Quests**: Earn XP by completing tasks like "Land 25 correct signs" or "Complete 5 jutsu runs".
 - **Mastery Tiers**: Achieve Bronze, Silver, and Gold mastery for each Jutsu based on your speed.
-- **Save System**: Your progress (XP, Rank, Stats) is saved locally for Guest users (`player_meta.json`) or synced to the cloud for logged-in users.
+- **Save System**: XP/Rank progression uses local guest files (`user_progression_*.json`) or cloud sync for logged-in users. Extra runtime meta (`player_meta.json`) was removed to avoid mutable local meta state.
 
 ### 👥 Shadow Clone Jutsu
 - **Advanced Particles**: A brand new `ShadowCloneSystem` renders dynamic clone particles that spawn from your actual body position using computer vision.

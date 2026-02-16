@@ -23,9 +23,8 @@ class RuntimeMixin:
             if self.state == GameState.SETTINGS:
                 self._stop_settings_camera_preview()
             if self.state == GameState.PLAYING:
+                self._reset_active_effects(reset_calibration=True)
                 self._stop_camera()
-                self.jutsu_active = False
-                self.fire_particles.emitting = False
             self.show_announcements = False
             self.active_alert = None
             self.state = GameState.MAINTENANCE_REQUIRED
@@ -55,9 +54,8 @@ class RuntimeMixin:
             if self.state == GameState.SETTINGS:
                 self._stop_settings_camera_preview()
             if self.state == GameState.PLAYING:
+                self._reset_active_effects(reset_calibration=True)
                 self._stop_camera()
-                self.jutsu_active = False
-                self.fire_particles.emitting = False
             self.show_announcements = False
             self.active_alert = None
             self.state = GameState.UPDATE_REQUIRED
@@ -582,84 +580,94 @@ class RuntimeMixin:
 
     def run(self):
         """Main game loop."""
-        while self.running:
-            dt = self.clock.tick(FPS) / 1000.0
-            
-            self.handle_events()
-            
-            # Render based on state
-            if self.state == GameState.MENU:
-                self.render_menu()
-            elif self.state == GameState.MAINTENANCE_REQUIRED:
-                self.render_maintenance_required()
-            elif self.state == GameState.UPDATE_REQUIRED:
-                self.render_update_required()
-            elif self.state == GameState.LOGIN_MODAL:
-                # Render menu underneath, then modal on top
-                self.render_menu()
-                self.render_login_modal()
-            elif self.state == GameState.SETTINGS:
-                self.render_settings()
-            elif self.state == GameState.PRACTICE_SELECT:
-                self.render_practice_select()
-            elif self.state == GameState.ABOUT:
-                self.render_about()
-            elif self.state == GameState.TUTORIAL:
-                self.render_tutorial()
-            elif self.state == GameState.JUTSU_LIBRARY:
-                self.render_jutsu_library()
-            elif self.state == GameState.QUESTS:
-                self.render_quests()
-            elif self.state == GameState.LEADERBOARD:
-                self.render_leaderboard()
-            elif self.state == GameState.LOADING:
-                self._render_loading()
-            elif self.state == GameState.PLAYING:
-                self.render_playing(dt)
-            elif self.state == GameState.LOGIN_MODAL:
-                # Render underlying state first for background context
-                if self.prev_state == GameState.MENU:
+        try:
+            while self.running:
+                dt = self.clock.tick(FPS) / 1000.0
+
+                self.handle_events()
+
+                # Render based on state
+                if self.state == GameState.MENU:
                     self.render_menu()
-                elif self.prev_state == GameState.PRACTICE_SELECT:
+                elif self.state == GameState.MAINTENANCE_REQUIRED:
+                    self.render_maintenance_required()
+                elif self.state == GameState.UPDATE_REQUIRED:
+                    self.render_update_required()
+                elif self.state == GameState.LOGIN_MODAL:
+                    # Render menu underneath, then modal on top
+                    self.render_menu()
+                    self.render_login_modal()
+                elif self.state == GameState.SETTINGS:
+                    self.render_settings()
+                elif self.state == GameState.PRACTICE_SELECT:
                     self.render_practice_select()
-                else:
-                    self.render_menu()
-                self.render_login_modal()
-            elif self.state == GameState.QUIT_CONFIRM:
-                # Render underlying state first
-                if self.prev_state:
+                elif self.state == GameState.ABOUT:
+                    self.render_about()
+                elif self.state == GameState.TUTORIAL:
+                    self.render_tutorial()
+                elif self.state == GameState.JUTSU_LIBRARY:
+                    self.render_jutsu_library()
+                elif self.state == GameState.QUESTS:
+                    self.render_quests()
+                elif self.state == GameState.LEADERBOARD:
+                    self.render_leaderboard()
+                elif self.state == GameState.LOADING:
+                    self._render_loading()
+                elif self.state == GameState.PLAYING:
+                    self.render_playing(dt)
+                elif self.state == GameState.LOGIN_MODAL:
+                    # Render underlying state first for background context
                     if self.prev_state == GameState.MENU:
                         self.render_menu()
+                    elif self.prev_state == GameState.PRACTICE_SELECT:
+                        self.render_practice_select()
+                    else:
+                        self.render_menu()
+                    self.render_login_modal()
+                elif self.state == GameState.QUIT_CONFIRM:
+                    # Render underlying state first
+                    if self.prev_state:
+                        if self.prev_state == GameState.MENU:
+                            self.render_menu()
+                        else:
+                            self.screen.fill(COLORS["bg_dark"])
+                    else:
+                        self.render_menu()
+                    self.render_quit_confirm()
+                elif self.state == GameState.WELCOME_MODAL:
+                    # Render underlying background only (cleaner)
+                    if hasattr(self, 'bg_image') and self.bg_image:
+                        self.screen.blit(self.bg_image, (0, 0))
                     else:
                         self.screen.fill(COLORS["bg_dark"])
-                else:
+                    self.render_welcome_modal(dt)
+                elif self.state == GameState.LOGOUT_CONFIRM:
+                    # Render underlying state first
                     self.render_menu()
-                self.render_quit_confirm()
-            elif self.state == GameState.WELCOME_MODAL:
-                # Render underlying background only (cleaner)
-                if hasattr(self, 'bg_image') and self.bg_image:
-                    self.screen.blit(self.bg_image, (0, 0))
-                else:
-                    self.screen.fill(COLORS["bg_dark"])
-                self.render_welcome_modal(dt)
-            elif self.state == GameState.LOGOUT_CONFIRM:
-                # Render underlying state first
-                self.render_menu()
-                self.render_logout_confirm()
-            elif self.state == GameState.CONNECTION_LOST:
-                # Render underlying state first (to look like an overlay)
-                self.render_menu()
-                self.render_connection_lost()
+                    self.render_logout_confirm()
+                elif self.state == GameState.CONNECTION_LOST:
+                    # Render underlying state first (to look like an overlay)
+                    self.render_menu()
+                    self.render_connection_lost()
 
-            if self.active_alert:
-                self.render_alert_modal()
-            
-            pygame.display.flip()
-        
-        self.cleanup()
+                if self.active_alert:
+                    self.render_alert_modal()
+
+                pygame.display.flip()
+        finally:
+            self.cleanup()
 
     def cleanup(self):
         """Clean up resources."""
+        if getattr(self, "_cleanup_done", False):
+            return
+        self._cleanup_done = True
+        if hasattr(self, "_reset_active_effects"):
+            self._reset_active_effects(reset_calibration=True)
         self._stop_camera()
+        if hasattr(self, "_stop_settings_camera_preview"):
+            self._stop_settings_camera_preview()
+        if pygame.mixer.get_init():
+            pygame.mixer.stop()
         pygame.quit()
         print("[*] Jutsu Academy closed.")

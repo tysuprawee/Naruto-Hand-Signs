@@ -3,6 +3,32 @@ import datetime
 
 
 class RenderingMixin:
+    def _fit_single_line_text(self, font, text, max_width, suffix="..."):
+        """Trim text to a single line that fits within max_width pixels."""
+        value = str(text or "")
+        max_width = int(max_width)
+        if max_width <= 0:
+            return ""
+        if font.size(value)[0] <= max_width:
+            return value
+
+        tail = str(suffix or "...")
+        if font.size(tail)[0] >= max_width:
+            return ""
+
+        low = 0
+        high = len(value)
+        best = tail
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = value[:mid].rstrip() + tail
+            if font.size(candidate)[0] <= max_width:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+        return best
+
     def render_maintenance_required(self):
         """Render hard-blocking maintenance gate when service is unavailable."""
         if self.bg_image:
@@ -1459,6 +1485,7 @@ class RenderingMixin:
             subtitle_text = "Select an unlocked jutsu to start Challenge Mode"
         else:
             subtitle_text = "Browse only: view lock/unlock progression"
+        subtitle_text = self._fit_single_line_text(self.fonts["body_sm"], subtitle_text, SCREEN_WIDTH - 80)
         subtitle = self.fonts["body_sm"].render(subtitle_text, True, COLORS["text_dim"])
         self.screen.blit(subtitle, subtitle.get_rect(center=(SCREEN_WIDTH // 2, 108)))
 
@@ -1526,16 +1553,24 @@ class RenderingMixin:
                     border = COLORS["border"]
                     status = f"LOCKED • LV.{req_lv}"
                     status_color = COLORS["error"]
+                if not unlocked:
+                    status = f"LOCKED | LV.{req_lv}"
 
                 card_bg = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
                 pygame.draw.rect(card_bg, fill, card_bg.get_rect(), border_radius=10)
                 pygame.draw.rect(card_bg, border, card_bg.get_rect(), 2, border_radius=10)
                 self.screen.blit(card_bg, card_rect.topleft)
 
-                name_surf = self.fonts["body_sm"].render(jutsu_name.upper(), True, COLORS["text"])
+                name_text = self._fit_single_line_text(
+                    self.fonts["body_sm"],
+                    jutsu_name.upper(),
+                    card_w - 52,
+                )
+                name_surf = self.fonts["body_sm"].render(name_text, True, COLORS["text"])
                 self.screen.blit(name_surf, (card_rect.x + 10, card_rect.y + 10))
 
-                status_surf = self.fonts["tiny"].render(status, True, status_color)
+                status_text = self._fit_single_line_text(self.fonts["tiny"], status, card_w - 20)
+                status_surf = self.fonts["tiny"].render(status_text, True, status_color)
                 self.screen.blit(status_surf, (card_rect.x + 10, card_rect.y + 38))
 
                 seq_len = len(jutsu_data.get("sequence", []))
@@ -1561,6 +1596,12 @@ class RenderingMixin:
             True,
             COLORS["text"],
         )
+        rank_hint_text = self._fit_single_line_text(
+            self.fonts["body_sm"],
+            f"YOUR LEVEL: {self.progression.level} | RANK: {self.progression.rank}",
+            SCREEN_WIDTH - 80,
+        )
+        hint = self.fonts["body_sm"].render(rank_hint_text, True, COLORS["text"])
         self.screen.blit(hint, hint.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 70)))
 
         if self.library_mode == "browse":

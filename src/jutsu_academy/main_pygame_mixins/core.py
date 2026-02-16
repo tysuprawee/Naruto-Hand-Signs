@@ -144,27 +144,14 @@ class CoreMixin:
             self._save_player_meta()
 
     def _load_player_meta(self):
-        path = Path("src/jutsu_academy/player_meta.json")
-        self.player_meta_path = path
+        # Local file persistence removed: meta stays in-memory for this session.
         self.tutorial_seen = False
         self.tutorial_seen_at = None
         self.tutorial_version = "1.0"
         self._tutorial_cloud_sync_enabled = True
         self.mastery_data = {}
         self.quest_state = self._default_quest_state()
-        if path.exists():
-            try:
-                with open(path, "r") as f:
-                    data = json.load(f)
-                self.tutorial_seen = bool(data.get("tutorial_seen", False))
-                self.tutorial_seen_at = data.get("tutorial_seen_at")
-                self.mastery_data = dict(data.get("mastery", {}))
-                qs = data.get("quests")
-                if isinstance(qs, dict):
-                    self.quest_state = qs
-            except Exception:
-                pass
-        # Best effort: sync tutorial flag from cloud profile for logged-in users.
+        # Best effort: sync profile meta from cloud for logged-in users.
         if self.username != "Guest" and self.network_manager and self.network_manager.client:
             try:
                 profile = self.network_manager.get_profile(self.username)
@@ -178,6 +165,12 @@ class CoreMixin:
                         self.tutorial_seen_at = cloud_seen_at
                     if cloud_ver:
                         self.tutorial_version = str(cloud_ver)
+                    cloud_mastery = profile.get("mastery")
+                    if isinstance(cloud_mastery, dict):
+                        self.mastery_data = dict(cloud_mastery)
+                    cloud_quests = profile.get("quests")
+                    if isinstance(cloud_quests, dict):
+                        self.quest_state = cloud_quests
             except Exception:
                 pass
         self._refresh_quest_periods()
@@ -204,23 +197,7 @@ class CoreMixin:
             print(f"[!] Tutorial cloud sync disabled: {e}")
 
     def _save_player_meta(self):
-        if not hasattr(self, "player_meta_path"):
-            self.player_meta_path = Path("src/jutsu_academy/player_meta.json")
-        try:
-            self.player_meta_path.parent.mkdir(exist_ok=True)
-            with open(self.player_meta_path, "w") as f:
-                json.dump(
-                    {
-                        "tutorial_seen": bool(getattr(self, "tutorial_seen", False)),
-                        "tutorial_seen_at": getattr(self, "tutorial_seen_at", None),
-                        "mastery": getattr(self, "mastery_data", {}),
-                        "quests": getattr(self, "quest_state", self._default_quest_state()),
-                    },
-                    f,
-                    indent=2,
-                )
-        except Exception:
-            pass
+        # Persist only to cloud where available. Guest meta is session-only.
         self._sync_tutorial_meta_to_cloud()
 
     def __init__(self):
@@ -228,6 +205,7 @@ class CoreMixin:
             EffectOrchestrator,
             ReaperDeathSealEffect,
             ShadowCloneEffect,
+            WaterDragonEffect,
         )
 
         pygame.init()
@@ -423,8 +401,8 @@ class CoreMixin:
         self.last_detected_hands = 0
         self.sign_vote_window = []
         self.last_vote_hits = 0
-        self.vote_window_size = 5
-        self.vote_required_hits = 3
+        self.vote_window_size = 2
+        self.vote_required_hits = 2
         self.vote_min_confidence = 0.45
         self.vote_entry_ttl_s = 0.7
         self.show_detection_panel = True
@@ -454,6 +432,7 @@ class CoreMixin:
         self.effect_orchestrator = EffectOrchestrator()
         self.effect_orchestrator.register("clone", ShadowCloneEffect(swap_xy=True), passive=True)
         self.effect_orchestrator.register("reaper", ReaperDeathSealEffect())
+        self.effect_orchestrator.register("water", WaterDragonEffect())
         
         # Video overlay for jutsus
         self.current_video = None

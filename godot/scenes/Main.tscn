@@ -1,0 +1,365 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/Main.gd" id="1_main"]
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+stretch_mode = 6
+
+[node name="DarkOverlay" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0.55)
+
+[node name="MenuRoot" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MenuPanel" type="PanelContainer" parent="MenuRoot"]
+custom_minimum_size = Vector2(660, 460)
+layout_mode = 2
+
+[node name="MenuVBox" type="VBoxContainer" parent="MenuRoot/MenuPanel"]
+layout_mode = 2
+alignment = 1
+
+[node name="SpacerTop" type="Control" parent="MenuRoot/MenuPanel/MenuVBox"]
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+
+[node name="MenuLogo" type="TextureRect" parent="MenuRoot/MenuPanel/MenuVBox"]
+custom_minimum_size = Vector2(620, 170)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="MenuTitle" type="Label" parent="MenuRoot/MenuPanel/MenuVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 36
+text = "JUTSU GODOT ARENA"
+horizontal_alignment = 1
+
+[node name="MenuSubtitle" type="Label" parent="MenuRoot/MenuPanel/MenuVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Backend: waiting"
+horizontal_alignment = 1
+
+[node name="MenuButtons" type="HBoxContainer" parent="MenuRoot/MenuPanel/MenuVBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="BtnPlay" type="Button" parent="MenuRoot/MenuPanel/MenuVBox/MenuButtons"]
+custom_minimum_size = Vector2(180, 52)
+layout_mode = 2
+text = "START TRAINING"
+
+[node name="BtnQuit" type="Button" parent="MenuRoot/MenuPanel/MenuVBox/MenuButtons"]
+custom_minimum_size = Vector2(180, 52)
+layout_mode = 2
+text = "QUIT"
+
+[node name="SpacerMid" type="Control" parent="MenuRoot/MenuPanel/MenuVBox"]
+custom_minimum_size = Vector2(0, 16)
+layout_mode = 2
+
+[node name="MenuStatus" type="Label" parent="MenuRoot/MenuPanel/MenuVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Ready."
+horizontal_alignment = 1
+
+[node name="SpacerBottom" type="Control" parent="MenuRoot/MenuPanel/MenuVBox"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+
+[node name="GameRoot" type="Control" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="TopBar" type="PanelContainer" parent="GameRoot"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 56.0
+grow_horizontal = 2
+
+[node name="TopBarHBox" type="HBoxContainer" parent="GameRoot/TopBar"]
+layout_mode = 2
+alignment = 1
+
+[node name="BtnBackToMenu" type="Button" parent="GameRoot/TopBar/TopBarHBox"]
+custom_minimum_size = Vector2(140, 40)
+layout_mode = 2
+text = "MENU"
+
+[node name="GameTitle" type="Label" parent="GameRoot/TopBar/TopBarHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 24
+text = "SIGN COMBAT CHAMBER"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="BackendStateLabel" type="Label" parent="GameRoot/TopBar/TopBarHBox"]
+custom_minimum_size = Vector2(250, 0)
+layout_mode = 2
+text = "Backend: waiting"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="Body" type="HSplitContainer" parent="GameRoot"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 62.0
+grow_horizontal = 2
+grow_vertical = 2
+split_offset = 860
+
+[node name="CameraPanel" type="PanelContainer" parent="GameRoot/Body"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="CameraVBox" type="VBoxContainer" parent="GameRoot/Body/CameraPanel"]
+layout_mode = 2
+
+[node name="CameraView" type="TextureRect" parent="GameRoot/Body/CameraPanel/CameraVBox"]
+custom_minimum_size = Vector2(760, 420)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+expand_mode = 1
+stretch_mode = 5
+
+[node name="CameraStatusLabel" type="Label" parent="GameRoot/Body/CameraPanel/CameraVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Ready."
+autowrap_mode = 2
+
+[node name="SequencePanel" type="PanelContainer" parent="GameRoot/Body/CameraPanel/CameraVBox"]
+custom_minimum_size = Vector2(0, 190)
+layout_mode = 2
+
+[node name="SequenceVBox" type="VBoxContainer" parent="GameRoot/Body/CameraPanel/CameraVBox/SequencePanel"]
+layout_mode = 2
+
+[node name="SequenceHeader" type="HBoxContainer" parent="GameRoot/Body/CameraPanel/CameraVBox/SequencePanel/SequenceVBox"]
+layout_mode = 2
+
+[node name="SequenceTitle" type="Label" parent="GameRoot/Body/CameraPanel/CameraVBox/SequencePanel/SequenceVBox/SequenceHeader"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 15
+text = "HAND SIGN SEQUENCE"
+
+[node name="SequenceStatus" type="Label" parent="GameRoot/Body/CameraPanel/CameraVBox/SequencePanel/SequenceVBox/SequenceHeader"]
+custom_minimum_size = Vector2(260, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "NEXT SIGN: --"
+horizontal_alignment = 2
+
+[node name="SequenceScroll" type="ScrollContainer" parent="GameRoot/Body/CameraPanel/CameraVBox/SequencePanel/SequenceVBox"]
+custom_minimum_size = Vector2(0, 130)
+layout_mode = 2
+horizontal_scroll_mode = 2
+vertical_scroll_mode = 0
+
+[node name="SequenceStrip" type="HBoxContainer" parent="GameRoot/Body/CameraPanel/CameraVBox/SequencePanel/SequenceVBox/SequenceScroll"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="HudPanel" type="PanelContainer" parent="GameRoot/Body"]
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+
+[node name="HudScroll" type="ScrollContainer" parent="GameRoot/Body/HudPanel"]
+layout_mode = 2
+
+[node name="HudVBox" type="VBoxContainer" parent="GameRoot/Body/HudPanel/HudScroll"]
+custom_minimum_size = Vector2(320, 920)
+layout_mode = 2
+
+[node name="UrlEdit" type="LineEdit" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+text = "ws://127.0.0.1:8765"
+placeholder_text = "ws://127.0.0.1:8765"
+
+[node name="BtnConnect" type="Button" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+text = "Connect"
+
+[node name="ToggleSendFrames" type="CheckBox" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+button_pressed = true
+text = "Send Camera Frames"
+
+[node name="ToggleTwoHands" type="CheckBox" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+button_pressed = true
+text = "Require 2 Hands"
+
+[node name="ToggleSkeletons" type="CheckBox" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+text = "Show Hand Skeleton"
+
+[node name="QualityRow" type="HBoxContainer" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+
+[node name="QualityText" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/QualityRow"]
+layout_mode = 2
+text = "JPEG Quality"
+
+[node name="QualityValue" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/QualityRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "45"
+horizontal_alignment = 2
+
+[node name="QualitySlider" type="HSlider" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+min_value = 10.0
+max_value = 95.0
+value = 45.0
+
+[node name="TargetFpsRow" type="HBoxContainer" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+
+[node name="TargetFpsText" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/TargetFpsRow"]
+layout_mode = 2
+text = "Target FPS"
+
+[node name="TargetFpsValue" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/TargetFpsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "24"
+horizontal_alignment = 2
+
+[node name="TargetFpsSlider" type="HSlider" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+min_value = 5.0
+max_value = 60.0
+value = 24.0
+
+[node name="SeparatorA" type="HSeparator" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+
+[node name="ToggleGameMechanic" type="CheckBox" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+button_pressed = true
+text = "Game Mechanic"
+
+[node name="JutsuSelect" type="OptionButton" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+
+[node name="BtnResetRun" type="Button" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+text = "Reset Run"
+
+[node name="SignPreviewPanel" type="PanelContainer" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+custom_minimum_size = Vector2(0, 220)
+layout_mode = 2
+
+[node name="SignPreviewVBox" type="VBoxContainer" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/SignPreviewPanel"]
+layout_mode = 2
+
+[node name="SignPreviewTitle" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/SignPreviewPanel/SignPreviewVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "NEXT SIGN PREVIEW"
+
+[node name="SignPreview" type="TextureRect" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/SignPreviewPanel/SignPreviewVBox"]
+custom_minimum_size = Vector2(0, 160)
+layout_mode = 2
+size_flags_horizontal = 3
+expand_mode = 1
+stretch_mode = 5
+
+[node name="SignNameLabel" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/SignPreviewPanel/SignPreviewVBox"]
+layout_mode = 2
+text = "NEXT: --"
+horizontal_alignment = 1
+
+[node name="VideoPreviewPanel" type="PanelContainer" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+custom_minimum_size = Vector2(0, 210)
+layout_mode = 2
+
+[node name="VideoPreviewVBox" type="VBoxContainer" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/VideoPreviewPanel"]
+layout_mode = 2
+
+[node name="VideoPreviewTitle" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/VideoPreviewPanel/VideoPreviewVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "JUTSU VIDEO PREVIEW"
+
+[node name="VideoPreview" type="VideoStreamPlayer" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/VideoPreviewPanel/VideoPreviewVBox"]
+custom_minimum_size = Vector2(0, 140)
+layout_mode = 2
+size_flags_horizontal = 3
+expand = true
+autoplay = false
+loop = true
+
+[node name="VideoHintLabel" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox/VideoPreviewPanel/VideoPreviewVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "No video loaded."
+autowrap_mode = 2
+
+[node name="GameProgressLabel" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+autowrap_mode = 2
+text = "No run yet"
+
+[node name="SeparatorB" type="HSeparator" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+
+[node name="MetricsLabel" type="Label" parent="GameRoot/Body/HudPanel/HudScroll/HudVBox"]
+layout_mode = 2
+autowrap_mode = 2
+text = "No telemetry"
+
+[node name="StepParticles" type="CPUParticles2D" parent="GameRoot"]
+position = Vector2(520, 350)
+
+[node name="CompleteParticles" type="CPUParticles2D" parent="GameRoot"]
+position = Vector2(520, 350)
+
+[node name="StepSfx" type="AudioStreamPlayer" parent="GameRoot"]
+
+[node name="CompleteSfx" type="AudioStreamPlayer" parent="GameRoot"]

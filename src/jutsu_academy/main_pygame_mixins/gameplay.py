@@ -30,6 +30,44 @@ class GameplayMixin:
         self.last_vote_hits = 0
         self.sign_vote_window = []
 
+    def _reset_active_effects(self, reset_calibration=True):
+        """Reset effect/audio/video runtime state for safe screen transitions."""
+        self.fire_particles.emitting = False
+        self.jutsu_active = False
+        self.sequence_run_start = None
+        self.combo_clone_hold = False
+        self.combo_chidori_triple = False
+        self.combo_rasengan_triple = False
+        self.pending_sounds = []
+        self.pending_effects = []
+        self.current_video = None
+        if self.video_cap:
+            self.video_cap.release()
+            self.video_cap = None
+
+        self.hand_pos = None
+        self.mouth_pos = None
+        self.smooth_hand_pos = None
+        self.smooth_hand_effect_scale = None
+        self.hand_effect_scale = 1.0
+
+        if reset_calibration:
+            self.calibration_active = False
+        self._reset_detection_filters()
+
+        context = EffectContext()
+        try:
+            self.effect_orchestrator.on_jutsu_end(context)
+        except Exception:
+            pass
+
+        for effect in getattr(self.effect_orchestrator, "effects", {}).values():
+            try:
+                effect.on_jutsu_end(context)
+            except Exception:
+                pass
+        self.effect_orchestrator.reset()
+
     def _apply_calibration_values(self, profile):
         self.lighting_min = self._clamp(profile.get("lighting_min", 45.0), 25.0, 120.0)
         self.lighting_max = self._clamp(profile.get("lighting_max", 210.0), 120.0, 245.0)
@@ -303,15 +341,7 @@ class GameplayMixin:
         self.current_step = 0
         self.sequence_run_start = None
         self.combo_triggered_steps = set()
-        self.combo_clone_hold = False
-        self.combo_chidori_triple = False
-        self.combo_rasengan_triple = False
-        self.jutsu_active = False
-        self.fire_particles.emitting = False
-        self.pending_sounds = []
-        self.pending_effects = []
-        self.effect_orchestrator.reset()
-        self._reset_detection_filters()
+        self._reset_active_effects(reset_calibration=True)
         self._load_calibration_profile()
         if not self.calibration_profile:
             self.start_calibration(manual=False)
@@ -370,26 +400,8 @@ class GameplayMixin:
         """Stop the game and return to menu."""
         if hasattr(self, "_challenge_reset_proof"):
             self._challenge_reset_proof()
+        self._reset_active_effects(reset_calibration=True)
         self._stop_camera()
-        self.fire_particles.emitting = False
-        self.jutsu_active = False
-        self.sequence_run_start = None
-        self.combo_clone_hold = False
-        self.combo_chidori_triple = False
-        self.combo_rasengan_triple = False
-        self.pending_sounds = []
-        self.pending_effects = []
-        self.calibration_active = False
-        self._reset_detection_filters()
-        self.effect_orchestrator.on_jutsu_end(EffectContext())
-        clone_effect = self.effect_orchestrator.effects.get("clone")
-        if clone_effect:
-            clone_effect.on_jutsu_end(EffectContext())
-        self.effect_orchestrator.reset()
-        self.current_video = None
-        if self.video_cap:
-            self.video_cap.release()
-            self.video_cap = None
         if return_to_library:
             self.library_mode = "freeplay" if self.game_mode == "practice" else "challenge"
             self.state = GameState.JUTSU_LIBRARY
@@ -400,25 +412,13 @@ class GameplayMixin:
         """Switch to next/prev jutsu."""
         if hasattr(self, "_challenge_reset_proof"):
             self._challenge_reset_proof()
-        self.effect_orchestrator.on_jutsu_end(EffectContext())
-        clone_effect = self.effect_orchestrator.effects.get("clone")
-        if clone_effect:
-            clone_effect.on_jutsu_end(EffectContext())
-        self.effect_orchestrator.reset()
+        self._reset_active_effects(reset_calibration=False)
         self.current_jutsu_idx = (self.current_jutsu_idx + direction) % len(self.jutsu_names)
         name = self.jutsu_names[self.current_jutsu_idx]
         self.sequence = self.jutsu_list[name]["sequence"]
         self.current_step = 0
         self.sequence_run_start = None
         self.combo_triggered_steps = set()
-        self.combo_clone_hold = False
-        self.combo_chidori_triple = False
-        self.combo_rasengan_triple = False
-        self.jutsu_active = False
-        self.fire_particles.emitting = False
-        self.pending_sounds = []
-        self.pending_effects = []
-        self._reset_detection_filters()
 
     def detect_and_process(self, frame):
         """Run detection and check sequence."""
