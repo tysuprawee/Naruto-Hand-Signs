@@ -24,6 +24,7 @@ names:
   9: monkey
   10: ox
   11: hare
+  12: clap
 
 # Number of classes
-nc: 12
+nc: 13

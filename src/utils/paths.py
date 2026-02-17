@@ -155,7 +155,7 @@ def get_latest_weights(run_name: Optional[str] = None) -> Optional[Path]:
 # Class definitions - easy to modify for different hand signs
 CLASSES = [
     "tiger", "boar", "snake", "ram", "bird",
-    "dragon", "dog", "rat", "horse", "monkey", "ox", "hare"
+    "dragon", "dog", "rat", "horse", "monkey", "ox", "hare", "clap"
 ]
 
 # Key mappings for dataset capture (key -> class name)
@@ -172,6 +172,7 @@ KEY_CLASS_MAP = {
     ord('0'): "monkey",
     ord('-'): "ox",
     ord('='): "hare",
+    ord('/'): "clap",
 }
 
 

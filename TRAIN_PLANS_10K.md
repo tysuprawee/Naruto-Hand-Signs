@@ -15,90 +15,174 @@ Important:
 ## 10,000 Image Prep Plan (What Pictures to Collect)
 
 ### 1) Dataset Composition Target
-- Total: `10,000` images
-- Positives (valid sign images): `8,500`
-- Hard negatives (non-target/ambiguous): `1,500`
+- Option A total: `10,000` images
+- Option B total: `12,000` images (recommended if you want more negatives)
+- Positives (valid sign images): `9,360` (same for both options)
+- Hard negatives:
+  - `640` for Option A (`10,000`)
+  - `2,640` for Option B (`12,000`)
 
-Exact positive allocation for your 13 signs (`8,500` total):
+This plan assumes exactly:
+- `N = 6` for every positive combo
+- `5 lighting x 3 distance x 4 angle x 2 motion = 120 combos/sign`
+- `120 x 6 = 720` positives per sign
+- `720 x 13 signs = 9,360` positives
 
 | Sign | Images |
 |---|---:|
-| Bird | 654 |
-| Boar | 654 |
-| Clap | 654 |
-| Dog | 654 |
-| Dragon | 654 |
-| Hare | 654 |
-| Horse | 654 |
-| Monkey | 654 |
-| Rat | 654 |
-| Snake | 654 |
-| Tiger | 654 |
-| Ox | 653 |
-| Ram | 653 |
-| **Total** | **8,500** |
+| Bird | 720 |
+| Boar | 720 |
+| Clap | 720 |
+| Dog | 720 |
+| Dragon | 720 |
+| Hare | 720 |
+| Horse | 720 |
+| Monkey | 720 |
+| Ox | 720 |
+| Ram | 720 |
+| Rat | 720 |
+| Snake | 720 |
+| Tiger | 720 |
+| **Total positives** | **9,360** |
+| **Hard negatives (Option A)** | **640** |
+| **Grand total (Option A)** | **10,000** |
+| **Hard negatives (Option B)** | **2,640** |
+| **Grand total (Option B)** | **12,000** |
 
-The `1-image` difference is just to hit exactly `8,500`.
+### 2) Positive Images (9,360) Capture Matrix
+This section is the exact combo rule (`sign + lighting + distance + angle + motion -> N`).
 
-### 2) Positive Images (8,500) Capture Matrix
-Use this **per-sign template** for every sign:
+Axes per sign:
+- Lighting: `normal`, `low`, `high`, `backlit`, `mixed`
+- Distance: `close`, `medium`, `far`
+- Angle: `frontal`, `yaw`, `pitch`, `roll`
+- Motion: `sharp`, `blur`
 
-For signs with `654` images:
-- Lighting:
-  - Normal/front light: `230`
-  - Low light/dim: `131`
-  - High light/overexposed: `98`
-  - Backlit: `98`
-  - Mixed color cast/shadows: `97`
-- Distance:
-  - Close: `196`
-  - Medium: `327`
-  - Far: `131`
-- Angle:
-  - Frontal: `229`
-  - Left/right yaw: `196`
-  - Up/down pitch: `131`
-  - Roll/tilt: `98`
-- Motion quality:
-  - Sharp/still: `458`
-  - Slight motion blur: `131`
-  - Transitional/partial occlusion: `65`
+Total combos per sign:
+- `5 x 3 x 4 x 2 = 120` combos
 
-For signs with `653` images (`Ox`, `Ram`):
-- Lighting:
-  - Normal/front light: `229`
-  - Low light/dim: `131`
-  - High light/overexposed: `98`
-  - Backlit: `98`
-  - Mixed color cast/shadows: `97`
-- Distance:
-  - Close: `196`
-  - Medium: `326`
-  - Far: `131`
-- Angle:
-  - Frontal: `228`
-  - Left/right yaw: `196`
-  - Up/down pitch: `131`
-  - Roll/tilt: `98`
-- Motion quality:
-  - Sharp/still: `457`
-  - Slight motion blur: `131`
-  - Transitional/partial occlusion: `65`
+Exact quota rule:
+- For every sign and every combo, `N = 6`.
+- No exceptions.
 
-These are exact per-sign quotas. One image belongs to one bucket from each axis (lighting, distance, angle, motion).
+Examples (exact):
+- `ram normal/close/frontal/sharp -> 6`
+- `ram normal/far/frontal/sharp -> 6`
+- `ram mixed/far/frontal/sharp -> 6`
+- `ram high/far/roll/blur -> 6`
+- `bird low/medium/yaw/sharp -> 6`
+- `bird mixed/far/frontal/sharp -> 6`
 
-### 3) Hard Negatives (1,500)
+#### 2.1 Exact Category Definitions
+Use these definitions consistently.
+
+Lighting:
+- `normal`: face/hands clearly lit, no heavy clipping.
+- `low`: dim environment, hands still visible, darker image.
+- `high`: bright/front light, some highlight clipping acceptable.
+- `backlit`: strongest light source behind you.
+- `mixed`: uneven shadows or strong warm/cool color cast.
+
+Distance (relative hand size in frame):
+- `close`: hand(s) occupy about `45-65%` frame height.
+- `medium`: hand(s) occupy about `25-45%`.
+- `far`: hand(s) occupy about `12-25%`.
+
+Angle:
+- `frontal`: near straight-on (`~0-10°` yaw/pitch).
+- `yaw`: left/right turn (`~20-40°`).
+- `pitch`: camera up/down or hand vertical tilt (`~20-40°`).
+- `roll`: wrist/camera roll (`~15-30°` tilt).
+
+Motion:
+- `sharp`: hold sign still for a clean frame.
+- `blur`: small intentional movement while capturing.
+
+#### 2.2 Exact Capture Procedure (Do This Literally)
+For each sign in:
+`Bird, Boar, Clap, Dog, Dragon, Hare, Horse, Monkey, Ox, Ram, Rat, Snake, Tiger`
+
+Run this nested loop:
+1. Set lighting = `normal`
+2. For distance in `close, medium, far`
+3. For angle in `frontal, yaw, pitch, roll`
+4. Capture `6 sharp` images
+5. Capture `6 blur` images
+6. Repeat for lighting = `low, high, backlit, mixed`
+
+Per sign math:
+- `5 lightings x 3 distances x 4 angles x 2 motions x 6 = 720`
+
+All signs math:
+- `720 x 13 = 9,360` positives
+
+#### 2.3 File Naming (Exact)
+Use:
+- `<sign>__<lighting>__<distance>__<angle>__<motion>__<idx>.jpg`
+- `idx` is `01..06`
+
+Examples:
+- `ram__normal__close__frontal__sharp__01.jpg`
+- `ram__normal__close__frontal__sharp__02.jpg`
+- `ram__normal__far__frontal__sharp__06.jpg`
+- `bird__mixed__medium__yaw__blur__03.jpg`
+
+#### 2.4 Train/Val Split (Exact)
+For each positive combo of 6 images:
+- `5` images -> train
+- `1` image -> val
+
+Positive split totals:
+- Train positives: `120 combos/sign x 5 x 13 = 7,800`
+- Val positives: `120 combos/sign x 1 x 13 = 1,560`
+
+Recommended tracker columns:
+- `sign,lighting,distance,angle,motion,target_n,captured_n,train_count,val_count`
+
+### 3) Hard Negatives
 Include examples that should map to no detection/ignore behavior.
+
+#### Option A (Total 640 negatives, for 10,000 dataset)
 
 | Negative type | Target count |
 |---|---:|
-| No hands in frame | 300 |
-| One hand only / incomplete pose | 260 |
-| Near-miss wrong-sign (26 per sign x 13) | 338 |
-| Extra near-miss on confusing pairs (Snake/Ram/Tiger/Boar/Ox/Horse) | 112 |
+| No hands in frame | 150 |
+| One hand only / incomplete pose | 120 |
+| Near-miss wrong-sign (`16 x 13`) | 208 |
+| Extra near-miss on confusing pairs | 52 |
+| Partial hands/out-of-frame | 60 |
+| Distractors/background clutter | 40 |
+| Heavy motion blur / unusable states | 10 |
+| **Total** | **640** |
+
+Negative split (exact):
+- Train negatives: `512`
+- Val negatives: `128`
+
+Overall split with Option A:
+- Train total: `7,800 + 512 = 8,312`
+- Val total: `1,560 + 128 = 1,688`
+
+#### Option B (Total 2,640 negatives, for 12,000 dataset)
+
+| Negative type | Target count |
+|---|---:|
+| No hands in frame | 550 |
+| One hand only / incomplete pose | 500 |
+| Near-miss wrong-sign | 900 |
+| Extra near-miss on confusing pairs | 260 |
 | Partial hands/out-of-frame | 240 |
-| Distractors/background clutter | 150 |
-| Heavy motion blur / unusable motion states | 100 |
+| Distractors/background clutter | 140 |
+| Heavy motion blur / unusable states | 50 |
+| **Total** | **2,640** |
+
+Negative split (exact):
+- Train negatives: `2,112`
+- Val negatives: `528`
+
+Overall split with Option B:
+- Train total: `7,800 + 2,112 = 9,912`
+- Val total: `1,560 + 528 = 2,088`
 
 ### 4) Image Quality / Capture Rules
 - Keep capture resolution consistent (e.g., `640x480` or `1280x720`), then train at `--img-size 640`.
@@ -149,9 +233,12 @@ python3 /Users/bugatti/Documents/Naruto/src/train.py \
   --mosaic 0.7 --mixup 0.15 --name add_sign_finetune
 ```
 
-If you still want exactly `10,000` images after adding class 14:
-- Positives stay `8,500`, negatives stay `1,500`.
-- New per-sign target is `607` for 12 signs and `608` for 2 signs (`8,500` total).
+If you add class 14 and keep `N = 6` for all positive combos:
+- Positives become `14 x 120 x 6 = 10,080`.
+- If you keep current negatives (`640`), total dataset becomes `10,720`.
+- If you must stay exactly `10,000`, reduce either:
+  - positive N (for example, mix of `N=5` and `N=6`), or
+  - negative count.
 
 ### 9) Train With New Data (Incremental Updates)
 Use this when you collect fresh images after your first model is already good.
