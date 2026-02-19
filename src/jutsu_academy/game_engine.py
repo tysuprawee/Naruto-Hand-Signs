@@ -286,10 +286,26 @@ class GameSession(FireballJutsuTrainer):
                     avatar = f"https://cdn.discordapp.com/avatars/{d_id}/{avatar_hash}.png"
 
             def submit_and_get_rank():
-                self.network.submit_score(self.username, self.final_time, jutsu_name, discord_id=d_id, avatar_url=avatar)
+                submit_res = self.network.submit_score_secure(
+                    username=self.username,
+                    score_time=self.final_time,
+                    mode=str(jutsu_name).upper(),
+                    run_token=None,
+                    events=[],
+                    run_hash="",
+                    metadata={"legacy_client": True},
+                    discord_id=d_id,
+                    avatar_url=avatar,
+                )
+                if not isinstance(submit_res, dict) or (not submit_res.get("ok", False)):
+                    reason = "secure_submit_unavailable"
+                    if isinstance(submit_res, dict):
+                        reason = submit_res.get("reason", reason)
+                    self.rank_info = f"Submission rejected: {reason}"
+                    return
                 
                 # Fetch leaderboard to calculate rank
-                rows = self.network.get_leaderboard(limit=1000, mode=jutsu_name)
+                rows = self.network.get_leaderboard(limit=1000, mode=str(jutsu_name).upper())
                 rank = -1
                 total = len(rows)
                 for i, row in enumerate(rows):
@@ -509,4 +525,3 @@ class GameSession(FireballJutsuTrainer):
         color = (0, 255, 0) if self.my_hp > 0 else (0, 0, 255)
         cv2.putText(img, text, (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 2, color, 4)
         cv2.imshow(self.window_name, img)
-

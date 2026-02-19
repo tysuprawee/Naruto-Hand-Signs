@@ -421,6 +421,8 @@ class GameplayMixin:
             self._challenge_reset_proof()
         self._reset_active_effects(reset_calibration=True)
         self._stop_camera()
+        if hasattr(self, "_save_player_meta"):
+            self._save_player_meta()
         if return_to_library:
             self.library_mode = "freeplay" if self.game_mode == "practice" else "challenge"
             self.state = GameState.JUTSU_LIBRARY

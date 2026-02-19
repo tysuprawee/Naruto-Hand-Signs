@@ -380,13 +380,30 @@ class RuntimeMixin:
                 if self.settings_preview_enabled:
                     self._start_settings_camera_preview(self.camera_dropdown.selected_idx)
 
-            # Resolution dropdown
-            self.resolution_dropdown.update(mouse_pos, mouse_click, self.play_sound)
+            # Resolution dropdown — apply immediately on change
+            if self.resolution_dropdown.update(mouse_pos, mouse_click, self.play_sound):
+                res_idx = self.resolution_dropdown.selected_idx
+                if 0 <= res_idx < len(RESOLUTION_OPTIONS):
+                    _, rw, rh = RESOLUTION_OPTIONS[res_idx]
+                else:
+                    _, rw, rh = RESOLUTION_OPTIONS[0]
+                self.screen_w = rw
+                self.screen_h = rh
+                self.settings["resolution_idx"] = res_idx
+                self._apply_display_mode()
             
             # Keep restricted signs always ON and non-interactive.
             self.settings_checkboxes["restricted"].checked = True
             self.settings_checkboxes["debug_hands"].update(mouse_pos, mouse_click, self.play_sound)
+
+            # Fullscreen — apply immediately on change
+            old_fs = self.fullscreen
             self.settings_checkboxes["fullscreen"].update(mouse_pos, mouse_click, self.play_sound)
+            new_fs = self.settings_checkboxes["fullscreen"].checked
+            if new_fs != old_fs:
+                self.fullscreen = new_fs
+                self.settings["fullscreen"] = new_fs
+                self._apply_display_mode()
             
             for name, btn in self.settings_buttons.items():
                 if btn.update(mouse_pos, mouse_click, mouse_down, self.play_sound):
@@ -687,6 +704,8 @@ class RuntimeMixin:
         if getattr(self, "_cleanup_done", False):
             return
         self._cleanup_done = True
+        if hasattr(self, "_save_player_meta"):
+            self._save_player_meta()
         if hasattr(self, "_submit_challenge_score_on_exit"):
             self._submit_challenge_score_on_exit(blocking=True)
         if hasattr(self, "_reset_active_effects"):

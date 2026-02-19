@@ -31,7 +31,7 @@ interface ModeRow {
 }
 
 function LeaderboardContent() {
-    const DEV_DISCORD_ID = "[REDACTED_DISCORD_ID]";
+    const DEV_DISCORD_ID = (process.env.NEXT_PUBLIC_DEV_DISCORD_ID || "").trim();
     const PAGE_SIZE = 10;
 
     const router = useRouter();

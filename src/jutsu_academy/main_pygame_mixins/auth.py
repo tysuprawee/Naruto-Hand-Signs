@@ -241,6 +241,9 @@ class AuthMixin:
                 self.discord_user = user
                 self.username = user.get("username", "User")
                 self.progression = ProgressionManager(self.username, network_manager=self.network_manager) # Reload for new user
+                self._quest_state_last_sync_at = 0.0
+                self._quest_sync_inflight = False
+                self._load_player_meta()
                 self._save_user_session()
                 self._save_user_session()
                 threading.Thread(target=self._load_discord_avatar, daemon=True).start()
@@ -278,6 +281,9 @@ class AuthMixin:
         self.username = "Guest"
         self.username = "Guest"
         self.progression = ProgressionManager(self.username, network_manager=self.network_manager) # Reset to guest progress
+        self._quest_state_last_sync_at = 0.0
+        self._quest_sync_inflight = False
+        self._load_player_meta()
         self.user_avatar = None
         self.user_avatar = None
         # Delete session file

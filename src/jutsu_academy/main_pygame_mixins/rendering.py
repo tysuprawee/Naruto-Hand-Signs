@@ -1160,7 +1160,7 @@ class RenderingMixin:
         # redraw within clip (simple second pass for clean clipping)
         draw_section_header("MAIN MODES", y0)
         draw_mode_card("freeplay", "FREE PLAY", "Practice any jutsu at your own pace", (140, 64, 28, 235), y0 + 34)
-        draw_mode_card("challenge", "CHALLENGE", "Beat the clock and chain combos", (145, 58, 22, 235), y0 + 120)
+        draw_mode_card("challenge", "RANK MODE", "Beat the clock and climb the ranks", (145, 58, 22, 235), y0 + 120)
         draw_section_header("LIBRARY & PROGRESSION", y0 + 206)
         draw_mode_card("library", "JUTSU LIBRARY", "View signs, unlocks, and tutorials", (44, 70, 112, 235), y0 + 240)
         draw_mode_card("quests", "QUEST BOARD", "Daily & weekly missions for bonus XP", (70, 86, 48, 235), y0 + 326)
@@ -1271,7 +1271,7 @@ class RenderingMixin:
             "OVERVIEW",
             [
                 "Jutsu Academy is a Naruto-inspired hand-sign training game where players perform sign sequences in front of a camera to execute jutsu.",
-                "The game focuses on timing, recognition accuracy, progression unlocks, and fast iteration between free practice and challenge runs.",
+                "The game focuses on timing, recognition accuracy, progression unlocks, and fast iteration between free practice and rank mode runs.",
             ],
             title_color=COLORS["success"],
             body_color=COLORS["text"],
@@ -1281,9 +1281,9 @@ class RenderingMixin:
             "MODES",
             [
                 "- Free Play: pick any unlocked jutsu and practice at your pace.",
-                "- Challenge: pick an unlocked jutsu and clear the full sequence as fast as possible.",
+                "- Rank Mode: pick an unlocked jutsu and clear the full sequence as fast as possible.",
                 "- Jutsu Library: browse tiers, lock requirements, and progression status.",
-                "- Leaderboard: compare challenge times against other players.",
+                "- Leaderboard: compare rank mode times against other players.",
             ],
         )
 
@@ -1292,7 +1292,7 @@ class RenderingMixin:
             [
                 "- Menu navigation: mouse + left click",
                 "- Playing: LEFT / RIGHT arrows switch jutsu when allowed",
-                "- Challenge: SPACE starts countdown and restarts after results",
+                "- Rank Mode: SPACE starts countdown and restarts after results",
                 "- Exit current run: ESC or the in-game < BACK button",
                 "- Settings: preview camera only when manually enabled",
             ],
@@ -1325,7 +1325,7 @@ class RenderingMixin:
             [
                 "- Expand jutsu roster and progression tiers",
                 "- Improve onboarding/tutorial for new players",
-                "- Add deeper challenge analytics and timing breakdowns",
+                "- Add deeper rank mode analytics and timing breakdowns",
                 "- Continue hardening camera/device handling UX",
             ],
             title_color=COLORS["accent"],
@@ -1457,15 +1457,15 @@ class RenderingMixin:
         self.screen.blit(d_title, (panel.x + 76, panel.y + 22))
         self.screen.blit(w_title, (panel.centerx + 76, panel.y + 22))
 
-        now = datetime.datetime.now()
+        now = self._quest_now_utc() if hasattr(self, "_quest_now_utc") else datetime.datetime.now(datetime.timezone.utc)
         tomorrow = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         weekly_next = now + datetime.timedelta(days=(7 - now.weekday()))
         weekly_next = weekly_next.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        daily_left = str(tomorrow - now).split(".")[0]
-        weekly_left = str(weekly_next - now).split(".")[0]
-        self.screen.blit(self.fonts["tiny"].render(f"Resets in {daily_left}", True, COLORS["text_dim"]), (panel.x + 76, panel.y + 50))
-        self.screen.blit(self.fonts["tiny"].render(f"Resets in {weekly_left}", True, COLORS["text_dim"]), (panel.centerx + 76, panel.y + 50))
+        daily_left = str(max(datetime.timedelta(0), tomorrow - now)).split(".")[0]
+        weekly_left = str(max(datetime.timedelta(0), weekly_next - now)).split(".")[0]
+        self.screen.blit(self.fonts["tiny"].render(f"Resets in {daily_left} (UTC)", True, COLORS["text_dim"]), (panel.x + 76, panel.y + 50))
+        self.screen.blit(self.fonts["tiny"].render(f"Resets in {weekly_left} (UTC)", True, COLORS["text_dim"]), (panel.centerx + 76, panel.y + 50))
 
         defs = self._quest_definitions()
         card_w = (panel.width - 52) // 2
@@ -1540,7 +1540,7 @@ class RenderingMixin:
         if self.library_mode == "freeplay":
             subtitle_text = "Select an unlocked jutsu to start Free Play"
         elif self.library_mode == "challenge":
-            subtitle_text = "Select an unlocked jutsu to start Challenge Mode"
+            subtitle_text = "Select an unlocked jutsu to start Rank Mode"
         else:
             subtitle_text = "Browse only: view lock/unlock progression"
         subtitle_text = self._fit_single_line_text(self.fonts["body_sm"], subtitle_text, SCREEN_WIDTH - 80)

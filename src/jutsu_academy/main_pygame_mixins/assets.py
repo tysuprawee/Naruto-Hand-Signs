@@ -151,7 +151,7 @@ class AssetsMixin:
         """Load sound effects."""
         sounds_dir = Path("src/sounds")
         
-        for name in ["each", "complete", "hover", "click"]:
+        for name in ["each", "complete", "hover", "click", "reward", "level"]:
             for ext in [".mp3", ".wav"]:
                 path = sounds_dir / f"{name}{ext}"
                 if path.exists():

@@ -3,10 +3,13 @@ from pathlib import Path
 import json
 import time
 import os
+import base64
 import cv2
 import threading
-import uuid
 import hashlib
+import datetime
+import requests
+from email.utils import parsedate_to_datetime
 
 # Load env variables simple parser
 def get_env():
@@ -43,6 +46,20 @@ def get_env():
                 
     return env
 
+def _decode_jwt_role(token):
+    """Best-effort decode of JWT role claim (without signature verification)."""
+    try:
+        parts = str(token or "").split(".")
+        if len(parts) != 3:
+            return ""
+        payload_b64 = parts[1]
+        padding = "=" * ((4 - (len(payload_b64) % 4)) % 4)
+        raw = base64.urlsafe_b64decode((payload_b64 + padding).encode("utf-8"))
+        payload = json.loads(raw.decode("utf-8"))
+        return str(payload.get("role") or "").lower()
+    except Exception:
+        return ""
+
 class NetworkManager:
     def __init__(self):
         env = get_env()
@@ -62,6 +79,12 @@ class NetworkManager:
             self.client = None
         else:
             self.client: Client = create_client(self.url, self.key)
+
+        allow_direct_raw = str(env.get("ALLOW_DIRECT_LEADERBOARD_WRITE", "")).strip().lower()
+        self.allow_direct_leaderboard_write = allow_direct_raw in {"1", "true", "yes", "on"}
+        self.supabase_key_role = _decode_jwt_role(self.key)
+        if self.allow_direct_leaderboard_write:
+            print("[!] Direct leaderboard insert override enabled. Use only in trusted server/admin contexts.")
             
         self.room_id = None
         self.is_host = False
@@ -69,6 +92,30 @@ class NetworkManager:
         self.msg_queue = []
         self.stop_thread = False
         self._warned_profile_fallback = False
+        self._warned_profile_meta_missing_columns = False
+        self._server_time_offset_s = 0.0
+        self._server_time_offset_ready = False
+        self._server_time_last_sync = 0.0
+        self._server_time_next_retry_at = 0.0
+
+    def _rpc_dict(self, rpc_name, payload=None, retries=2, retry_sleep_s=0.1):
+        """Run RPC and normalize to a single dict response."""
+        if not self.client:
+            return {"ok": False, "reason": "offline"}
+        body = payload or {}
+        for attempt in range(max(1, int(retries))):
+            try:
+                response = self.client.rpc(rpc_name, body).execute()
+                data = response.data
+                if isinstance(data, list) and data:
+                    data = data[0]
+                if isinstance(data, dict):
+                    return data
+            except Exception as e:
+                if attempt == (max(1, int(retries)) - 1):
+                    print(f"[!] RPC {rpc_name} failed: {e}")
+                time.sleep(float(retry_sleep_s))
+        return {"ok": False, "reason": "rpc_unavailable", "rpc": rpc_name}
 
     def connect(self, room_id):
         if not self.client: return
@@ -232,8 +279,18 @@ class NetworkManager:
             return []
 
     def submit_score(self, username, score_time, mode="Fireball", discord_id=None, avatar_url=None):
-        """Upload score to DB"""
-        if not self.client: return
+        """
+        Direct leaderboard insert (admin/server-only).
+        Disabled by default for client safety; use submit_score_secure() for gameplay.
+        """
+        if not self.allow_direct_leaderboard_write:
+            print("[!] Direct leaderboard insert disabled. Use submit_score_secure() RPC.")
+            return {"ok": False, "reason": "direct_submit_disabled"}
+        if self.supabase_key_role != "service_role":
+            print("[!] Direct leaderboard insert requires service-role key.")
+            return {"ok": False, "reason": "service_role_required"}
+        if not self.client:
+            return {"ok": False, "reason": "offline"}
         try:
             data = {
                 "username": username,
@@ -245,17 +302,18 @@ class NetworkManager:
 
             self.client.table('leaderboard').insert(data).execute()
             print(f"[+] Score submitted: {score_time}s by {username}")
+            return {"ok": True}
         except Exception as e:
             print(f"[!] Score submission failed: {e}")
+            return {"ok": False, "reason": "insert_failed"}
 
     def issue_run_token(self, username, mode, client_started_at=None):
         """
         Request a short-lived challenge run token from Supabase.
-        Falls back to local token if RPC isn't available yet.
+        Returns a failure result if RPC isn't available.
         """
-        fallback_token = f"local_{uuid.uuid4().hex}"
         if not self.client:
-            return {"ok": False, "token": fallback_token, "source": "offline"}
+            return {"ok": False, "token": "", "source": "offline", "reason": "offline"}
 
         payload = {
             "p_username": username,
@@ -277,10 +335,10 @@ class NetworkManager:
                     }
             except Exception as e:
                 if attempt == 1:
-                    print(f"[!] issue_run_token RPC failed, using fallback token: {e}")
+                    print(f"[!] issue_run_token RPC failed: {e}")
                 time.sleep(0.1)
 
-        return {"ok": False, "token": fallback_token, "source": "fallback"}
+        return {"ok": False, "token": "", "source": "unavailable", "reason": "rpc_unavailable"}
 
     def submit_score_secure(
         self,
@@ -296,7 +354,7 @@ class NetworkManager:
     ):
         """
         Submit score through server validation RPC.
-        Falls back to legacy direct insert while migration is pending.
+        Fails closed if server validation is unavailable.
         """
         if not self.client:
             return {"ok": False, "reason": "offline"}
@@ -311,6 +369,11 @@ class NetworkManager:
             refreshed_token = str(token_data.get("token") or "")
             if refreshed_token:
                 local_token = refreshed_token
+            elif isinstance(token_data, dict):
+                return {"ok": False, "reason": token_data.get("reason", "token_unavailable")}
+
+        if (not local_token) or local_token.startswith("local_"):
+            return {"ok": False, "reason": "token_unavailable"}
 
         payload = {
             "p_username": username,
@@ -337,18 +400,66 @@ class NetworkManager:
                     return data
             except Exception as e:
                 if attempt == 1:
-                    print(f"[!] secure submit RPC failed, falling back to legacy insert: {e}")
+                    print(f"[!] secure submit RPC failed: {e}")
                 time.sleep(0.1)
 
-        # Backward-compatible fallback so gameplay is not blocked pre-migration.
-        self.submit_score(
-            username=username,
-            score_time=score_time,
-            mode=mode,
-            discord_id=discord_id,
-            avatar_url=avatar_url,
+        return {"ok": False, "reason": "rpc_unavailable"}
+
+    def get_competitive_state_authoritative(self, username):
+        """
+        Fetch authoritative progression + quest state from server.
+        Preferred response shape:
+        {ok, profile:{...}, quests:{...}}
+        """
+        if not username:
+            return {"ok": False, "reason": "missing_username"}
+        data = self._rpc_dict(
+            "get_competitive_state_authoritative",
+            {"p_username": str(username)},
+            retries=2,
         )
-        return {"ok": True, "fallback": True}
+        if isinstance(data, dict) and data.get("ok", False):
+            return data
+
+        # Read-only fallback for UI hydration only.
+        profile = self.get_profile(username)
+        if isinstance(profile, dict):
+            return {
+                "ok": True,
+                "weak": True,
+                "reason": data.get("reason", "profile_fallback") if isinstance(data, dict) else "profile_fallback",
+                "profile": profile,
+                "quests": profile.get("quests", {}),
+            }
+        return data if isinstance(data, dict) else {"ok": False, "reason": "state_unavailable"}
+
+    def award_jutsu_completion_authoritative(self, username, xp_gain, signs_landed, is_challenge, mode=None):
+        """
+        Apply server-authoritative progression/quest increment for a completed jutsu.
+        """
+        if not username:
+            return {"ok": False, "reason": "missing_username"}
+        payload = {
+            "p_username": str(username),
+            "p_xp_gain": int(max(0, xp_gain or 0)),
+            "p_signs_landed": int(max(0, signs_landed or 0)),
+            "p_is_challenge": bool(is_challenge),
+            "p_mode": str(mode or "").upper(),
+        }
+        return self._rpc_dict("award_jutsu_completion_authoritative", payload, retries=2)
+
+    def claim_quest_authoritative(self, username, scope, quest_id):
+        """
+        Claim quest reward on server with one-claim-per-period enforcement.
+        """
+        if not username:
+            return {"ok": False, "reason": "missing_username"}
+        payload = {
+            "p_username": str(username),
+            "p_scope": str(scope or "").lower(),
+            "p_quest_id": str(quest_id or ""),
+        }
+        return self._rpc_dict("claim_quest_authoritative", payload, retries=2)
 
     def get_profile(self, username):
         """Fetch player profile/progression from DB"""
@@ -361,6 +472,121 @@ class NetworkManager:
         except Exception as e:
             print(f"[!] Profile fetch failed: {e}")
         return None # Return None for "Error"
+
+    def _sync_server_time_offset(self):
+        """Best-effort sync of local clock offset against server UTC time."""
+        if not self.url:
+            return False
+
+        headers = {}
+        if self.key:
+            headers["apikey"] = self.key
+            headers["Authorization"] = f"Bearer {self.key}"
+
+        base = self.url.rstrip("/")
+        candidates = [base, f"{base}/rest/v1/"]
+
+        for endpoint in candidates:
+            try:
+                response = requests.head(endpoint, headers=headers, timeout=2)
+                date_header = response.headers.get("Date")
+                if not date_header:
+                    # Some proxies omit Date on HEAD, retry with GET.
+                    response = requests.get(endpoint, headers=headers, timeout=2)
+                    date_header = response.headers.get("Date")
+                if not date_header:
+                    continue
+
+                server_dt = parsedate_to_datetime(date_header)
+                if server_dt.tzinfo is None:
+                    server_dt = server_dt.replace(tzinfo=datetime.timezone.utc)
+                server_ts = server_dt.astimezone(datetime.timezone.utc).timestamp()
+                local_ts = time.time()
+
+                self._server_time_offset_s = float(server_ts - local_ts)
+                self._server_time_last_sync = local_ts
+                self._server_time_offset_ready = True
+                return True
+            except Exception:
+                continue
+
+        return False
+
+    def get_authoritative_utc_now(self, max_age_s=300, retry_backoff_s=60):
+        """
+        Return best-effort authoritative UTC time.
+        Uses cached server offset and refreshes periodically.
+        Falls back to local UTC when network sync is unavailable.
+        """
+        now_ts = time.time()
+        needs_refresh = (
+            (not self._server_time_offset_ready)
+            or ((now_ts - self._server_time_last_sync) >= float(max_age_s))
+        )
+
+        if needs_refresh and now_ts >= self._server_time_next_retry_at:
+            ok = self._sync_server_time_offset()
+            if not ok:
+                self._server_time_next_retry_at = now_ts + float(retry_backoff_s)
+
+        if self._server_time_offset_ready:
+            return datetime.datetime.fromtimestamp(
+                now_ts + self._server_time_offset_s,
+                tz=datetime.timezone.utc,
+            )
+        return datetime.datetime.fromtimestamp(now_ts, tz=datetime.timezone.utc)
+
+    def upsert_profile_meta(
+        self,
+        username,
+        tutorial_seen=None,
+        tutorial_seen_at=None,
+        tutorial_version=None,
+        mastery=None,
+        quests=None,
+        discord_id=None,
+    ):
+        """Update profile meta fields without touching progression authority fields."""
+        if not self.client:
+            return
+        if not username:
+            return
+
+        payload = {"username": username}
+
+        if tutorial_seen is not None:
+            payload["tutorial_seen"] = bool(tutorial_seen)
+        if tutorial_seen_at is not None:
+            payload["tutorial_seen_at"] = tutorial_seen_at
+        if tutorial_version is not None:
+            payload["tutorial_version"] = tutorial_version
+        if isinstance(mastery, dict):
+            payload["mastery"] = mastery
+        if isinstance(quests, dict):
+            payload["quests"] = quests
+        if discord_id:
+            payload["discord_id"] = discord_id
+
+        if len(payload) <= 1:
+            return
+
+        try:
+            self.client.table("profiles").upsert(payload, on_conflict="username").execute()
+            return
+        except Exception as e:
+            reduced = dict(payload)
+            reduced.pop("mastery", None)
+            reduced.pop("quests", None)
+            if len(reduced) > 1 and reduced != payload:
+                try:
+                    self.client.table("profiles").upsert(reduced, on_conflict="username").execute()
+                    if not self._warned_profile_meta_missing_columns:
+                        print("[!] Profile table missing mastery/quests columns; synced tutorial fields only.")
+                        self._warned_profile_meta_missing_columns = True
+                    return
+                except Exception:
+                    pass
+            print(f"[!] Profile meta sync failed: {e}")
 
     def upsert_profile(self, data):
         """Update or Insert player progression"""

@@ -6,7 +6,7 @@ A complete Pygame-based launcher and game for the Jutsu Trainer with:
 - Modern menu system
 - Settings with volume sliders
 - Camera selection
-- Practice mode (Free Play, Challenge)
+- Practice mode (Free Play, Rank Mode)
 - Particle effects and visual polish
 - Sound system
 
@@ -51,6 +51,9 @@ except ImportError:
         def submit_score(self, **kwargs): pass
         def issue_run_token(self, **kwargs): return {"ok": False, "token": "offline_mock", "source": "mock"}
         def submit_score_secure(self, **kwargs): return {"ok": False, "reason": "mock"}
+        def get_competitive_state_authoritative(self, **kwargs): return {"ok": False, "reason": "mock"}
+        def award_jutsu_completion_authoritative(self, **kwargs): return {"ok": False, "reason": "mock"}
+        def claim_quest_authoritative(self, **kwargs): return {"ok": False, "reason": "mock"}
 
 # Try importing Discord auth and dotenv
 try:
@@ -544,6 +547,7 @@ class ProgressionManager:
             "fastest_combo": 99.0
         }
         self.synced = False # Track if we have finished initial sync
+        self._warned_sync_to_cloud_disabled = False
         
         # Level requirements and Rank names
         self.RANKS = [
@@ -580,15 +584,8 @@ class ProgressionManager:
             return
 
         if profile: # User exists (non-empty dict)
-            # Only update if cloud has MORE XP than local (prevents overwriting newer local progress)
-            if profile.get("xp", 0) > self.xp:
-                self.xp = profile["xp"]
-                self.level = profile.get("level", 0)
-                self.rank = profile.get("rank", "Academy Student")
-                self.update_rank()
-                # We do NOT save() to a local file for authenticated users 
-                # to ensure there's no cheatable local JSON.
-                print(f"[*] Cloud Sync Success: Retrieved Lv.{self.level} for {self.username}")
+            self.apply_authoritative_profile(profile)
+            print(f"[*] Cloud Sync Success: Retrieved Lv.{self.level} for {self.username}")
         else: # User not found (empty dict)
             # No cloud profile found -> This is a new user (or offline progress to sync up)
             print(f"[*] New cloud user: Creating profile for {self.username}")
@@ -606,18 +603,41 @@ class ProgressionManager:
         self.synced = True # Sync complete
 
     def sync_to_cloud(self):
-        """Push current progression to Supabase."""
-        if not self.network_manager or self.username == "Guest": return
-        data = {
-            "username": self.username,
-            "xp": self.xp,
-            "level": self.level,
-            "rank": self.rank,
-            "total_signs": self.stats["total_signs"],
-            "total_jutsus": self.stats["total_jutsus"]
-        }
-        # Run in thread to not block UI
-        threading.Thread(target=self.network_manager.upsert_profile, args=(data,), daemon=True).start()
+        """Legacy path kept for guest/offline only; authenticated users are server authoritative."""
+        if self.username == "Guest":
+            return
+        if not self._warned_sync_to_cloud_disabled:
+            print("[!] sync_to_cloud disabled for authenticated users. Use server-authoritative RPC flows.")
+            self._warned_sync_to_cloud_disabled = True
+
+    def apply_authoritative_profile(self, profile):
+        """
+        Apply server-authoritative profile fields and return level-up status.
+        Expected keys: xp, level, rank, total_signs, total_jutsus, fastest_combo.
+        """
+        if not isinstance(profile, dict):
+            return False
+        old_level = int(self.level)
+        try:
+            if "xp" in profile and profile.get("xp") is not None:
+                self.xp = int(profile.get("xp", self.xp) or 0)
+            if "level" in profile and profile.get("level") is not None:
+                self.level = int(profile.get("level", self.level) or 0)
+            if "rank" in profile and profile.get("rank"):
+                self.rank = str(profile.get("rank"))
+            else:
+                self.update_rank()
+
+            if "total_signs" in profile and profile.get("total_signs") is not None:
+                self.stats["total_signs"] = int(profile.get("total_signs") or 0)
+            if "total_jutsus" in profile and profile.get("total_jutsus") is not None:
+                self.stats["total_jutsus"] = int(profile.get("total_jutsus") or 0)
+            if "fastest_combo" in profile and profile.get("fastest_combo") is not None:
+                self.stats["fastest_combo"] = float(profile.get("fastest_combo") or self.stats.get("fastest_combo", 99.0))
+        except Exception:
+            return False
+
+        return int(self.level) > old_level
 
     def get_xp_for_level(self, level):
         """Standard quadratic scaling."""
@@ -628,6 +648,9 @@ class ProgressionManager:
         return self.get_xp_for_level(self.level + 1)
 
     def add_xp(self, amount):
+        if self.username != "Guest":
+            print("[!] Local add_xp disabled for authenticated users. Award XP through server-authoritative RPC.")
+            return False
         old_level = self.level
         self.xp += amount
         self.stats["total_jutsus"] += 1

@@ -3,11 +3,27 @@ import datetime
 
 
 class CoreMixin:
+    def _is_authoritative_competitive_user(self):
+        return bool(
+            self.username != "Guest"
+            and self.network_manager
+            and self.network_manager.client
+        )
+
+    def _quest_now_utc(self):
+        nm = getattr(self, "network_manager", None)
+        if nm:
+            try:
+                return nm.get_authoritative_utc_now()
+            except Exception:
+                pass
+        return datetime.datetime.now(datetime.timezone.utc)
+
     def _daily_period_id(self):
-        return time.strftime("%Y-%m-%d")
+        return self._quest_now_utc().strftime("%Y-%m-%d")
 
     def _weekly_period_id(self):
-        y, w, _ = datetime.date.today().isocalendar()
+        y, w, _ = self._quest_now_utc().date().isocalendar()
         return f"{y}-W{w:02d}"
 
     def _default_quest_state(self):
@@ -30,6 +46,56 @@ class CoreMixin:
             },
         }
 
+    def _apply_competitive_state(self, payload):
+        """
+        Apply authoritative competitive payload to local runtime state.
+        Expected shape: {profile:{...}, quests:{...}} (or flat profile).
+        """
+        if not isinstance(payload, dict):
+            return {"ok": False, "reason": "invalid_payload"}
+
+        prev_level = int(self.progression.level)
+        profile_payload = payload.get("profile")
+        if not isinstance(profile_payload, dict):
+            profile_payload = payload
+
+        leveled = self.progression.apply_authoritative_profile(profile_payload)
+        quests_payload = payload.get("quests")
+        if isinstance(quests_payload, dict):
+            self.quest_state = quests_payload
+
+        return {
+            "ok": True,
+            "leveled_up": bool(leveled),
+            "previous_level": prev_level,
+            "weak": bool(payload.get("weak", False)),
+        }
+
+    def _sync_competitive_state(self, force=False):
+        """Best-effort refresh of authoritative progression/quest state."""
+        if not self._is_authoritative_competitive_user():
+            return {"ok": False, "reason": "not_authoritative_user"}
+        if getattr(self, "_quest_sync_inflight", False):
+            return {"ok": False, "reason": "inflight"}
+
+        now = time.time()
+        last = float(getattr(self, "_quest_state_last_sync_at", 0.0) or 0.0)
+        interval = float(getattr(self, "_quest_state_sync_interval_s", 20.0) or 20.0)
+        if (not force) and ((now - last) < interval):
+            return {"ok": False, "reason": "throttled"}
+
+        self._quest_sync_inflight = True
+        try:
+            res = self.network_manager.get_competitive_state_authoritative(self.username)
+            if isinstance(res, dict) and res.get("ok", False):
+                self._apply_competitive_state(res)
+                self._quest_state_last_sync_at = now
+                return {"ok": True, "weak": bool(res.get("weak", False))}
+            self._quest_state_last_sync_at = now
+            return res if isinstance(res, dict) else {"ok": False, "reason": "state_unavailable"}
+        finally:
+            self._quest_sync_inflight = False
+
     def _reset_daily_quests(self):
         self.quest_state["daily"] = {
             "period": self._daily_period_id(),
@@ -51,6 +117,15 @@ class CoreMixin:
         }
 
     def _refresh_quest_periods(self):
+        if self._is_authoritative_competitive_user():
+            # Server is authority for quest period/reset; periodic refresh only.
+            now = time.time()
+            last = float(getattr(self, "_quest_state_last_sync_at", 0.0) or 0.0)
+            interval = float(getattr(self, "_quest_state_sync_interval_s", 20.0) or 20.0)
+            if (now - last) >= interval and (not getattr(self, "_quest_sync_inflight", False)):
+                threading.Thread(target=self._sync_competitive_state, kwargs={"force": True}, daemon=True).start()
+            return
+
         changed = False
         if self.quest_state.get("daily", {}).get("period") != self._daily_period_id():
             self._reset_daily_quests()
@@ -68,15 +143,51 @@ class CoreMixin:
                 q["progress"] = int(q.get("progress", 0)) + int(amount)
 
     def _record_sign_progress(self):
+        if self._is_authoritative_competitive_user():
+            return
         self._inc_quest_progress("d_signs", 1)
 
-    def _record_jutsu_completion(self, xp_gain, is_challenge):
+    def _record_jutsu_completion(self, xp_gain, is_challenge, signs_landed=0, jutsu_name=""):
+        if self._is_authoritative_competitive_user():
+            res = self.network_manager.award_jutsu_completion_authoritative(
+                username=self.username,
+                xp_gain=int(xp_gain),
+                signs_landed=int(max(0, signs_landed)),
+                is_challenge=bool(is_challenge),
+                mode=str(jutsu_name).upper(),
+            )
+            if not isinstance(res, dict) or (not res.get("ok", False)):
+                return {
+                    "ok": False,
+                    "reason": res.get("reason", "award_rejected") if isinstance(res, dict) else "award_rejected",
+                }
+            applied = self._apply_competitive_state(res)
+            if isinstance(res.get("quests"), dict):
+                self.quest_state = res.get("quests")
+            return {
+                "ok": True,
+                "source": "rpc",
+                "xp_awarded": int(res.get("xp_awarded", xp_gain) or 0),
+                "leveled_up": bool(applied.get("leveled_up", False)),
+                "previous_level": int(applied.get("previous_level", self.progression.level)),
+            }
+
         self._inc_quest_progress("d_jutsus", 1)
         self._inc_quest_progress("w_jutsus", 1)
         self._inc_quest_progress("d_xp", int(xp_gain))
         self._inc_quest_progress("w_xp", int(xp_gain))
         if is_challenge:
             self._inc_quest_progress("w_challenges", 1)
+        prev_level = self.progression.level
+        leveled = self.progression.add_xp(int(xp_gain))
+        self._save_player_meta()
+        return {
+            "ok": True,
+            "source": "local_guest",
+            "xp_awarded": int(xp_gain),
+            "leveled_up": bool(leveled),
+            "previous_level": int(prev_level),
+        }
 
     def _quest_definitions(self):
         return [
@@ -84,7 +195,7 @@ class CoreMixin:
             ("daily", "d_jutsus", "Complete 5 jutsu runs", 5, 180),
             ("daily", "d_xp", "Earn 450 XP", 450, 250),
             ("weekly", "w_jutsus", "Complete 30 jutsu runs", 30, 700),
-            ("weekly", "w_challenges", "Finish 12 challenge runs", 12, 900),
+            ("weekly", "w_challenges", "Finish 12 rank mode runs", 12, 900),
             ("weekly", "w_xp", "Earn 4000 XP", 4000, 1200),
         ]
 
@@ -94,15 +205,55 @@ class CoreMixin:
         if key not in defs:
             return False
         target, reward, title = defs[key]
+
+        if self._is_authoritative_competitive_user():
+            if getattr(self, "_quest_claim_inflight", False):
+                return False
+            self._quest_claim_inflight = True
+            try:
+                res = self.network_manager.claim_quest_authoritative(
+                    username=self.username,
+                    scope=scope,
+                    quest_id=quest_id,
+                )
+                if not isinstance(res, dict) or (not res.get("ok", False)):
+                    reason = "claim_rejected"
+                    if isinstance(res, dict):
+                        reason = str(res.get("reason", reason))
+                    self.show_alert("Quest Reward", f"Claim failed: {reason}")
+                    return False
+
+                applied = self._apply_competitive_state(res)
+                reward_xp = int(res.get("reward_xp", reward) or 0)
+                reward_title = str(res.get("title", title) or title)
+                self.play_sound("reward")
+                self.show_alert("Quest Reward", f"{reward_title}\nReward claimed: +{reward_xp} XP", "CLAIMED")
+
+                if applied.get("leveled_up", False):
+                    self._notify_level_up(previous_level=int(applied.get("previous_level", self.progression.level)), source_label="Quest Reward")
+                    self.xp_popups.append({
+                        "text": f"RANK UP: {self.progression.rank}!",
+                        "x": SCREEN_WIDTH // 2,
+                        "y": SCREEN_HEIGHT // 2,
+                        "timer": 2.8,
+                        "color": COLORS["success"],
+                    })
+                else:
+                    self.process_unlock_alerts(previous_level=int(applied.get("previous_level", self.progression.level)))
+                return True
+            finally:
+                self._quest_claim_inflight = False
+
         q = self.quest_state.get(scope, {}).get("quests", {}).get(quest_id)
         if not q or q.get("claimed", False) or int(q.get("progress", 0)) < int(target):
             return False
         q["claimed"] = True
+        self.play_sound("reward")
         prev_level = self.progression.level
         leveled = self.progression.add_xp(reward)
-        self.process_unlock_alerts(previous_level=prev_level)
         self.show_alert("Quest Reward", f"{title}\nReward claimed: +{reward} XP", "CLAIMED")
         if leveled:
+            self._notify_level_up(previous_level=prev_level, source_label="Quest Reward")
             self.xp_popups.append({
                 "text": f"RANK UP: {self.progression.rank}!",
                 "x": SCREEN_WIDTH // 2,
@@ -110,6 +261,8 @@ class CoreMixin:
                 "timer": 2.8,
                 "color": COLORS["success"],
             })
+        else:
+            self.process_unlock_alerts(previous_level=prev_level)
         self._save_player_meta()
         return True
 
@@ -148,7 +301,7 @@ class CoreMixin:
         self.tutorial_seen = False
         self.tutorial_seen_at = None
         self.tutorial_version = "1.0"
-        self._tutorial_cloud_sync_enabled = True
+        self._profile_meta_cloud_sync_enabled = True
         self.mastery_data = {}
         self.quest_state = self._default_quest_state()
         # Best effort: sync profile meta from cloud for logged-in users.
@@ -168,37 +321,37 @@ class CoreMixin:
                     cloud_mastery = profile.get("mastery")
                     if isinstance(cloud_mastery, dict):
                         self.mastery_data = dict(cloud_mastery)
-                    cloud_quests = profile.get("quests")
-                    if isinstance(cloud_quests, dict):
-                        self.quest_state = cloud_quests
             except Exception:
                 pass
+        if self._is_authoritative_competitive_user():
+            # Pull quests/progression from authoritative server source.
+            self._sync_competitive_state(force=True)
         self._refresh_quest_periods()
 
-    def _sync_tutorial_meta_to_cloud(self):
-        """Best-effort cloud sync for tutorial completion state."""
-        if not getattr(self, "_tutorial_cloud_sync_enabled", True):
+    def _sync_profile_meta_to_cloud(self):
+        """Best-effort cloud sync for non-competitive profile meta (tutorial/mastery)."""
+        if not getattr(self, "_profile_meta_cloud_sync_enabled", True):
             return
         if self.username == "Guest":
             return
         if not self.network_manager or not self.network_manager.client:
             return
         try:
-            payload = {
-                "username": self.username,
-                "tutorial_seen": bool(self.tutorial_seen),
-                "tutorial_seen_at": self.tutorial_seen_at,
-                "tutorial_version": self.tutorial_version,
-            }
-            self.network_manager.upsert_profile(payload)
+            self.network_manager.upsert_profile_meta(
+                username=self.username,
+                tutorial_seen=bool(self.tutorial_seen),
+                tutorial_seen_at=self.tutorial_seen_at,
+                tutorial_version=self.tutorial_version,
+                mastery=self.mastery_data if isinstance(self.mastery_data, dict) else {},
+            )
         except Exception as e:
             # If schema isn't migrated yet, avoid repeated noisy attempts.
-            self._tutorial_cloud_sync_enabled = False
-            print(f"[!] Tutorial cloud sync disabled: {e}")
+            self._profile_meta_cloud_sync_enabled = False
+            print(f"[!] Profile meta cloud sync disabled: {e}")
 
     def _save_player_meta(self):
         # Persist only to cloud where available. Guest meta is session-only.
-        self._sync_tutorial_meta_to_cloud()
+        self._sync_profile_meta_to_cloud()
 
     def __init__(self):
         from src.jutsu_academy.effects import (
@@ -321,6 +474,11 @@ class CoreMixin:
             name for name, data in self.jutsu_list.items()
             if self.progression.level >= data.get("min_level", 0)
         }
+        self._quest_state_last_sync_at = 0.0
+        self._quest_state_sync_interval_s = 20.0
+        self._quest_sync_inflight = False
+        self._quest_claim_inflight = False
+        self._warned_authoritative_progression_unavailable = False
 
         # Reusable alert queue/modal state
         self.alert_queue = []
@@ -493,9 +651,9 @@ class CoreMixin:
             },
             {
                 "icon_key": "challenge",
-                "title": "Challenge And Progress",
+                "title": "Rank Mode And Progress",
                 "lines": [
-                    "Use Challenge mode for timed runs and leaderboard ranking.",
+                    "Use Rank Mode for timed runs and leaderboard ranking.",
                     "Visit Quest Board for daily/weekly XP rewards.",
                     "Master each jutsu to reach Bronze, Silver, and Gold tiers.",
                 ],
@@ -616,8 +774,8 @@ class CoreMixin:
             "button_text": str(button_text),
         })
 
-    def process_unlock_alerts(self, previous_level=None):
-        """Queue alert(s) for newly unlocked jutsus."""
+    def process_unlock_alerts(self, previous_level=None, queue_alerts=True):
+        """Return newly unlocked jutsus and optionally queue unlock alert(s)."""
         current_level = self.progression.level
 
         if previous_level is not None:
@@ -638,17 +796,42 @@ class CoreMixin:
                 key=lambda name: self.jutsu_list[name].get("min_level", 0),
             )
 
-        for name in newly_unlocked:
-            min_lv = self.jutsu_list[name].get("min_level", 0)
-            self.show_alert(
-                "New Skill Unlocked",
-                f"{name} unlocked at LV.{min_lv}. Open Jutsu Library to preview sequence.",
-                "NICE",
-            )
+        if queue_alerts:
+            for name in newly_unlocked:
+                min_lv = self.jutsu_list[name].get("min_level", 0)
+                self.show_alert(
+                    "New Skill Unlocked",
+                    f"{name} unlocked at LV.{min_lv}. Open Jutsu Library to preview sequence.",
+                    "NICE",
+                )
         self.unlocked_jutsus_known = {
             name for name, data in self.jutsu_list.items()
             if current_level >= data.get("min_level", 0)
         }
+        return newly_unlocked
+
+    def _notify_level_up(self, previous_level, source_label=""):
+        """Queue level-up feedback panel and include newly unlocked skills."""
+        current_level = int(self.progression.level)
+        if current_level <= int(previous_level):
+            return []
+
+        self.play_sound("level")
+        newly_unlocked = self.process_unlock_alerts(previous_level=previous_level, queue_alerts=False)
+
+        source_prefix = f"{source_label}: " if source_label else ""
+        msg = f"{source_prefix}LV.{previous_level} -> LV.{current_level} ({self.progression.rank})."
+        if newly_unlocked:
+            if len(newly_unlocked) == 1:
+                msg += f" New skill unlocked: {newly_unlocked[0]}."
+            else:
+                preview = ", ".join(newly_unlocked[:3])
+                if len(newly_unlocked) > 3:
+                    preview += f" +{len(newly_unlocked) - 3} more"
+                msg += f" New skills unlocked: {preview}."
+
+        self.show_alert("Level Up", msg, "AWESOME")
+        return newly_unlocked
 
     def _activate_next_alert(self):
         """Activate next queued alert if none is currently shown."""

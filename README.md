@@ -1,114 +1,119 @@
-# Shinobi Academy / Naruto Hand Signs
+# 🥷 Jutsu Academy — Naruto Hand-Sign Recognition
 
-A full-stack project for Naruto hand-sign recognition and gameplay:
-- A Python game/training stack (MediaPipe + KNN, legacy YOLO tools, Pygame academy flow)
-- A Next.js web frontend (`web/`) for landing page, leaderboard, and release UI
+> *Train real Naruto hand signs with your webcam. Rank up from Academy Student to Hokage.*
 
-## 🎯 Overview
+A multi-platform project combining **computer vision**, **machine learning**, and **game design** to recognise Naruto hand signs in real time. Built with MediaPipe + KNN for skin-tone-inclusive detection.
 
-This project allows you to:
-1. **Train** in the **Jutsu Academy** with a modern Pygame interface (Scene-based architecture).
-2. **Master** complex 2-handed jutsu sequences.
-3. **Progress** your Shinobi Rank (Academy Student → Hokage) via **Quests** and **Mastery**.
-4. **Inclusive Detection**: Experience a model that works for **every skin tone** using MediaPipe integration.
-
-### Web Frontend (`web/`)
-- Built with **Next.js 16** + Tailwind
-- Hero page with:
-  - Live **Release Countdown** to **Feb 21, 9:00 PM** (local browser time)
-  - Responsive launch/countdown badge
-  - Locked **DOWNLOAD** CTA until release
-- Routes:
-  - `/` landing page
-  - `/leaderboard` leaderboard UI
-  - `/play` currently redirects home
-
-| (OLD) YOLO Detection | Jutsu Academy (NEW) |
+| Desktop (Pygame) | Web (Next.js) |
 |:---:|:---:|
-| <img src="https://github.com/user-attachments/assets/875e8229-59b6-4af2-bef4-2477125515f0" width="400"> | <img src="https://github.com/user-attachments/assets/76461e53-4c9e-4124-bd58-9d2b47caccdf" width="400"> |
-
-### Supported Hand Signs (Classes)
-- 🐯 **tiger** (key: 1)
-- 🐗 **boar** (key: 2)
-- 🐍 **snake** (key: 3)
-- 🐏 **ram** (key: 4)
-- 🐦 **bird** (key: 5)
-- 🐲 **dragon** (key: 6)
-- 🐕 **dog** (key: 7)
-- 🐀 **rat** (key: 8)
-- 🐎 **horse** (key: 9)
-- 🐵 **monkey** (key: 0)
-- 🐂 **ox** (key: -)
-- 🐇 **hare** (key: =)
+| <img src="https://github.com/user-attachments/assets/76461e53-4c9e-4124-bd58-9d2b47caccdf" width="420"> | <img src="https://github.com/user-attachments/assets/875e8229-59b6-4af2-bef4-2477125515f0" width="420"> |
 
 ---
 
-## 🆕 New Features (v1.1)
+## ✨ Features
 
-### 📜 Quest System & Progression
-- **Daily & Weekly Quests**: Earn XP by completing tasks like "Land 25 correct signs" or "Complete 5 jutsu runs".
-- **Mastery Tiers**: Achieve Bronze, Silver, and Gold mastery for each Jutsu based on your speed.
-- **Save System**: XP/Rank progression uses local guest files (`user_progression_*.json`) or cloud sync for logged-in users. Extra runtime meta (`player_meta.json`) was removed to avoid mutable local meta state.
+### 🎮 Gameplay
+- **Free Play** — Practice any jutsu at your own pace
+- **Rank Mode** — Speed-run jutsu sequences and submit scores to the global leaderboard
+- **Jutsu Library** — Browse all jutsus, preview sign sequences, and view mastery tiers
+- **Quest System** — Daily & weekly quests (e.g. "Land 25 correct signs", "Complete 3 jutsu runs") that award XP
+- **Mastery Tiers** — Achieve Bronze / Silver / Gold mastery per jutsu based on clear time
+- **Progression** — Rank up from *Academy Student* → *Genin* → *Chūnin* → *Jōnin* → *Hokage*
 
-### 👥 Shadow Clone Jutsu
-- **Advanced Particles**: A brand new `ShadowCloneSystem` renders dynamic clone particles that spawn from your actual body position using computer vision.
-- **Interactive Demo**: Run `python src/jutsu_academy/shadow_clones.py` to see the particle system in action.
+### 🧠 Detection
+- **MediaPipe + KNN** — Converts hand landmarks to 126-D feature vectors; works for **all skin tones**
+- **YOLO (Legacy)** — Original YOLOv8 pixel-based detector kept for backward compatibility
+- **Temporal Vote Filter** — Smooths noisy frames with a configurable vote window + confidence gate
+- **Lighting Quality Gate** — Warns users about low light / overexposure before gameplay
 
-### 🏗️ Modular Scene Architecture
-The codebase has been refactored into a robust **Scene Manager** system, making it easier to extend:
-- **MenuScene**: Main hub with smooth UI transitions.
-- **DojoScene**: The core gameplay loop.
-- **SettingsScene**, **AboutScene**, **LeaderboardScene**: dedicated screens for better UX.
+### 🌐 Web App (`web/`)
+- Built with **Next.js** + Tailwind CSS, deployed on **Vercel**
+- **Landing page** with release countdown, download CTA, and social links
+- **`/challenge`** — Full browser-based hand-sign challenge using MediaPipe WASM + KNN (no install required)
+- **`/leaderboard`** — Global leaderboard powered by Supabase
+
+### 🖥️ Desktop App (Pygame)
+- Mixin-based architecture (`core`, `rendering`, `runtime`, `gameplay`, `ui_setup`, `assets`, `auth`, `playing`, `leaderboard`)
+- **Discord OAuth** login with cloud save sync
+- **Resolution settings** — 7 presets from 1024×768 to 1920×1080
+- **Fullscreen toggle** with automatic UI rebuild
+- **Camera preview** in settings with live scan
+- **Effects engine** — Shadow Clone particles, Water Dragon, Reaper Death Seal, and an `EffectOrchestrator` for sequencing
+
+### 🎮 Godot Prototype (`godot/`)
+- Experimental Godot 4 port with GDScript
+- Communicates with a Python MediaPipe backend server over WebSocket
+
+---
+
+## 🐯 Supported Hand Signs (13 Classes)
+
+| # | Sign | Key | # | Sign | Key |
+|---|------|-----|---|------|-----|
+| 1 | 🐯 Tiger | `1` | 8 | � Rat | `8` |
+| 2 | 🐗 Boar | `2` | 9 | � Horse | `9` |
+| 3 | 🐍 Snake | `3` | 10 | � Monkey | `0` |
+| 4 | 🐏 Ram | `4` | 11 | � Ox | `-` |
+| 5 | 🐦 Bird | `5` | 12 | � Hare | `=` |
+| 6 | 🐲 Dragon | `6` | 13 | � Clap | `/` |
+| 7 | � Dog | `7` | | | |
 
 ---
 
 ## 📁 Project Structure
 
-The project is organized into modular systems to handle the game, the AI, and the visual effects separately.
-
-### 🎓 1. The Academy (Main Game)
-*   **`src/jutsu_academy/main_pygame.py`**: **The Launcher**. The central entry point that initializes the `JutsuAcademy` application.
-*   **`src/jutsu_academy/scenes/`**: **Game Logic**. Contains separate modules for each game state (`menu.py`, `dojo.py`, `settings.py`, etc.).
-*   **`src/jutsu_academy/managers/`**: **Systems**. Handles `ProgressionManager`, `NetworkManager`, and other core subsystems.
-*   **`src/jutsu_registry.py`**: **The Encyclopedia**. Contains all Jutsus, their required hand sign sequences, and their minimum rank/level requirements.
-
-### 🧠 2. The AI Brain (Detection)
-*   **`src/mp_trainer.py`**: **The New Way**. Converts your hand movements into 126 mathematical points and uses a KNN model to identify the signs. This ensures the model works for **all skin tones**.
-*   **`src/train.py`** & **`src/process_dataset.py`**: **Legacy Trainers**. Older scripts used to train the pixel-based YOLOv8 model (kept for backward compatibility).
-*   **`src/capture_dataset.py`**: **Data Collection**. A tool to quickly capture hundreds of photos of your hands to train the AI on new signs.
-
-### 🎥 3. Effects & Visuals
-*   **`src/jutsu_academy/shadow_clones.py`**: **Shadow Clone FX**. The particle system for the Shadow Clone jutsu.
-*   **`src/jutsu_academy/ui/`**: **UI Components**. Reusable buttons, sliders, and modals.
-*   **`src/utils/paths.py`**: **GPS**. A central utility that tells the code exactly where sounds, videos, and model weights are located.
+```
+├── src/
+│   ├── jutsu_academy/
+│   │   ├── main_pygame.py              # Desktop launcher
+│   │   ├── main_pygame_app.py          # Application class (mixin composition)
+│   │   ├── main_pygame_shared.py       # Constants, UI widgets, colors
+│   │   ├── main_pygame_mixins/         # Modular game logic
+│   │   │   ├── core.py                 # Init, display mode, progression
+│   │   │   ├── rendering.py            # All screen rendering
+│   │   │   ├── runtime.py              # Event loop & state transitions
+│   │   │   ├── gameplay.py             # Detection loop, vote filter
+│   │   │   ├── playing.py              # In-game HUD & sign matching
+│   │   │   ├── ui_setup.py             # UI element creation
+│   │   │   ├── assets.py               # Asset loading, settings I/O
+│   │   │   ├── auth.py                 # Discord OAuth flow
+│   │   │   └── leaderboard.py          # Leaderboard UI & data
+│   │   ├── effects/                    # Visual effects engine
+│   │   │   ├── shadow_clone_effect.py
+│   │   │   ├── water_dragon_effect.py
+│   │   │   ├── reaper_death_seal_effect.py
+│   │   │   └── orchestrator.py
+│   │   ├── discord_auth.py             # OAuth callback server (Flask)
+│   │   └── settings.json               # User preferences
+│   ├── jutsu_registry.py               # Jutsu definitions & sequences
+│   ├── mp_trainer.py                   # MediaPipe KNN trainer
+│   ├── capture_dataset.py              # Dataset capture tool
+│   └── utils/paths.py                  # Asset path resolver
+├── web/                                # Next.js web application
+│   ├── app/
+│   │   ├── page.tsx                    # Landing page
+│   │   ├── challenge/page.tsx          # Browser hand-sign challenge
+│   │   └── leaderboard/page.tsx        # Global leaderboard
+│   └── utils/
+│       ├── knn.ts                      # KNN classifier (TypeScript)
+│       ├── supabase.ts                 # Supabase client
+│       └── detection-filters.ts        # Temporal vote / lighting filters
+├── godot/                              # Godot 4 prototype
+│   ├── scripts/Main.gd                 # GDScript game logic
+│   ├── scenes/Main.tscn                # Main scene
+│   └── backend/                        # Python WebSocket bridge
+├── models/                             # ML model weights
+├── dataset/                            # Training data
+└── requirements.txt                    # Python dependencies
+```
 
 ---
 
 ## 🚀 Getting Started
 
-### A) Web App (Next.js)
+### Desktop App (Pygame)
 
-```bash
-cd web
-npm install
-npm run dev
-```
-
-Production build:
-```bash
-cd web
-npm run build
-```
-
-### B) Python App
-
-#### 1. Create a Virtual Environment
-
-**Windows:**
-```bash
-python -m venv venv
-venv\Scripts\activate
-```
+#### 1. Create & activate a virtual environment
 
 **macOS / Linux:**
 ```bash
@@ -116,72 +121,76 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-#### 2. Install Dependencies
+**Windows:**
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
 
+#### 2. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 3. Run the Academy
-
-The main game is now launched via `main_pygame.py`:
-
+#### 3. Launch
 ```bash
-# Launch the full game
 python src/jutsu_academy/main_pygame.py
-
-# Launch Shadow Clone FX Demo
-python src/jutsu_academy/shadow_clones.py
 ```
 
-#### 4. (Optional) Run Visualization Trainer
-For the legacy interactive trainer mode:
+### Web App (Next.js)
+
 ```bash
-python src/jutsu_trainer.py
+cd web
+npm install
+npm run dev        # Development
+npm run build      # Production
 ```
+
+### Godot Prototype
+
+1. Open `godot/project.godot` in Godot 4
+2. Start the Python backend: `python src/backend_server_mediapipe.py`
+3. Run the scene from the Godot editor
 
 ---
 
-## 📝 Modifying Classes
+## ⚙️ Settings
 
-To change the hand sign classes:
+The desktop app saves user preferences to `src/jutsu_academy/settings.json`:
 
-1. Edit `CLASSES` list in `src/utils/paths.py`
-2. Update `KEY_CLASS_MAP` in `src/utils/paths.py`
-3. Update `yolo_config/data.yaml` with new class names
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `music_vol` | Background music volume (0.0–1.0) | `0.5` |
+| `sfx_vol` | Sound effects volume (0.0–1.0) | `0.7` |
+| `camera_idx` | Webcam index | `0` |
+| `debug_hands` | Show hand skeleton overlay | `false` |
+| `resolution_idx` | Display resolution preset (0–6) | `0` |
+| `fullscreen` | Fullscreen mode | `false` |
 
 ---
 
 ## 🐛 Troubleshooting
 
-**Vercel shows `404: NOT_FOUND`:**
-- In Vercel Project Settings, set **Root Directory** to `web`
-- Do **not** use legacy root rewrites for `/web/...`
-- Keep deployment config simple (no root `vercel.json` route rewrites)
-
-**Vercel prerender/build error `supabaseUrl is required`:**
-- Ensure `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set in Vercel environment variables
-- The current web code guards missing envs, but leaderboard data requires them to function
-
-**SDL Library Conflict (Mac/Linux):**
-If you see errors related to `libSDL2` conflicts between `cv2` and `pygame`:
-- The application has been updated to handle this in most cases.
-- Ensure you are running from the virtual environment.
-
-**Camera not detected:**
-- Try different camera indices: `--camera 1`, `--camera 2`
-- Check if another application is using the camera
+| Problem | Fix |
+|---------|-----|
+| **Vercel 404** | Set **Root Directory** to `web` in Vercel project settings |
+| **`supabaseUrl is required`** | Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to Vercel env vars |
+| **SDL library conflict (Mac)** | Harmless warning from dual `libSDL2` in cv2 + pygame; runs fine |
+| **Port 5000 blocked (Mac)** | AirPlay Receiver uses port 5000 on macOS Monterey+; Discord auth uses port 5050 to avoid this |
+| **Camera not detected** | Try a different camera index in Settings, or click "SCAN" to re-detect |
+| **Discord login fails** | Ensure `http://localhost:5050/callback` is added as a redirect URI in your Discord Developer Portal |
 
 ---
 
 ## 📚 Resources
 
-- [Ultralytics YOLO Documentation](https://docs.ultralytics.com/)
-- [Roboflow Labeling Guide](https://docs.roboflow.com/)
-- [MediaPipe Hands](https://developers.google.com/mediapipe/solutions/vision/hand_landmarker)
+- [MediaPipe Hand Landmarker](https://developers.google.com/mediapipe/solutions/vision/hand_landmarker)
+- [Ultralytics YOLO Docs](https://docs.ultralytics.com/)
+- [Pygame Documentation](https://www.pygame.org/docs/)
+- [Next.js Documentation](https://nextjs.org/docs)
 
 ---
 
 ## 📄 License
 
-This project is provided as-is for educational purposes.
+This project is provided as-is for educational purposes. *Naruto* and all related characters are trademarks of Masashi Kishimoto / Shueisha / VIZ Media.

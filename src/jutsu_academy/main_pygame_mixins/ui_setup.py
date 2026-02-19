@@ -138,7 +138,7 @@ class UISetupMixin:
         
         self.practice_buttons = {
             "freeplay": Button(cx - 150, 250, 300, 60, "FREE PLAY"),
-            "challenge": Button(cx - 150, 330, 300, 60, "CHALLENGE"),
+            "challenge": Button(cx - 150, 330, 300, 60, "RANK MODE"),
             "library": Button(cx - 150, 410, 300, 60, "JUTSU LIBRARY", color=(58, 92, 162)),
             "multiplayer": Button(cx - 150, 490, 300, 60, "MULTIPLAYER (LOCKED)", color=(40, 40, 40)),
             "quests": Button(cx - 150, 570, 300, 50, "QUEST BOARD", color=(80, 140, 110)),

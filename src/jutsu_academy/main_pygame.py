@@ -6,7 +6,7 @@ A complete Pygame-based launcher and game for the Jutsu Trainer with:
 - Modern menu system
 - Settings with volume sliders
 - Camera selection
-- Practice mode (Free Play, Challenge)
+- Practice mode (Free Play, Rank Mode)
 - Particle effects and visual polish
 - Sound system
 

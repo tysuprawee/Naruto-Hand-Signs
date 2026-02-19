@@ -256,7 +256,7 @@ class PlayingMixin:
                 if d_id and avatar_hash:
                     avatar_url = f"https://cdn.discordapp.com/avatars/{d_id}/{avatar_hash}.png?size=64"
             
-            # 1. Submit using secure RPC when available (with fallback).
+            # 1. Submit using secure RPC (fail closed if unavailable).
             secure_metadata = {
                 "expected_signs": len(self.jutsu_list.get(jutsu_name, {}).get("sequence", [])),
                 "detected_signs": len([e for e in self.challenge_proof_events if e.get("type") == "sign_ok"]),
@@ -279,8 +279,10 @@ class PlayingMixin:
                 avatar_url=avatar_url,
             )
             self.challenge_submission_result = submit_res if isinstance(submit_res, dict) else {}
-            if isinstance(submit_res, dict) and (not submit_res.get("ok", True)):
-                reason = submit_res.get("reason", "validation_failed")
+            if (not isinstance(submit_res, dict)) or (not submit_res.get("ok", False)):
+                reason = "secure_submit_unavailable"
+                if isinstance(submit_res, dict):
+                    reason = submit_res.get("reason", reason)
                 self.challenge_rank_info = f"Submission rejected: {reason}"
                 self.challenge_submitting = False
                 self.submission_complete = True
@@ -306,9 +308,6 @@ class PlayingMixin:
                     self.challenge_rank_info = "Rank: Top 100+"
             else:
                  self.challenge_rank_info = "Rank: #1 (First Record!)"
-
-            if isinstance(submit_res, dict) and submit_res.get("fallback"):
-                self.challenge_rank_info = f"{self.challenge_rank_info} • legacy verify"
                  
         except Exception as e:
             print(f"[!] Submission Error: {e}")
@@ -492,27 +491,47 @@ class PlayingMixin:
                             seq_len = len(self.jutsu_list[jutsu_name]["sequence"])
                             bonus = seq_len * 10
                             total_xp = 50 + bonus # Base 50 + complexity bonus
+                            completion_res = self._record_jutsu_completion(
+                                xp_gain=total_xp,
+                                is_challenge=(self.game_mode == "challenge"),
+                                signs_landed=seq_len,
+                                jutsu_name=jutsu_name,
+                            )
+                            awarded_xp = int(total_xp)
+                            if isinstance(completion_res, dict) and completion_res.get("ok", False):
+                                self._warned_authoritative_progression_unavailable = False
+                                awarded_xp = int(completion_res.get("xp_awarded", total_xp) or 0)
+                                prev_level = int(completion_res.get("previous_level", self.progression.level))
+                                is_lv_up = bool(completion_res.get("leveled_up", False))
 
-                            prev_level = self.progression.level
-                            is_lv_up = self.progression.add_xp(total_xp)
-                            self.process_unlock_alerts(previous_level=prev_level)
+                                if is_lv_up:
+                                    self._notify_level_up(previous_level=prev_level, source_label="Jutsu Clear")
+                                else:
+                                    self.process_unlock_alerts(previous_level=prev_level)
 
-                            # Add XP popup (Centered on Camera feed)
-                            self.xp_popups.append({
-                                "text": f"+{total_xp} XP",
-                                "x": cam_x + new_w // 2,
-                                "y": cam_y + new_h // 2,
-                                "timer": 2.0,
-                                "color": COLORS["accent"]
-                            })
-                            if is_lv_up:
+                                # Add XP popup (Centered on Camera feed)
                                 self.xp_popups.append({
-                                    "text": f"RANK UP: {self.progression.rank}!",
+                                    "text": f"+{awarded_xp} XP",
                                     "x": cam_x + new_w // 2,
-                                    "y": cam_y + new_h // 2 + 40,
-                                    "timer": 3.0,
-                                    "color": COLORS["success"]
+                                    "y": cam_y + new_h // 2,
+                                    "timer": 2.0,
+                                    "color": COLORS["accent"]
                                 })
+                                if is_lv_up:
+                                    self.xp_popups.append({
+                                        "text": f"RANK UP: {self.progression.rank}!",
+                                        "x": cam_x + new_w // 2,
+                                        "y": cam_y + new_h // 2 + 40,
+                                        "timer": 3.0,
+                                        "color": COLORS["success"]
+                                    })
+                            elif self.username != "Guest":
+                                reason = "progression_unavailable"
+                                if isinstance(completion_res, dict):
+                                    reason = str(completion_res.get("reason", reason))
+                                if not getattr(self, "_warned_authoritative_progression_unavailable", False):
+                                    self.show_alert("Progression Sync", f"XP not awarded: {reason}")
+                                    self._warned_authoritative_progression_unavailable = True
 
                             # STOP TIMER if in challenge
                             if self.game_mode == "challenge":
@@ -524,8 +543,6 @@ class PlayingMixin:
                                 )
 
                             self._record_mastery_completion(jutsu_name, clear_time)
-                            self._record_jutsu_completion(total_xp, self.game_mode == "challenge")
-                            self._save_player_meta()
 
                             # For normal jutsu, fire completion payload here.
                             # Combo jutsus trigger payloads at configured checkpoints.

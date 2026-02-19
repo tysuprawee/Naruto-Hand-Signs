@@ -10,6 +10,9 @@ env/
 # Session files (contain OAuth tokens - NEVER COMMIT)
 user_session.json
 
+# Per-user calibration artifacts (local only)
+src/jutsu_academy/calibration/discord_*.json
+
 # Python cache
 __pycache__/
 *.py[cod]
