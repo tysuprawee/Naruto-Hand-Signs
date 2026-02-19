@@ -340,41 +340,136 @@ class AssetsMixin:
         else:
             pygame.mixer.music.set_volume(self._effective_music_volume(self.settings["music_vol"]))
 
-    def load_settings(self):
-        """Load settings from file."""
-        settings_path = Path("src/jutsu_academy/settings.json")
-        if settings_path.exists():
-            try:
-                with open(settings_path) as f:
-                    saved = json.load(f)
-                    had_legacy_keys = ("use_mediapipe_signs" in saved) or ("restricted_signs" in saved)
-                    # Keep only persisted user-editable keys.
-                    allowed_keys = {"music_vol", "sfx_vol", "camera_idx", "debug_hands", "resolution_idx", "fullscreen"}
-                    sanitized = {k: v for k, v in saved.items() if k in allowed_keys}
-                    self.settings.update(sanitized)
-                    if had_legacy_keys:
-                        with open(settings_path, "w") as out_f:
-                            json.dump(sanitized, out_f, indent=2)
-            except:
-                pass
-        # Runtime default detector.
+    def _default_persisted_settings(self):
+        return {
+            "music_vol": 0.5,
+            "sfx_vol": 0.7,
+            "camera_idx": 0,
+            "debug_hands": False,
+            "resolution_idx": 0,
+            "fullscreen": False,
+        }
+
+    def _sanitize_persisted_settings(self, raw):
+        base = self._default_persisted_settings()
+        if not isinstance(raw, dict):
+            return dict(base)
+
+        out = dict(base)
+        try:
+            out["music_vol"] = max(0.0, min(1.0, float(raw.get("music_vol", base["music_vol"]))))
+        except Exception:
+            pass
+        try:
+            out["sfx_vol"] = max(0.0, min(1.0, float(raw.get("sfx_vol", base["sfx_vol"]))))
+        except Exception:
+            pass
+        try:
+            out["camera_idx"] = max(0, int(raw.get("camera_idx", base["camera_idx"])))
+        except Exception:
+            pass
+        out["debug_hands"] = bool(raw.get("debug_hands", base["debug_hands"]))
+        try:
+            max_idx = max(0, len(RESOLUTION_OPTIONS) - 1)
+            out["resolution_idx"] = min(max_idx, max(0, int(raw.get("resolution_idx", base["resolution_idx"]))))
+        except Exception:
+            pass
+        out["fullscreen"] = bool(raw.get("fullscreen", base["fullscreen"]))
+        return out
+
+    def _persisted_settings_payload(self):
+        source = {
+            "music_vol": self.settings.get("music_vol", 0.5),
+            "sfx_vol": self.settings.get("sfx_vol", 0.7),
+            "camera_idx": self.settings.get("camera_idx", 0),
+            "debug_hands": self.settings.get("debug_hands", False),
+            "resolution_idx": self.settings.get("resolution_idx", 0),
+            "fullscreen": self.settings.get("fullscreen", False),
+        }
+        return self._sanitize_persisted_settings(source)
+
+    def _apply_runtime_setting_overrides(self):
+        # Runtime-only detector policy.
         self.settings["use_mediapipe_signs"] = False
         self.settings["restricted_signs"] = True
 
+    def load_settings(self):
+        """
+        Initialize settings from defaults only.
+        Logged-in users are loaded from cloud via load_settings_from_cloud().
+        """
+        persisted = self._sanitize_persisted_settings(self.settings if isinstance(getattr(self, "settings", None), dict) else {})
+        self.settings.update(persisted)
+        self._apply_runtime_setting_overrides()
+
+    def load_settings_from_cloud(self, apply_runtime=True):
+        """Best-effort cloud sync of persisted user settings for authenticated users."""
+        if getattr(self, "username", "Guest") == "Guest":
+            return {"ok": False, "reason": "guest"}
+        nm = getattr(self, "network_manager", None)
+        if (not nm) or (not nm.client):
+            return {"ok": False, "reason": "offline"}
+
+        discord_id = ""
+        if hasattr(self, "_active_discord_id"):
+            discord_id = str(self._active_discord_id() or "")
+        if not discord_id and isinstance(getattr(self, "discord_user", None), dict):
+            discord_id = str(self.discord_user.get("id") or "")
+
+        res = nm.get_profile_settings_authoritative(
+            username=str(self.username or ""),
+            discord_id=discord_id,
+        )
+        if not isinstance(res, dict) or (not res.get("ok", False)):
+            return res if isinstance(res, dict) else {"ok": False, "reason": "settings_unavailable"}
+
+        cloud_settings = self._sanitize_persisted_settings(res.get("settings", {}))
+        self.settings.update(cloud_settings)
+        self._apply_runtime_setting_overrides()
+
+        if not apply_runtime:
+            return {"ok": True}
+
+        res_idx = int(self.settings.get("resolution_idx", 0) or 0)
+        if 0 <= res_idx < len(RESOLUTION_OPTIONS):
+            _, rw, rh = RESOLUTION_OPTIONS[res_idx]
+        else:
+            _, rw, rh = RESOLUTION_OPTIONS[0]
+            self.settings["resolution_idx"] = 0
+        self.screen_w = rw
+        self.screen_h = rh
+        self.fullscreen = bool(self.settings.get("fullscreen", False))
+        if hasattr(self, "_apply_display_mode"):
+            self._apply_display_mode()
+        if (not getattr(self, "is_muted", False)) and pygame.mixer.get_init():
+            pygame.mixer.music.set_volume(self._effective_music_volume(self.settings.get("music_vol", 0.5)))
+        return {"ok": True}
+
     def save_settings(self):
-        """Save settings to file."""
-        settings_path = Path("src/jutsu_academy/settings.json")
-        try:
-            settings_path.parent.mkdir(exist_ok=True)
-            with open(settings_path, "w") as f:
-                persisted = {
-                    "music_vol": self.settings.get("music_vol", 0.5),
-                    "sfx_vol": self.settings.get("sfx_vol", 0.7),
-                    "camera_idx": self.settings.get("camera_idx", 0),
-                    "debug_hands": self.settings.get("debug_hands", False),
-                    "resolution_idx": self.settings.get("resolution_idx", 0),
-                    "fullscreen": self.settings.get("fullscreen", False),
-                }
-                json.dump(persisted, f, indent=2)
-        except:
-            pass
+        """Persist settings to cloud only (no local settings file)."""
+        persisted = self._persisted_settings_payload()
+        self.settings.update(persisted)
+        self._apply_runtime_setting_overrides()
+
+        if getattr(self, "username", "Guest") == "Guest":
+            return {"ok": True, "reason": "guest_no_persist"}
+        nm = getattr(self, "network_manager", None)
+        if (not nm) or (not nm.client):
+            return {"ok": False, "reason": "offline"}
+
+        discord_id = ""
+        if hasattr(self, "_active_discord_id"):
+            discord_id = str(self._active_discord_id() or "")
+        if not discord_id and isinstance(getattr(self, "discord_user", None), dict):
+            discord_id = str(self.discord_user.get("id") or "")
+
+        res = nm.upsert_profile_settings_authoritative(
+            username=str(self.username or ""),
+            user_settings=persisted,
+            discord_id=discord_id,
+        )
+        if isinstance(res, dict) and res.get("ok", False):
+            return res
+        reason = res.get("reason", "settings_sync_failed") if isinstance(res, dict) else "settings_sync_failed"
+        print(f"[!] Settings cloud sync failed: {reason}")
+        return res if isinstance(res, dict) else {"ok": False, "reason": reason}

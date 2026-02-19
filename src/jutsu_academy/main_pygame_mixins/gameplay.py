@@ -6,20 +6,47 @@ class GameplayMixin:
     def _clamp(self, value, low, high):
         return max(float(low), min(float(high), float(value)))
 
+    def _normalize_sign_token(self, sign_name):
+        token = str(sign_name or "").strip().lower()
+        if not token:
+            return ""
+        token = token.replace("-", " ").replace("_", " ")
+        token = " ".join(token.split())
+        aliases = {
+            "none": "idle",
+            "unknown": "idle",
+            "rabbit": "hare",
+            "pig": "boar",
+            "sheep": "ram",
+            "bull": "ox",
+            "hand clap": "clap",
+            "hands clap": "clap",
+            "handclap": "clap",
+            "clap hands": "clap",
+        }
+        return aliases.get(token, token)
+
+    def _signs_match(self, detected_sign, target_sign):
+        target = self._normalize_sign_token(target_sign)
+        if (not target) or target == "idle":
+            return False
+
+        detected = self._normalize_sign_token(detected_sign)
+        if detected == target:
+            return True
+
+        # Fallback for cases where temporal vote lags but raw detector is already stable.
+        raw = self._normalize_sign_token(getattr(self, "raw_detected_sign", ""))
+        if raw != target:
+            return False
+        raw_conf = float(getattr(self, "raw_detected_confidence", 0.0) or 0.0)
+        min_conf = max(0.30, float(getattr(self, "vote_min_confidence", 0.45)) - 0.10)
+        return raw_conf >= min_conf
+
     def _calibration_identity(self):
         if self.discord_user and self.discord_user.get("id"):
-            base = f"discord_{self.discord_user.get('id')}"
-        else:
-            base = (self.username or "guest").strip().lower()
-        safe = "".join(ch if ch.isalnum() else "_" for ch in base).strip("_")
-        while "__" in safe:
-            safe = safe.replace("__", "_")
-        return safe or "guest"
-
-    def _calibration_profile_path(self):
-        root = Path("src/jutsu_academy/calibration")
-        root.mkdir(parents=True, exist_ok=True)
-        return root / f"{self._calibration_identity()}.json"
+            return f"discord:{self.discord_user.get('id')}"
+        return f"user:{(self.username or 'guest').strip().lower()}"
 
     def _reset_detection_filters(self):
         self.raw_detected_sign = "idle"
@@ -54,6 +81,7 @@ class GameplayMixin:
         self.combo_rasengan_triple = False
         self.pending_sounds = []
         self.pending_effects = []
+        self.post_effect_alerts = []
         self.current_video = None
         if self.video_cap:
             self.video_cap.release()
@@ -98,35 +126,49 @@ class GameplayMixin:
 
         self.calibration_loaded_for = identity
         self.calibration_profile = {}
+        self._apply_calibration_values({})
 
-        path = self._calibration_profile_path()
-        if not path.exists():
-            self._apply_calibration_values({})
-            self.calibration_message = "No calibration profile found. Auto-calibration started."
-            self.calibration_message_until = time.time() + 6.0
+        if self.username == "Guest":
+            return
+        if not self.network_manager or not self.network_manager.client:
+            return
+        if not self.discord_user or not self.discord_user.get("id"):
             return
 
         try:
-            with open(path, "r") as f:
-                profile = json.load(f)
-            if isinstance(profile, dict):
-                self.calibration_profile = profile
-                self._apply_calibration_values(profile)
-                self.calibration_message = "Calibration profile loaded."
-                self.calibration_message_until = time.time() + 4.0
-            else:
-                self._apply_calibration_values({})
+            res = self.network_manager.get_calibration_profile_authoritative(
+                username=self.username,
+                discord_id=str(self.discord_user.get("id") or ""),
+            )
+            if isinstance(res, dict) and res.get("ok", False):
+                profile = res.get("calibration_profile")
+                if isinstance(profile, dict) and profile:
+                    self.calibration_profile = profile
+                    self._apply_calibration_values(profile)
+                    self.calibration_message = "Calibration profile loaded."
+                    self.calibration_message_until = time.time() + 4.0
         except Exception as e:
             print(f"[!] Calibration profile load failed: {e}")
-            self._apply_calibration_values({})
 
     def _save_calibration_profile(self, profile):
+        if not isinstance(profile, dict):
+            return False
+        if self.username == "Guest":
+            return False
+        if not self.network_manager or not self.network_manager.client:
+            return False
+        if not self.discord_user or not self.discord_user.get("id"):
+            return False
         try:
-            path = self._calibration_profile_path()
-            with open(path, "w") as f:
-                json.dump(profile, f, indent=2)
+            res = self.network_manager.upsert_calibration_profile_authoritative(
+                username=self.username,
+                calibration_profile=profile,
+                discord_id=str(self.discord_user.get("id") or ""),
+            )
+            return bool(isinstance(res, dict) and res.get("ok", False))
         except Exception as e:
             print(f"[!] Calibration profile save failed: {e}")
+            return False
 
     def start_calibration(self, manual=True):
         self.calibration_active = True
@@ -221,11 +263,11 @@ class GameplayMixin:
 
         self.calibration_profile = profile
         self._apply_calibration_values(profile)
-        self._save_calibration_profile(profile)
+        saved = self._save_calibration_profile(profile)
 
         self.calibration_active = False
         self.calibration_samples = []
-        self.calibration_message = "Calibration saved."
+        self.calibration_message = "Calibration synced." if saved else "Calibration updated for this session."
         self.calibration_message_until = time.time() + 5.0
 
     def _apply_temporal_vote(self, raw_sign, raw_conf, allow_detection):
@@ -359,7 +401,7 @@ class GameplayMixin:
         self.combo_triggered_steps = set()
         self._reset_active_effects(reset_calibration=True)
         self._load_calibration_profile()
-        if not self.calibration_profile:
+        if (self.username != "Guest") and (not self.calibration_profile):
             self.start_calibration(manual=False)
 
         # Challenge Mode Init
@@ -572,16 +614,26 @@ class GameplayMixin:
                     target_scale = chosen["scale"]
                     self.tracked_hand_label = chosen["label"] if chosen["label"] != "Unknown" else self.tracked_hand_label
 
-                    # Jitter filter (no smoothing/lag): ignore micro-movements only.
+                    # Jitter filter first: ignore micro-movements.
                     if self.hand_pos is not None:
                         prev_x, prev_y = self.hand_pos
                         jitter_px = 9.0
                         if (target_x - prev_x) ** 2 + (target_y - prev_y) ** 2 < (jitter_px ** 2):
                             target_x, target_y = prev_x, prev_y
 
-                    # Follow selected hand directly for meaningful movement.
+                    # Keep both raw and smoothed anchors:
+                    # - raw hand_pos for tracking continuity
+                    # - smooth_hand_pos for effect rendering stability
                     self.hand_pos = (target_x, target_y)
-                    self.smooth_hand_pos = self.hand_pos
+                    if self.smooth_hand_pos is None:
+                        self.smooth_hand_pos = self.hand_pos
+                    else:
+                        sx, sy = self.smooth_hand_pos
+                        alpha_pos = 0.28
+                        self.smooth_hand_pos = (
+                            sx + (target_x - sx) * alpha_pos,
+                            sy + (target_y - sy) * alpha_pos,
+                        )
                 if self.smooth_hand_effect_scale is None:
                     self.smooth_hand_effect_scale = target_scale
                 else:

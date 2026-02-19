@@ -595,7 +595,7 @@ class RuntimeMixin:
                 self.play_sound("click")
                 return
             if mouse_click and hasattr(self, "diag_toggle_rect") and self.diag_toggle_rect.collidepoint(mouse_pos):
-                self.show_detection_panel = not bool(getattr(self, "show_detection_panel", True))
+                self.show_detection_panel = not bool(getattr(self, "show_detection_panel", False))
                 self.play_sound("click")
                 return
             if hasattr(self, "playing_back_button"):

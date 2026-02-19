@@ -3,9 +3,28 @@ import datetime
 
 
 class CoreMixin:
+    def _active_discord_id(self):
+        user = getattr(self, "discord_user", None)
+        if isinstance(user, dict):
+            return str(user.get("id") or "").strip()
+        return ""
+
+    def _sync_network_identity(self):
+        nm = getattr(self, "network_manager", None)
+        if not nm:
+            return
+        try:
+            nm.set_active_identity(
+                username=str(getattr(self, "username", "") or ""),
+                discord_id=self._active_discord_id(),
+            )
+        except Exception:
+            pass
+
     def _is_authoritative_competitive_user(self):
         return bool(
             self.username != "Guest"
+            and self._active_discord_id()
             and self.network_manager
             and self.network_manager.client
         )
@@ -86,7 +105,10 @@ class CoreMixin:
 
         self._quest_sync_inflight = True
         try:
-            res = self.network_manager.get_competitive_state_authoritative(self.username)
+            res = self.network_manager.get_competitive_state_authoritative(
+                self.username,
+                discord_id=self._active_discord_id(),
+            )
             if isinstance(res, dict) and res.get("ok", False):
                 self._apply_competitive_state(res)
                 self._quest_state_last_sync_at = now
@@ -95,6 +117,60 @@ class CoreMixin:
             return res if isinstance(res, dict) else {"ok": False, "reason": "state_unavailable"}
         finally:
             self._quest_sync_inflight = False
+
+    def _queue_post_effect_alert(self, alert_type, payload=None, min_delay_s=0.45, wait_for_effect_end=True):
+        """Queue an alert to appear after jutsu effect playback (plus optional delay)."""
+        if not hasattr(self, "post_effect_alerts") or self.post_effect_alerts is None:
+            self.post_effect_alerts = []
+        now = time.time()
+        base = now
+        if getattr(self, "jutsu_active", False):
+            if wait_for_effect_end:
+                jutsu_start = float(getattr(self, "jutsu_start_time", now) or now)
+                jutsu_duration = float(getattr(self, "jutsu_duration", 0.0) or 0.0)
+                base = max(base, jutsu_start + max(0.0, jutsu_duration))
+            else:
+                base = max(base, float(getattr(self, "jutsu_start_time", now) or now))
+        self.post_effect_alerts.append({
+            "type": str(alert_type),
+            "payload": payload if isinstance(payload, dict) else {},
+            "ready_at": float(base + max(0.0, float(min_delay_s))),
+            "wait_for_effect_end": bool(wait_for_effect_end),
+        })
+
+    def _dispatch_post_effect_alerts(self):
+        """Dispatch due post-effect alerts into the modal alert queue."""
+        queue = getattr(self, "post_effect_alerts", None)
+        if not queue:
+            return
+
+        now = time.time()
+        remaining = []
+        for item in queue:
+            ready_at = float(item.get("ready_at", now))
+            if bool(item.get("wait_for_effect_end", False)) and bool(getattr(self, "jutsu_active", False)):
+                remaining.append(item)
+                continue
+            if now < ready_at:
+                remaining.append(item)
+                continue
+
+            kind = str(item.get("type", "") or "")
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            if kind == "level_up":
+                prev = int(payload.get("previous_level", self.progression.level))
+                source = str(payload.get("source_label", ""))
+                self._notify_level_up(previous_level=prev, source_label=source)
+            elif kind == "mastery":
+                self._notify_mastery_update(
+                    jutsu_name=str(payload.get("jutsu_name", "")),
+                    mastery_info=payload.get("mastery_info"),
+                )
+            elif kind == "unlocks":
+                prev = int(payload.get("previous_level", self.progression.level))
+                self.process_unlock_alerts(previous_level=prev)
+
+        self.post_effect_alerts = remaining
 
     def _reset_daily_quests(self):
         self.quest_state["daily"] = {
@@ -155,6 +231,7 @@ class CoreMixin:
                 signs_landed=int(max(0, signs_landed)),
                 is_challenge=bool(is_challenge),
                 mode=str(jutsu_name).upper(),
+                discord_id=self._active_discord_id(),
             )
             if not isinstance(res, dict) or (not res.get("ok", False)):
                 return {
@@ -215,12 +292,31 @@ class CoreMixin:
                     username=self.username,
                     scope=scope,
                     quest_id=quest_id,
+                    discord_id=self._active_discord_id(),
                 )
                 if not isinstance(res, dict) or (not res.get("ok", False)):
                     reason = "claim_rejected"
+                    detail = ""
+                    rpc_name = "claim_quest_authoritative"
                     if isinstance(res, dict):
                         reason = str(res.get("reason", reason))
-                    self.show_alert("Quest Reward", f"Claim failed: {reason}")
+                        detail = str(res.get("detail", "") or "")
+                        rpc_name = str(res.get("rpc", rpc_name) or rpc_name)
+
+                    if reason in {"rpc_missing", "rpc_unavailable", "rpc_forbidden"}:
+                        self.show_alert(
+                            "Quest Reward",
+                            "Claim service unavailable.\n"
+                            "Deploy server RPCs via sql/competitive_state_rpcs.sql, then retry.",
+                        )
+                    elif reason in {"rpc_timeout", "offline"}:
+                        self.show_alert("Quest Reward", "Server timeout/offline. Please retry in a moment.")
+                    else:
+                        msg = f"Claim failed: {reason}"
+                        if detail:
+                            msg += f"\n{detail}"
+                        self.show_alert("Quest Reward", msg)
+                    print(f"[!] Quest claim failed ({rpc_name}): reason={reason} detail={detail}")
                     return False
 
                 applied = self._apply_competitive_state(res)
@@ -289,25 +385,153 @@ class CoreMixin:
 
     def _record_mastery_completion(self, jutsu_name, clear_time):
         if clear_time is None or clear_time <= 0:
-            return
+            return {"improved": False}
+        thresholds = self._mastery_thresholds(jutsu_name)
         row = self.mastery_data.setdefault(jutsu_name, {})
         best = row.get("best_time")
+        prev_tier = self._get_mastery_tier(jutsu_name)
         if best is None or clear_time < best:
             row["best_time"] = float(clear_time)
             self._save_player_meta()
+            new_tier = self._get_mastery_tier(jutsu_name)
+            return {
+                "improved": True,
+                "first_record": best is None,
+                "previous_best": float(best) if best is not None else None,
+                "new_best": float(clear_time),
+                "previous_tier": str(prev_tier),
+                "new_tier": str(new_tier),
+                "thresholds": thresholds,
+            }
+        return {
+            "improved": False,
+            "first_record": False,
+            "previous_best": float(best) if best is not None else None,
+            "new_best": float(best) if best is not None else None,
+            "previous_tier": str(prev_tier),
+            "new_tier": str(prev_tier),
+            "thresholds": thresholds,
+        }
+
+    def _player_meta_file_path(self):
+        safe_name = "".join(ch for ch in str(self.username or "Guest") if ch.isalnum())
+        if not safe_name:
+            safe_name = "Guest"
+        return Path(f"user_meta_{safe_name}.json")
+
+    def _load_player_meta_local(self):
+        path = self._player_meta_file_path()
+        if not path.exists():
+            return {}
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
+    def _save_player_meta_local(self):
+        path = self._player_meta_file_path()
+        payload = {
+            "tutorial_seen": bool(getattr(self, "tutorial_seen", False)),
+            "tutorial_seen_at": getattr(self, "tutorial_seen_at", None),
+            "tutorial_version": str(getattr(self, "tutorial_version", "1.0") or "1.0"),
+            "mastery": self.mastery_data if isinstance(getattr(self, "mastery_data", None), dict) else {},
+        }
+        try:
+            with open(path, "w") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            print(f"[!] Local player meta save failed: {e}")
+
+    def _clear_player_meta_local(self):
+        path = self._player_meta_file_path()
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _normalize_mastery_map(self, raw_mastery):
+        """Sanitize mastery payload into {jutsu_name: {best_time: float}}."""
+        if not isinstance(raw_mastery, dict):
+            return {}
+        out = {}
+        for raw_name, raw_row in raw_mastery.items():
+            name = str(raw_name or "").strip()
+            if not name:
+                continue
+            best = None
+            if isinstance(raw_row, dict):
+                best = raw_row.get("best_time")
+            elif isinstance(raw_row, (int, float)):
+                best = raw_row
+            if best is None:
+                continue
+            try:
+                best_f = float(best)
+            except Exception:
+                continue
+            if best_f <= 0:
+                continue
+            out[name] = {"best_time": best_f}
+        return out
+
+    def _merge_mastery_maps(self, local_mastery, cloud_mastery):
+        """Merge local + cloud mastery, keeping better (lower) best_time per jutsu."""
+        merged = {}
+        local_norm = self._normalize_mastery_map(local_mastery)
+        cloud_norm = self._normalize_mastery_map(cloud_mastery)
+        all_names = set(local_norm.keys()) | set(cloud_norm.keys())
+        for name in all_names:
+            local_best = local_norm.get(name, {}).get("best_time")
+            cloud_best = cloud_norm.get(name, {}).get("best_time")
+            if local_best is None and cloud_best is None:
+                continue
+            if local_best is None:
+                best = float(cloud_best)
+            elif cloud_best is None:
+                best = float(local_best)
+            else:
+                best = float(min(local_best, cloud_best))
+            if best > 0:
+                merged[name] = {"best_time": best}
+        return merged
 
     def _load_player_meta(self):
-        # Local file persistence removed: meta stays in-memory for this session.
+        # Guest uses local meta. Logged-in users are cloud-authoritative only.
         self.tutorial_seen = False
         self.tutorial_seen_at = None
         self.tutorial_version = "1.0"
         self._profile_meta_cloud_sync_enabled = True
         self.mastery_data = {}
         self.quest_state = self._default_quest_state()
-        # Best effort: sync profile meta from cloud for logged-in users.
-        if self.username != "Guest" and self.network_manager and self.network_manager.client:
+
+        if self.username == "Guest":
+            local_meta = self._load_player_meta_local()
+            if isinstance(local_meta, dict) and local_meta:
+                if bool(local_meta.get("tutorial_seen", False)):
+                    self.tutorial_seen = True
+                local_seen_at = local_meta.get("tutorial_seen_at")
+                if local_seen_at:
+                    self.tutorial_seen_at = local_seen_at
+                local_ver = local_meta.get("tutorial_version")
+                if local_ver:
+                    self.tutorial_version = str(local_ver)
+                self.mastery_data = self._normalize_mastery_map(local_meta.get("mastery"))
+            self._refresh_quest_periods()
+            return
+
+        # Logged-in users do not trust local file; purge stale local meta cache.
+        self._clear_player_meta_local()
+
+        if self.network_manager and self.network_manager.client:
             try:
-                profile = self.network_manager.get_profile(self.username)
+                profile = self.network_manager.get_profile(
+                    self.username,
+                    discord_id=self._active_discord_id(),
+                )
                 if isinstance(profile, dict) and profile:
                     cloud_seen = bool(profile.get("tutorial_seen", False))
                     cloud_seen_at = profile.get("tutorial_seen_at")
@@ -318,11 +542,10 @@ class CoreMixin:
                         self.tutorial_seen_at = cloud_seen_at
                     if cloud_ver:
                         self.tutorial_version = str(cloud_ver)
-                    cloud_mastery = profile.get("mastery")
-                    if isinstance(cloud_mastery, dict):
-                        self.mastery_data = dict(cloud_mastery)
+                    self.mastery_data = self._normalize_mastery_map(profile.get("mastery"))
             except Exception:
                 pass
+
         if self._is_authoritative_competitive_user():
             # Pull quests/progression from authoritative server source.
             self._sync_competitive_state(force=True)
@@ -334,6 +557,8 @@ class CoreMixin:
             return
         if self.username == "Guest":
             return
+        if not self._active_discord_id():
+            return
         if not self.network_manager or not self.network_manager.client:
             return
         try:
@@ -343,6 +568,7 @@ class CoreMixin:
                 tutorial_seen_at=self.tutorial_seen_at,
                 tutorial_version=self.tutorial_version,
                 mastery=self.mastery_data if isinstance(self.mastery_data, dict) else {},
+                discord_id=self._active_discord_id(),
             )
         except Exception as e:
             # If schema isn't migrated yet, avoid repeated noisy attempts.
@@ -350,7 +576,11 @@ class CoreMixin:
             print(f"[!] Profile meta cloud sync disabled: {e}")
 
     def _save_player_meta(self):
-        # Persist only to cloud where available. Guest meta is session-only.
+        if self.username == "Guest":
+            self._save_player_meta_local()
+            return
+        # Logged-in users stay cloud-authoritative; avoid trust-on-local meta cache.
+        self._clear_player_meta_local()
         self._sync_profile_meta_to_cloud()
 
     def __init__(self):
@@ -463,6 +693,19 @@ class CoreMixin:
         
         # Network & Leaderboard
         self.network_manager = NetworkManager()
+        self._sync_network_identity()
+        if self.username != "Guest" and self.network_manager.client:
+            try:
+                self.network_manager.ensure_profile_identity_bound(
+                    username=self.username,
+                    discord_id=self._active_discord_id(),
+                )
+            except Exception:
+                pass
+            try:
+                self.load_settings_from_cloud(apply_runtime=True)
+            except Exception:
+                pass
         self.leaderboard_data = []
         self.leaderboard_loading = False
         self.leaderboard_avatars = {} # Cache for rounded surfaces
@@ -484,6 +727,7 @@ class CoreMixin:
         self.alert_queue = []
         self.active_alert = None
         self.alert_ok_rect = pygame.Rect(0, 0, 0, 0)
+        self.post_effect_alerts = []
         
         # Announcements
         self.announcements = []
@@ -581,7 +825,7 @@ class CoreMixin:
         self.vote_required_hits = 2
         self.vote_min_confidence = 0.45
         self.vote_entry_ttl_s = 0.7
-        self.show_detection_panel = True
+        self.show_detection_panel = False
         self.model_toggle_rect = pygame.Rect(0, 0, 0, 0)
         self.diag_toggle_rect = pygame.Rect(0, 0, 0, 0)
 
@@ -766,12 +1010,13 @@ class CoreMixin:
 
         self._rebuild_ui_for_screen_size()
 
-    def show_alert(self, title, message, button_text="OK"):
+    def show_alert(self, title, message, button_text="OK", alert_sound=None):
         """Queue a reusable alert modal."""
         self.alert_queue.append({
             "title": str(title),
             "message": str(message),
             "button_text": str(button_text),
+            "sound": str(alert_sound or "").strip(),
         })
 
     def process_unlock_alerts(self, previous_level=None, queue_alerts=True):
@@ -816,7 +1061,6 @@ class CoreMixin:
         if current_level <= int(previous_level):
             return []
 
-        self.play_sound("level")
         newly_unlocked = self.process_unlock_alerts(previous_level=previous_level, queue_alerts=False)
 
         source_prefix = f"{source_label}: " if source_label else ""
@@ -830,10 +1074,67 @@ class CoreMixin:
                     preview += f" +{len(newly_unlocked) - 3} more"
                 msg += f" New skills unlocked: {preview}."
 
-        self.show_alert("Level Up", msg, "AWESOME")
+        self.show_alert("Level Up", msg, "AWESOME", alert_sound="level")
         return newly_unlocked
+
+    def _notify_mastery_update(self, jutsu_name, mastery_info):
+        """Queue mastery feedback panel with target times for each mastery tier."""
+        if not jutsu_name:
+            return False
+        if not isinstance(mastery_info, dict):
+            return False
+        if not mastery_info.get("improved", False):
+            return False
+
+        prev_tier = str(mastery_info.get("previous_tier", "none") or "none")
+        new_tier = str(mastery_info.get("new_tier", "none") or "none")
+        first_record = bool(mastery_info.get("first_record", False))
+
+        # Keep the popup meaningful and avoid noisy spam for tiny best-time changes in same tier.
+        if (not first_record) and (new_tier == prev_tier):
+            return False
+
+        thresholds = mastery_info.get("thresholds")
+        if not isinstance(thresholds, dict):
+            thresholds = self._mastery_thresholds(jutsu_name)
+
+        bronze_t = float(thresholds.get("bronze", 0.0) or 0.0)
+        silver_t = float(thresholds.get("silver", 0.0) or 0.0)
+        gold_t = float(thresholds.get("gold", 0.0) or 0.0)
+        new_best = float(mastery_info.get("new_best", 0.0) or 0.0)
+
+        prev_name = prev_tier.upper()
+        new_name = new_tier.upper()
+        if first_record and prev_tier == "none" and new_tier == "none":
+            tier_line = "Mastery: NONE (first clear recorded)"
+        else:
+            tier_line = f"Mastery: {prev_name} -> {new_name}"
+
+        next_line = ""
+        if new_tier == "none":
+            next_line = f"Next target: BRONZE <= {bronze_t:.2f}s"
+        elif new_tier == "bronze":
+            next_line = f"Next target: SILVER <= {silver_t:.2f}s"
+        elif new_tier == "silver":
+            next_line = f"Next target: GOLD <= {gold_t:.2f}s"
+        else:
+            next_line = "Max mastery reached."
+
+        msg = (
+            f"{jutsu_name} new best: {new_best:.2f}s\n"
+            f"{tier_line}\n"
+            f"Target times:\n"
+            f"Bronze <= {bronze_t:.2f}s, Silver <= {silver_t:.2f}s\n"
+            f"Gold <= {gold_t:.2f}s\n"
+            f"{next_line}"
+        )
+        self.show_alert("Mastery Update", msg, "NICE", alert_sound="level")
+        return True
 
     def _activate_next_alert(self):
         """Activate next queued alert if none is currently shown."""
         if self.active_alert is None and self.alert_queue:
             self.active_alert = self.alert_queue.pop(0)
+            sound_name = str(self.active_alert.get("sound", "") or "").strip()
+            if sound_name:
+                self.play_sound(sound_name)

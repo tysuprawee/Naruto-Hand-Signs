@@ -1684,44 +1684,88 @@ class RenderingMixin:
         message_text = self.active_alert.get("message", "")
         button_text = self.active_alert.get("button_text", "OK")
 
+        def _wrap_line(raw_text, font, max_width):
+            words = str(raw_text or "").split()
+            if not words:
+                return [""]
+            out = []
+            current = words[0]
+            for word in words[1:]:
+                test = f"{current} {word}"
+                if font.size(test)[0] <= max_width:
+                    current = test
+                else:
+                    out.append(current)
+                    current = word
+            out.append(current)
+            return out
+
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 210))
+        overlay.fill((0, 0, 0, 220))
         self.screen.blit(overlay, (0, 0))
 
-        modal_w, modal_h = 560, 280
+        modal_w = max(520, min(760, SCREEN_WIDTH - 80))
+        text_max_w = modal_w - 110
+        paragraphs = str(message_text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        wrapped_lines = []
+        for para in paragraphs:
+            if not para.strip():
+                if wrapped_lines and wrapped_lines[-1] != "":
+                    wrapped_lines.append("")
+                continue
+            wrapped_lines.extend(_wrap_line(para.strip(), self.fonts["body_sm"], text_max_w))
+        if not wrapped_lines:
+            wrapped_lines = [""]
+
+        max_lines = 10
+        if len(wrapped_lines) > max_lines:
+            wrapped_lines = wrapped_lines[: max_lines - 1] + ["..."]
+
+        line_h = 30
+        msg_h = max(1, len(wrapped_lines)) * line_h
+        modal_h = max(300, min(SCREEN_HEIGHT - 100, 210 + msg_h))
         modal_x = (SCREEN_WIDTH - modal_w) // 2
         modal_y = (SCREEN_HEIGHT - modal_h) // 2
         modal_rect = pygame.Rect(modal_x, modal_y, modal_w, modal_h)
 
-        pygame.draw.rect(self.screen, COLORS["bg_panel"], modal_rect, border_radius=16)
-        pygame.draw.rect(self.screen, COLORS["accent"], modal_rect, 2, border_radius=16)
+        shadow_rect = modal_rect.move(0, 8)
+        shadow = pygame.Surface((shadow_rect.w, shadow_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 120), shadow.get_rect(), border_radius=20)
+        self.screen.blit(shadow, shadow_rect.topleft)
+
+        pygame.draw.rect(self.screen, (18, 22, 40), modal_rect, border_radius=20)
+        pygame.draw.rect(self.screen, COLORS["accent"], modal_rect, 2, border_radius=20)
+        inner = modal_rect.inflate(-14, -14)
+        pygame.draw.rect(self.screen, COLORS["bg_panel"], inner, border_radius=16)
+
+        header = pygame.Surface((inner.w, 72), pygame.SRCALPHA)
+        pygame.draw.rect(header, (255, 140, 64, 28), header.get_rect(), border_radius=16)
+        self.screen.blit(header, inner.topleft)
 
         title = self.fonts["title_sm"].render(title_text, True, COLORS["accent_glow"])
-        self.screen.blit(title, title.get_rect(center=(modal_rect.centerx, modal_rect.y + 48)))
+        self.screen.blit(title, title.get_rect(center=(modal_rect.centerx, modal_rect.y + 50)))
 
-        words = message_text.split(" ")
-        lines = []
-        line = []
-        for word in words:
-            test = " ".join(line + [word])
-            if self.fonts["body_sm"].size(test)[0] < modal_w - 60:
-                line.append(word)
-            else:
-                lines.append(" ".join(line))
-                line = [word]
-        if line:
-            lines.append(" ".join(line))
+        content_x = inner.x + 40
+        content_y = inner.y + 92
+        max_visible_lines = max(1, (modal_h - 192) // line_h)
+        show_lines = wrapped_lines[:max_visible_lines]
+        if len(wrapped_lines) > max_visible_lines and show_lines:
+            show_lines[-1] = "..."
 
-        start_y = modal_rect.y + 98
-        for i, msg_line in enumerate(lines[:4]):
+        for i, msg_line in enumerate(show_lines):
+            if not msg_line:
+                continue
             msg = self.fonts["body_sm"].render(msg_line, True, COLORS["text"])
-            self.screen.blit(msg, msg.get_rect(center=(modal_rect.centerx, start_y + i * 28)))
+            self.screen.blit(msg, (content_x, content_y + i * line_h))
 
-        btn_w, btn_h = 180, 52
-        self.alert_ok_rect = pygame.Rect(modal_rect.centerx - btn_w // 2, modal_rect.bottom - 78, btn_w, btn_h)
+        btn_w, btn_h = 220, 56
+        self.alert_ok_rect = pygame.Rect(modal_rect.centerx - btn_w // 2, modal_rect.bottom - 82, btn_w, btn_h)
         hovered = self.alert_ok_rect.collidepoint(pygame.mouse.get_pos())
         color = COLORS["accent_glow"] if hovered else COLORS["accent"]
+        btn_shadow = self.alert_ok_rect.move(0, 4)
+        pygame.draw.rect(self.screen, (0, 0, 0, 110), btn_shadow, border_radius=12)
         pygame.draw.rect(self.screen, color, self.alert_ok_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (255, 255, 255, 35), self.alert_ok_rect, 1, border_radius=10)
 
         ok_text = self.fonts["body"].render(button_text, True, COLORS["text"])
         self.screen.blit(ok_text, ok_text.get_rect(center=self.alert_ok_rect.center))

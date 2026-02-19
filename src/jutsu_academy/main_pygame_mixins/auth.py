@@ -14,6 +14,8 @@ class AuthMixin:
                     
                     if self.discord_user:
                         print(f"[+] Loaded session: {self.username}")
+                        if hasattr(self, "_sync_network_identity"):
+                            self._sync_network_identity()
                         # Load avatar and refresh token in background
                         threading.Thread(target=self._load_discord_avatar, daemon=True).start()
                         threading.Thread(target=self._refresh_discord_token, daemon=True).start()
@@ -240,9 +242,24 @@ class AuthMixin:
             if user:
                 self.discord_user = user
                 self.username = user.get("username", "User")
+                if hasattr(self, "_sync_network_identity"):
+                    self._sync_network_identity()
+                if getattr(self, "network_manager", None):
+                    try:
+                        self.network_manager.ensure_profile_identity_bound(
+                            username=self.username,
+                            discord_id=str(user.get("id") or ""),
+                        )
+                    except Exception:
+                        pass
                 self.progression = ProgressionManager(self.username, network_manager=self.network_manager) # Reload for new user
                 self._quest_state_last_sync_at = 0.0
                 self._quest_sync_inflight = False
+                if hasattr(self, "load_settings_from_cloud"):
+                    try:
+                        self.load_settings_from_cloud(apply_runtime=True)
+                    except Exception:
+                        pass
                 self._load_player_meta()
                 self._save_user_session()
                 self._save_user_session()
@@ -280,6 +297,8 @@ class AuthMixin:
         self.discord_user = None
         self.username = "Guest"
         self.username = "Guest"
+        if hasattr(self, "_sync_network_identity"):
+            self._sync_network_identity()
         self.progression = ProgressionManager(self.username, network_manager=self.network_manager) # Reset to guest progress
         self._quest_state_last_sync_at = 0.0
         self._quest_sync_inflight = False

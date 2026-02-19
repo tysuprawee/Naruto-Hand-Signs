@@ -31,10 +31,14 @@ class PlayingMixin:
         )
         try:
             if self.network_manager:
+                d_id = None
+                if isinstance(getattr(self, "discord_user", None), dict):
+                    d_id = str(self.discord_user.get("id") or "").strip() or None
                 token_data = self.network_manager.issue_run_token(
                     username=self.username if self.username else "Guest",
                     mode=mode,
                     client_started_at=self.challenge_started_at_iso,
+                    discord_id=d_id,
                 )
                 self.challenge_run_token = str(token_data.get("token") or "")
                 self.challenge_run_token_source = str(token_data.get("source") or "none")
@@ -416,13 +420,16 @@ class PlayingMixin:
             self.detected_confidence = 0.0
             self.last_detected_hands = 0
 
+        # Use smoothed hand anchor for effects/overlays to reduce jitter.
+        effect_hand_pos = self.smooth_hand_pos if self.smooth_hand_pos else self.hand_pos
+
         # 3. Process Sequence
         self.effect_orchestrator.on_sign_detected(
             detected,
             EffectContext(
                 frame_bgr=frame,
                 frame_shape=frame.shape,
-                hand_pos=self.hand_pos,
+                hand_pos=effect_hand_pos,
                 mouth_pos=self.mouth_pos,
                 cam_x=cam_x,
                 cam_y=cam_y,
@@ -435,7 +442,8 @@ class PlayingMixin:
             # Check sequence
             if self.current_step < len(self.sequence):
                 target = self.sequence[self.current_step]
-                if detected == target:
+                target_norm = self._normalize_sign_token(target)
+                if self._signs_match(detected, target):
                     now = time.time()
                     if now - self.last_sign_time > self.cooldown:
                         if self.current_step == 0:
@@ -449,7 +457,7 @@ class PlayingMixin:
                             self._challenge_append_event(
                                 "sign_ok",
                                 step=step_completed,
-                                sign=str(target),
+                                sign=str(target_norm or target),
                             )
 
                         # Combo checkpoint triggers: allow first jutsu effect to run while continuing signs.
@@ -505,9 +513,17 @@ class PlayingMixin:
                                 is_lv_up = bool(completion_res.get("leveled_up", False))
 
                                 if is_lv_up:
-                                    self._notify_level_up(previous_level=prev_level, source_label="Jutsu Clear")
+                                    self._queue_post_effect_alert(
+                                        "level_up",
+                                        {"previous_level": prev_level, "source_label": "Jutsu Clear"},
+                                        min_delay_s=0.55,
+                                    )
                                 else:
-                                    self.process_unlock_alerts(previous_level=prev_level)
+                                    self._queue_post_effect_alert(
+                                        "unlocks",
+                                        {"previous_level": prev_level},
+                                        min_delay_s=0.55,
+                                    )
 
                                 # Add XP popup (Centered on Camera feed)
                                 self.xp_popups.append({
@@ -542,7 +558,16 @@ class PlayingMixin:
                                     jutsu=str(jutsu_name).upper(),
                                 )
 
-                            self._record_mastery_completion(jutsu_name, clear_time)
+                            mastery_info = self._record_mastery_completion(jutsu_name, clear_time)
+                            if isinstance(mastery_info, dict) and mastery_info.get("improved", False):
+                                if mastery_info.get("first_record", False) or (
+                                    str(mastery_info.get("new_tier", "none")) != str(mastery_info.get("previous_tier", "none"))
+                                ):
+                                    self._queue_post_effect_alert(
+                                        "mastery",
+                                        {"jutsu_name": jutsu_name, "mastery_info": mastery_info},
+                                        min_delay_s=0.7,
+                                    )
 
                             # For normal jutsu, fire completion payload here.
                             # Combo jutsus trigger payloads at configured checkpoints.
@@ -572,7 +597,7 @@ class PlayingMixin:
                 dt=dt,
                 frame_bgr=frame,
                 frame_shape=frame.shape,
-                hand_pos=self.hand_pos,
+                hand_pos=effect_hand_pos,
                 mouth_pos=self.mouth_pos,
                 cam_x=cam_x,
                 cam_y=cam_y,
@@ -602,7 +627,10 @@ class PlayingMixin:
                 # Check for results transition
                 if self.game_mode == "challenge":
                     self.challenge_state = "results"
-        
+
+        # Delayed gameplay alerts (level up/mastery) should appear after effect ends.
+        self._dispatch_post_effect_alerts()
+
         # Convert and display frame with alpha blending for dimming
         if self.game_mode == "challenge" and self.challenge_state in ["waiting", "countdown", "results"]:
             # Dim the camera frame
@@ -703,7 +731,7 @@ class PlayingMixin:
         if self.calibration_message and time.time() <= self.calibration_message_until:
             info_lines.append(self.calibration_message.upper())
 
-        if getattr(self, "show_detection_panel", True):
+        if getattr(self, "show_detection_panel", False):
             info_x = cam_x + 12
             info_y = cam_y + 14
             panel_w = 320
@@ -765,8 +793,10 @@ class PlayingMixin:
                     base_size = 560
 
                 # Track Hand
-                if hasattr(self, 'hand_pos') and self.hand_pos:
-                    hx, hy = self.hand_pos
+                if effect_hand_pos:
+                    hx, hy = effect_hand_pos
+                    hx = int(hx)
+                    hy = int(hy)
                     dynamic_scale = float(getattr(self, "hand_effect_scale", 1.0) or 1.0)
                     size = int(base_size * dynamic_scale)
                     should_draw_effect = True
@@ -812,7 +842,16 @@ class PlayingMixin:
                         or
                         (getattr(self, "combo_rasengan_triple", False) and current_video_name == "rasengan")
                     ):
-                        offsets = [(-int(dw * 0.35), -int(dh * 0.08)), (0, 0), (int(dw * 0.35), -int(dh * 0.08))]
+                        clone_dx_screen = 0
+                        clone_effect = self.effect_orchestrator.effects.get("clone")
+                        if clone_effect is not None:
+                            clone_dx_screen = int(max(0, float(getattr(clone_effect, "current_dx_px", 0))) * scale)
+                            if clone_dx_screen <= 0:
+                                clone_dx_ratio = float(getattr(clone_effect, "clone_dx_ratio", 0.28))
+                                clone_dx_screen = int(max(0.0, clone_dx_ratio) * new_w)
+                        if clone_dx_screen <= 0:
+                            clone_dx_screen = int(new_w * 0.28)
+                        offsets = [(-clone_dx_screen, 0), (0, 0), (clone_dx_screen, 0)]
                     else:
                         offsets = [(0, 0)]
                     for ox, oy in offsets:
@@ -940,7 +979,7 @@ class PlayingMixin:
         btn_col = COLORS["bg_hover"] if diag_hover else COLORS["bg_card"]
         pygame.draw.rect(self.screen, btn_col, self.diag_toggle_rect, border_radius=8)
         pygame.draw.rect(self.screen, COLORS["border"], self.diag_toggle_rect, 1, border_radius=8)
-        diag_text = "DIAG: ON" if getattr(self, "show_detection_panel", True) else "DIAG: OFF"
+        diag_text = "DIAG: ON" if getattr(self, "show_detection_panel", False) else "DIAG: OFF"
         diag_surf = self.fonts["small"].render(diag_text, True, COLORS["text"])
         self.screen.blit(diag_surf, diag_surf.get_rect(center=self.diag_toggle_rect.center))
         

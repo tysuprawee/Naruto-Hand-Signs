@@ -93,16 +93,31 @@ class NetworkManager:
         self.stop_thread = False
         self._warned_profile_fallback = False
         self._warned_profile_meta_missing_columns = False
+        self._warned_profile_meta_rpc_fallback = False
         self._server_time_offset_s = 0.0
         self._server_time_offset_ready = False
         self._server_time_last_sync = 0.0
         self._server_time_next_retry_at = 0.0
+        self.active_username = ""
+        self.active_discord_id = ""
+
+    def set_active_identity(self, username=None, discord_id=None):
+        """Set the active client identity used for guarded RPC calls."""
+        self.active_username = str(username or "").strip()
+        self.active_discord_id = str(discord_id or "").strip()
+
+    def _resolve_discord_id(self, discord_id=None):
+        raw = str(discord_id or "").strip()
+        if raw:
+            return raw
+        return str(getattr(self, "active_discord_id", "") or "").strip()
 
     def _rpc_dict(self, rpc_name, payload=None, retries=2, retry_sleep_s=0.1):
         """Run RPC and normalize to a single dict response."""
         if not self.client:
             return {"ok": False, "reason": "offline"}
         body = payload or {}
+        last_error = ""
         for attempt in range(max(1, int(retries))):
             try:
                 response = self.client.rpc(rpc_name, body).execute()
@@ -112,10 +127,24 @@ class NetworkManager:
                 if isinstance(data, dict):
                     return data
             except Exception as e:
+                last_error = str(e)
                 if attempt == (max(1, int(retries)) - 1):
                     print(f"[!] RPC {rpc_name} failed: {e}")
                 time.sleep(float(retry_sleep_s))
-        return {"ok": False, "reason": "rpc_unavailable", "rpc": rpc_name}
+        err_lower = last_error.lower()
+        reason = "rpc_unavailable"
+        if "does not exist" in err_lower or ("function" in err_lower and "not found" in err_lower):
+            reason = "rpc_missing"
+        elif "permission denied" in err_lower or "not allowed" in err_lower or "row-level security" in err_lower:
+            reason = "rpc_forbidden"
+        elif "timeout" in err_lower or "timed out" in err_lower:
+            reason = "rpc_timeout"
+        return {
+            "ok": False,
+            "reason": reason,
+            "rpc": rpc_name,
+            "detail": last_error[:300],
+        }
 
     def connect(self, room_id):
         if not self.client: return
@@ -307,38 +336,37 @@ class NetworkManager:
             print(f"[!] Score submission failed: {e}")
             return {"ok": False, "reason": "insert_failed"}
 
-    def issue_run_token(self, username, mode, client_started_at=None):
+    def issue_run_token(self, username, mode, client_started_at=None, discord_id=None):
         """
         Request a short-lived challenge run token from Supabase.
         Returns a failure result if RPC isn't available.
         """
         if not self.client:
             return {"ok": False, "token": "", "source": "offline", "reason": "offline"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "token": "", "source": "identity", "reason": "missing_discord_id"}
 
         payload = {
             "p_username": username,
+            "p_discord_id": resolved_discord_id,
             "p_mode": str(mode or "").upper(),
             "p_client_started_at": client_started_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        for attempt in range(2):
-            try:
-                response = self.client.rpc("issue_run_token", payload).execute()
-                data = response.data
-                if isinstance(data, list) and data:
-                    data = data[0]
-                if isinstance(data, dict) and data.get("token"):
-                    return {
-                        "ok": bool(data.get("ok", True)),
-                        "token": data["token"],
-                        "expires_at": data.get("expires_at"),
-                        "source": "rpc",
-                    }
-            except Exception as e:
-                if attempt == 1:
-                    print(f"[!] issue_run_token RPC failed: {e}")
-                time.sleep(0.1)
-
-        return {"ok": False, "token": "", "source": "unavailable", "reason": "rpc_unavailable"}
+        data = self._rpc_dict("issue_run_token_bound", payload, retries=2)
+        if isinstance(data, dict) and data.get("token"):
+            return {
+                "ok": bool(data.get("ok", True)),
+                "token": data["token"],
+                "expires_at": data.get("expires_at"),
+                "source": "rpc",
+            }
+        return {
+            "ok": False,
+            "token": "",
+            "source": "unavailable",
+            "reason": data.get("reason", "rpc_unavailable") if isinstance(data, dict) else "rpc_unavailable",
+        }
 
     def submit_score_secure(
         self,
@@ -358,6 +386,9 @@ class NetworkManager:
         """
         if not self.client:
             return {"ok": False, "reason": "offline"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
 
         local_token = str(run_token or "")
         if (not local_token) or local_token.startswith("local_"):
@@ -365,6 +396,7 @@ class NetworkManager:
                 username=username,
                 mode=mode,
                 client_started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                discord_id=resolved_discord_id,
             )
             refreshed_token = str(token_data.get("token") or "")
             if refreshed_token:
@@ -383,7 +415,7 @@ class NetworkManager:
             "p_events": events or [],
             "p_run_hash": run_hash or "",
             "p_metadata": metadata or {},
-            "p_discord_id": discord_id,
+            "p_discord_id": resolved_discord_id,
             "p_avatar_url": avatar_url,
         }
         if not payload["p_run_hash"]:
@@ -392,7 +424,7 @@ class NetworkManager:
 
         for attempt in range(2):
             try:
-                response = self.client.rpc("submit_challenge_run_secure", payload).execute()
+                response = self.client.rpc("submit_challenge_run_secure_bound", payload).execute()
                 data = response.data
                 if isinstance(data, list) and data:
                     data = data[0]
@@ -405,7 +437,7 @@ class NetworkManager:
 
         return {"ok": False, "reason": "rpc_unavailable"}
 
-    def get_competitive_state_authoritative(self, username):
+    def get_competitive_state_authoritative(self, username, discord_id=None):
         """
         Fetch authoritative progression + quest state from server.
         Preferred response shape:
@@ -413,59 +445,64 @@ class NetworkManager:
         """
         if not username:
             return {"ok": False, "reason": "missing_username"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
         data = self._rpc_dict(
-            "get_competitive_state_authoritative",
-            {"p_username": str(username)},
+            "get_competitive_state_authoritative_bound",
+            {
+                "p_username": str(username),
+                "p_discord_id": resolved_discord_id,
+            },
             retries=2,
         )
-        if isinstance(data, dict) and data.get("ok", False):
-            return data
-
-        # Read-only fallback for UI hydration only.
-        profile = self.get_profile(username)
-        if isinstance(profile, dict):
-            return {
-                "ok": True,
-                "weak": True,
-                "reason": data.get("reason", "profile_fallback") if isinstance(data, dict) else "profile_fallback",
-                "profile": profile,
-                "quests": profile.get("quests", {}),
-            }
         return data if isinstance(data, dict) else {"ok": False, "reason": "state_unavailable"}
 
-    def award_jutsu_completion_authoritative(self, username, xp_gain, signs_landed, is_challenge, mode=None):
+    def award_jutsu_completion_authoritative(self, username, xp_gain, signs_landed, is_challenge, mode=None, discord_id=None):
         """
         Apply server-authoritative progression/quest increment for a completed jutsu.
         """
         if not username:
             return {"ok": False, "reason": "missing_username"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
         payload = {
             "p_username": str(username),
+            "p_discord_id": resolved_discord_id,
             "p_xp_gain": int(max(0, xp_gain or 0)),
             "p_signs_landed": int(max(0, signs_landed or 0)),
             "p_is_challenge": bool(is_challenge),
             "p_mode": str(mode or "").upper(),
         }
-        return self._rpc_dict("award_jutsu_completion_authoritative", payload, retries=2)
+        return self._rpc_dict("award_jutsu_completion_authoritative_bound", payload, retries=2)
 
-    def claim_quest_authoritative(self, username, scope, quest_id):
+    def claim_quest_authoritative(self, username, scope, quest_id, discord_id=None):
         """
         Claim quest reward on server with one-claim-per-period enforcement.
         """
         if not username:
             return {"ok": False, "reason": "missing_username"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
         payload = {
             "p_username": str(username),
+            "p_discord_id": resolved_discord_id,
             "p_scope": str(scope or "").lower(),
             "p_quest_id": str(quest_id or ""),
         }
-        return self._rpc_dict("claim_quest_authoritative", payload, retries=2)
+        return self._rpc_dict("claim_quest_authoritative_bound", payload, retries=2)
 
-    def get_profile(self, username):
+    def get_profile(self, username, discord_id=None):
         """Fetch player profile/progression from DB"""
         if not self.client: return None
+        resolved_discord_id = self._resolve_discord_id(discord_id)
         try:
-            response = self.client.table('profiles').select('*').eq('username', username).execute()
+            query = self.client.table('profiles').select('*').eq('username', username)
+            if resolved_discord_id:
+                query = query.eq("discord_id", resolved_discord_id)
+            response = query.execute()
             if response.data:
                 return response.data[0]
             return {} # Return empty dict for "User Not Found"
@@ -536,6 +573,87 @@ class NetworkManager:
             )
         return datetime.datetime.fromtimestamp(now_ts, tz=datetime.timezone.utc)
 
+    def get_profile_settings_authoritative(self, username, discord_id=None):
+        """Fetch cloud-authoritative user settings."""
+        if not self.client:
+            return {"ok": False, "reason": "offline"}
+        if not username:
+            return {"ok": False, "reason": "missing_username"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
+        payload = {
+            "p_username": str(username),
+            "p_discord_id": resolved_discord_id,
+        }
+        return self._rpc_dict("get_profile_settings_bound", payload, retries=2)
+
+    def get_calibration_profile_authoritative(self, username, discord_id=None):
+        """Fetch cloud-authoritative calibration profile."""
+        if not self.client:
+            return {"ok": False, "reason": "offline"}
+        if not username:
+            return {"ok": False, "reason": "missing_username"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
+        payload = {
+            "p_username": str(username),
+            "p_discord_id": resolved_discord_id,
+        }
+        return self._rpc_dict("get_calibration_profile_bound", payload, retries=2)
+
+    def upsert_profile_settings_authoritative(self, username, user_settings, discord_id=None):
+        """Persist user settings through guarded bound RPC."""
+        if not self.client:
+            return {"ok": False, "reason": "offline"}
+        if not username:
+            return {"ok": False, "reason": "missing_username"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
+        if not isinstance(user_settings, dict):
+            return {"ok": False, "reason": "invalid_settings"}
+        payload = {
+            "p_username": str(username),
+            "p_discord_id": resolved_discord_id,
+            "p_user_settings": user_settings,
+        }
+        return self._rpc_dict("upsert_profile_settings_bound", payload, retries=2)
+
+    def upsert_calibration_profile_authoritative(self, username, calibration_profile, discord_id=None):
+        """Persist calibration profile through guarded bound RPC."""
+        if not self.client:
+            return {"ok": False, "reason": "offline"}
+        if not username:
+            return {"ok": False, "reason": "missing_username"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
+        if not isinstance(calibration_profile, dict):
+            return {"ok": False, "reason": "invalid_calibration_profile"}
+        payload = {
+            "p_username": str(username),
+            "p_discord_id": resolved_discord_id,
+            "p_calibration_profile": calibration_profile,
+        }
+        return self._rpc_dict("upsert_calibration_profile_bound", payload, retries=2)
+
+    def ensure_profile_identity_bound(self, username, discord_id=None):
+        """Bind username row to discord_id once (bootstrap for legacy null discord_id rows)."""
+        if not self.client:
+            return {"ok": False, "reason": "offline"}
+        if not username:
+            return {"ok": False, "reason": "missing_username"}
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if not resolved_discord_id:
+            return {"ok": False, "reason": "missing_discord_id"}
+        payload = {
+            "p_username": str(username),
+            "p_discord_id": resolved_discord_id,
+        }
+        return self._rpc_dict("bind_profile_identity_bound", payload, retries=2)
+
     def upsert_profile_meta(
         self,
         username,
@@ -551,6 +669,9 @@ class NetworkManager:
             return
         if not username:
             return
+        resolved_discord_id = self._resolve_discord_id(discord_id)
+        if (username != "Guest") and (not resolved_discord_id):
+            return {"ok": False, "reason": "missing_discord_id"}
 
         payload = {"username": username}
 
@@ -564,29 +685,30 @@ class NetworkManager:
             payload["mastery"] = mastery
         if isinstance(quests, dict):
             payload["quests"] = quests
-        if discord_id:
-            payload["discord_id"] = discord_id
+        if resolved_discord_id:
+            payload["discord_id"] = resolved_discord_id
 
         if len(payload) <= 1:
             return
 
-        try:
-            self.client.table("profiles").upsert(payload, on_conflict="username").execute()
-            return
-        except Exception as e:
-            reduced = dict(payload)
-            reduced.pop("mastery", None)
-            reduced.pop("quests", None)
-            if len(reduced) > 1 and reduced != payload:
-                try:
-                    self.client.table("profiles").upsert(reduced, on_conflict="username").execute()
-                    if not self._warned_profile_meta_missing_columns:
-                        print("[!] Profile table missing mastery/quests columns; synced tutorial fields only.")
-                        self._warned_profile_meta_missing_columns = True
-                    return
-                except Exception:
-                    pass
-            print(f"[!] Profile meta sync failed: {e}")
+        # Preferred path: server-side guarded meta upsert (RLS-safe).
+        rpc_payload = {
+            "p_username": username,
+            "p_tutorial_seen": bool(tutorial_seen) if tutorial_seen is not None else None,
+            "p_tutorial_seen_at": tutorial_seen_at,
+            "p_tutorial_version": tutorial_version,
+            "p_mastery": mastery if isinstance(mastery, dict) else None,
+            "p_quests": quests if isinstance(quests, dict) else None,
+            "p_discord_id": resolved_discord_id,
+        }
+        res = self._rpc_dict("upsert_profile_meta_guarded_bound", rpc_payload, retries=2)
+        if isinstance(res, dict) and res.get("ok", False):
+            return res
+        if not self._warned_profile_meta_rpc_fallback:
+            reason = res.get("reason", "rpc_unavailable") if isinstance(res, dict) else "rpc_unavailable"
+            print(f"[!] upsert_profile_meta_guarded_bound rejected: {reason}.")
+            self._warned_profile_meta_rpc_fallback = True
+        return res if isinstance(res, dict) else {"ok": False, "reason": "rpc_unavailable"}
 
     def upsert_profile(self, data):
         """Update or Insert player progression"""
@@ -595,52 +717,32 @@ class NetworkManager:
             username = data.get("username")
             if not username:
                 return
+            resolved_discord_id = self._resolve_discord_id(data.get("discord_id"))
+            if (username != "Guest") and (not resolved_discord_id):
+                return {"ok": False, "reason": "missing_discord_id"}
 
             # Preferred path: server-side guarded merge.
-            try:
-                rpc_payload = {
-                    "p_username": username,
-                    "p_xp": int(data.get("xp", 0) or 0),
-                    "p_level": int(data.get("level", 0) or 0),
-                    "p_rank": str(data.get("rank", "") or ""),
-                    "p_total_signs": int(data.get("total_signs", 0) or 0),
-                    "p_total_jutsus": int(data.get("total_jutsus", 0) or 0),
-                    "p_fastest_combo": int(data.get("fastest_combo", 0) or 0),
-                    "p_tutorial_seen": bool(data.get("tutorial_seen", False)),
-                    "p_tutorial_seen_at": data.get("tutorial_seen_at"),
-                    "p_tutorial_version": data.get("tutorial_version"),
-                    "p_discord_id": data.get("discord_id"),
-                }
-                self.client.rpc("upsert_profile_guarded", rpc_payload).execute()
-                return
-            except Exception:
-                if not self._warned_profile_fallback:
-                    print("[!] upsert_profile_guarded RPC unavailable, using strict cloud-authoritative fallback.")
-                    self._warned_profile_fallback = True
-                pass
-
-            existing = self.get_profile(username)
-            merged = dict(data)
-            if existing:
-                # Strict fallback: cloud remains authority for progression fields.
-                for key in ["xp", "level", "total_signs", "total_jutsus", "fastest_combo", "rank"]:
-                    if key in existing:
-                        merged[key] = existing.get(key)
-
-                # Tutorial/version flags should stay true once true.
-                if "tutorial_seen" in existing or "tutorial_seen" in merged:
-                    merged["tutorial_seen"] = bool(existing.get("tutorial_seen", False) or merged.get("tutorial_seen", False))
-                if "tutorial_seen_at" in existing and existing.get("tutorial_seen_at") and not merged.get("tutorial_seen_at"):
-                    merged["tutorial_seen_at"] = existing.get("tutorial_seen_at")
-                if "tutorial_version" in existing and not merged.get("tutorial_version"):
-                    merged["tutorial_version"] = existing.get("tutorial_version")
-
-                # Keep cloud discord id if client payload does not include one.
-                if existing.get("discord_id") and not merged.get("discord_id"):
-                    merged["discord_id"] = existing.get("discord_id")
-
-            # We use username as the conflict target
-            self.client.table('profiles').upsert(merged, on_conflict='username').execute()
+            rpc_payload = {
+                "p_username": username,
+                "p_xp": int(data.get("xp", 0) or 0),
+                "p_level": int(data.get("level", 0) or 0),
+                "p_rank": str(data.get("rank", "") or ""),
+                "p_total_signs": int(data.get("total_signs", 0) or 0),
+                "p_total_jutsus": int(data.get("total_jutsus", 0) or 0),
+                "p_fastest_combo": int(data.get("fastest_combo", 0) or 0),
+                "p_tutorial_seen": bool(data.get("tutorial_seen", False)),
+                "p_tutorial_seen_at": data.get("tutorial_seen_at"),
+                "p_tutorial_version": data.get("tutorial_version"),
+                "p_discord_id": resolved_discord_id,
+            }
+            res = self._rpc_dict("upsert_profile_guarded_bound", rpc_payload, retries=2)
+            if isinstance(res, dict) and res.get("ok", False):
+                return res
+            if not self._warned_profile_fallback:
+                reason = res.get("reason", "rpc_unavailable") if isinstance(res, dict) else "rpc_unavailable"
+                print(f"[!] upsert_profile_guarded_bound rejected: {reason}.")
+                self._warned_profile_fallback = True
+            return res if isinstance(res, dict) else {"ok": False, "reason": "rpc_unavailable"}
         except Exception as e:
             print(f"[!] Profile sync failed: {e}")
 

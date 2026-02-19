@@ -42,6 +42,7 @@ class ShadowCloneEffect(BaseEffect):
         self.animating = False
         self.anim_start = 0.0
         self.prepared_clones = []
+        self.current_dx_px = 0
 
         self.segmenter = None
         self.enabled = self._init_segmenter()
@@ -116,6 +117,7 @@ class ShadowCloneEffect(BaseEffect):
         self.prepared_clones = []
         self.clones_visible = False
         self.animating = False
+        self.current_dx_px = 0
 
     def on_sign_detected(self, sign_name: str, context: EffectContext):
         normalized = self._normalize_sign_name(sign_name)
@@ -131,6 +133,7 @@ class ShadowCloneEffect(BaseEffect):
 
     def update(self, context: EffectContext):
         self.prepared_clones = []
+        self.current_dx_px = 0
         if not self.enabled or context.frame_bgr is None:
             return
 
@@ -201,6 +204,7 @@ class ShadowCloneEffect(BaseEffect):
             op = self.clone_opacity
         else:
             return
+        self.current_dx_px = int(max(0, dx))
 
         left_surface = self._prepare_surface(fg_crop, a_crop, op)
         right_surface = self._prepare_surface(fg_crop, a_crop, op)
