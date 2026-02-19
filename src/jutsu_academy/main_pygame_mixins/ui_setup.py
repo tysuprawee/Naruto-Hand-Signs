@@ -147,6 +147,14 @@ class UISetupMixin:
         }
         self.practice_buttons["multiplayer"].enabled = False
 
+    def _create_calibration_gate_ui(self):
+        """Create first-time calibration gate UI."""
+        cx = SCREEN_WIDTH // 2
+        self.calibration_gate_buttons = {
+            "start": Button(cx - 170, SCREEN_HEIGHT - 160, 340, 58, "START CALIBRATION"),
+            "back": Button(cx - 120, SCREEN_HEIGHT - 90, 240, 48, "BACK", color=COLORS["bg_card"]),
+        }
+
     def _create_about_ui(self):
         """Create about page UI."""
         cx = SCREEN_WIDTH // 2

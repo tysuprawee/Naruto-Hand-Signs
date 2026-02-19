@@ -54,6 +54,8 @@ except ImportError:
         def get_competitive_state_authoritative(self, **kwargs): return {"ok": False, "reason": "mock"}
         def award_jutsu_completion_authoritative(self, **kwargs): return {"ok": False, "reason": "mock"}
         def claim_quest_authoritative(self, **kwargs): return {"ok": False, "reason": "mock"}
+        def get_calibration_profile_authoritative(self, **kwargs): return {"ok": False, "reason": "mock"}
+        def upsert_calibration_profile_authoritative(self, **kwargs): return {"ok": False, "reason": "mock"}
 
 # Try importing Discord auth and dotenv
 try:
@@ -714,6 +716,7 @@ class GameState:
     MENU = "menu"
     MAINTENANCE_REQUIRED = "maintenance_required"
     UPDATE_REQUIRED = "update_required"
+    CALIBRATION_GATE = "calibration_gate"
     JUTSU_LIBRARY = "jutsu_library"
     QUESTS = "quests"
     TUTORIAL = "tutorial"

@@ -97,6 +97,9 @@ class GameplayMixin:
 
         if reset_calibration:
             self.calibration_active = False
+            if self.calibration_restore_diag_state is not None:
+                self.show_detection_panel = bool(self.calibration_restore_diag_state)
+                self.calibration_restore_diag_state = None
         self._reset_detection_filters()
 
         context = EffectContext()
@@ -119,13 +122,19 @@ class GameplayMixin:
         self.vote_min_confidence = self._clamp(profile.get("vote_min_confidence", 0.45), 0.2, 0.9)
         self.vote_required_hits = int(self._clamp(profile.get("vote_required_hits", 3), 2, self.vote_window_size))
 
-    def _load_calibration_profile(self):
+    def _restore_calibration_diag_state(self):
+        if self.calibration_restore_diag_state is not None:
+            self.show_detection_panel = bool(self.calibration_restore_diag_state)
+            self.calibration_restore_diag_state = None
+
+    def _load_calibration_profile(self, force_refresh=False):
         identity = self._calibration_identity()
-        if self.calibration_loaded_for == identity:
+        if (not force_refresh) and self.calibration_loaded_for == identity:
             return
 
         self.calibration_loaded_for = identity
         self.calibration_profile = {}
+        self.calibration_last_sync_ok = False
         self._apply_calibration_values({})
 
         if self.username == "Guest":
@@ -144,11 +153,68 @@ class GameplayMixin:
                 profile = res.get("calibration_profile")
                 if isinstance(profile, dict) and profile:
                     self.calibration_profile = profile
+                    self.calibration_last_sync_ok = True
                     self._apply_calibration_values(profile)
                     self.calibration_message = "Calibration profile loaded."
                     self.calibration_message_until = time.time() + 4.0
         except Exception as e:
             print(f"[!] Calibration profile load failed: {e}")
+
+    def _mode_requires_calibration_gate(self):
+        """True when authenticated player has no persisted calibration profile in DB."""
+        if self.username == "Guest":
+            return False
+        if not self.network_manager or not self.network_manager.client:
+            return False
+        if not self.discord_user or not self.discord_user.get("id"):
+            return False
+
+        self._load_calibration_profile(force_refresh=True)
+        if isinstance(self.calibration_profile, dict) and self.calibration_profile:
+            return False
+        return True
+
+    def _enter_calibration_gate(self, pending_mode):
+        """Open calibration gate screen before allowing Free Play / Rank Mode."""
+        self.calibration_gate_pending_mode = str(pending_mode or "")
+        self.calibration_gate_return_pending = False
+        self.calibration_gate_return_at = 0.0
+        self.calibration_last_sync_ok = False
+
+        self._reset_active_effects(reset_calibration=True)
+        self._load_calibration_profile(force_refresh=True)
+
+        # Safety: profile may have appeared during refresh, skip gate in that case.
+        if isinstance(self.calibration_profile, dict) and self.calibration_profile:
+            self.library_mode = self.calibration_gate_pending_mode
+            self.calibration_gate_pending_mode = ""
+            self.state = GameState.JUTSU_LIBRARY
+            return True
+
+        if not self._load_ml_models():
+            self.error_title = "Calibration Error"
+            self.error_message = "Failed to load AI models.\nPlease restart and try again."
+            self.state = GameState.ERROR_MODAL
+            return False
+
+        if not self._start_camera():
+            self.error_title = "Camera Error"
+            self.error_message = "Could not access camera for calibration.\nClose other apps using camera and try again."
+            self.state = GameState.ERROR_MODAL
+            return False
+
+        self.calibration_message = "Press C or START CALIBRATION."
+        self.calibration_message_until = time.time() + 10.0
+        self.state = GameState.CALIBRATION_GATE
+        return True
+
+    def _exit_calibration_gate(self):
+        self._reset_active_effects(reset_calibration=True)
+        self._stop_camera()
+        self.calibration_gate_return_pending = False
+        self.calibration_gate_return_at = 0.0
+        self.calibration_gate_pending_mode = ""
+        self.state = GameState.PRACTICE_SELECT
 
     def _save_calibration_profile(self, profile):
         if not isinstance(profile, dict):
@@ -170,12 +236,17 @@ class GameplayMixin:
             print(f"[!] Calibration profile save failed: {e}")
             return False
 
-    def start_calibration(self, manual=True):
+    def start_calibration(self, manual=True, force_show_diag=False):
+        if force_show_diag and self.calibration_restore_diag_state is None:
+            self.calibration_restore_diag_state = bool(getattr(self, "show_detection_panel", False))
+            self.show_detection_panel = True
         self.calibration_active = True
         self.calibration_started_at = time.time()
         self.calibration_samples = []
         self.sign_vote_window = []
         self.last_vote_hits = 0
+        self.calibration_gate_return_pending = False
+        self.calibration_gate_return_at = 0.0
         if manual:
             self.calibration_message = "Calibrating for 12s... keep hands visible and run signs."
             self.calibration_message_until = time.time() + 12.0
@@ -227,8 +298,10 @@ class GameplayMixin:
     def _finalize_calibration(self):
         if not self.calibration_samples:
             self.calibration_active = False
+            self.calibration_last_sync_ok = False
             self.calibration_message = "Calibration failed: no samples captured."
             self.calibration_message_until = time.time() + 4.0
+            self._restore_calibration_diag_state()
             return
 
         brightness_vals = np.array([s["brightness"] for s in self.calibration_samples], dtype=np.float32)
@@ -266,9 +339,17 @@ class GameplayMixin:
         saved = self._save_calibration_profile(profile)
 
         self.calibration_active = False
+        self.calibration_last_sync_ok = bool(saved)
         self.calibration_samples = []
-        self.calibration_message = "Calibration synced." if saved else "Calibration updated for this session."
+        if saved:
+            self.calibration_message = "Calibration synced."
+            if self.state == GameState.CALIBRATION_GATE:
+                self.calibration_gate_return_pending = True
+                self.calibration_gate_return_at = time.time() + 0.9
+        else:
+            self.calibration_message = "Calibration sync failed. Please retry."
         self.calibration_message_until = time.time() + 5.0
+        self._restore_calibration_diag_state()
 
     def _apply_temporal_vote(self, raw_sign, raw_conf, allow_detection):
         now = time.time()
@@ -402,7 +483,8 @@ class GameplayMixin:
         self._reset_active_effects(reset_calibration=True)
         self._load_calibration_profile()
         if (self.username != "Guest") and (not self.calibration_profile):
-            self.start_calibration(manual=False)
+            self.calibration_message = "Press C to calibrate for best detection."
+            self.calibration_message_until = time.time() + 5.0
 
         # Challenge Mode Init
         self.challenge_state = "waiting"

@@ -1182,6 +1182,151 @@ class RenderingMixin:
         # Render interactive buttons last for proper hover/press behavior visuals
         self.practice_buttons["back"].render(self.screen)
 
+    def render_calibration_gate(self):
+        """Render first-time calibration gate before entering Free Play / Rank Mode."""
+        if self.bg_image:
+            bg = pygame.transform.smoothscale(self.bg_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
+            self.screen.blit(bg, (0, 0))
+        else:
+            self.screen.fill(COLORS["bg_dark"])
+
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 210))
+        self.screen.blit(overlay, (0, 0))
+
+        panel_w, panel_h = 860, 680
+        panel_x = (SCREEN_WIDTH - panel_w) // 2
+        panel_y = (SCREEN_HEIGHT - panel_h) // 2
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+        pygame.draw.rect(self.screen, COLORS["bg_panel"], panel_rect, border_radius=22)
+        pygame.draw.rect(self.screen, COLORS["border"], panel_rect, 2, border_radius=22)
+
+        title = self.fonts["title_md"].render("CALIBRATION REQUIRED", True, COLORS["accent"])
+        subtitle = self.fonts["body"].render(
+            "Complete one calibration to unlock Free Play and Rank Mode.",
+            True,
+            COLORS["text"],
+        )
+        self.screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, panel_y + 50)))
+        self.screen.blit(subtitle, subtitle.get_rect(center=(SCREEN_WIDTH // 2, panel_y + 92)))
+
+        camera_rect = pygame.Rect(panel_x + 40, panel_y + 126, 540, 405)
+        side_rect = pygame.Rect(camera_rect.right + 22, camera_rect.y, panel_rect.right - camera_rect.right - 62, camera_rect.height)
+        pygame.draw.rect(self.screen, (12, 12, 18), camera_rect, border_radius=14)
+        pygame.draw.rect(self.screen, COLORS["border"], camera_rect, 2, border_radius=14)
+        pygame.draw.rect(self.screen, (16, 18, 26), side_rect, border_radius=14)
+        pygame.draw.rect(self.screen, COLORS["border"], side_rect, 2, border_radius=14)
+
+        frame_ready = False
+        if self.cap is not None and self.cap.isOpened():
+            ret, frame = self.cap.read()
+            if ret:
+                frame_ready = True
+                frame = cv2.flip(frame, 1)
+                lighting_ok = self._evaluate_lighting(frame)
+
+                if self.settings.get("use_mediapipe_signs", False):
+                    self.predict_sign_with_filters(frame, lighting_ok)
+                else:
+                    frame, yolo_sign, yolo_conf = self.detect_and_process(frame)
+                    raw_sign = str(yolo_sign or "idle").strip().lower()
+                    raw_conf = float(max(0.0, yolo_conf))
+                    allow_detection = bool(lighting_ok) and raw_sign not in ("", "idle")
+                    stable_sign, stable_conf = self._apply_temporal_vote(raw_sign, raw_conf, allow_detection)
+                    self.raw_detected_sign = raw_sign
+                    self.raw_detected_confidence = raw_conf
+                    self.detected_sign = stable_sign
+                    self.detected_confidence = float(stable_conf)
+                    self.last_detected_hands = 1 if raw_sign not in ("", "idle") else 0
+                    self._update_calibration_sample(raw_sign, raw_conf, self.last_detected_hands)
+
+                cam_surface = self.cv2_to_pygame(frame)
+                sw, sh = cam_surface.get_size()
+                scale = min(camera_rect.width / max(1, sw), camera_rect.height / max(1, sh))
+                draw_w = max(1, int(sw * scale))
+                draw_h = max(1, int(sh * scale))
+                fitted = pygame.transform.smoothscale(cam_surface, (draw_w, draw_h))
+                draw_x = camera_rect.x + (camera_rect.width - draw_w) // 2
+                draw_y = camera_rect.y + (camera_rect.height - draw_h) // 2
+                prev_clip = self.screen.get_clip()
+                self.screen.set_clip(camera_rect)
+                self.screen.blit(fitted, (draw_x, draw_y))
+                self.screen.set_clip(prev_clip)
+
+        if not frame_ready:
+            msg = self.fonts["body_sm"].render("Camera unavailable for calibration.", True, COLORS["error"])
+            self.screen.blit(msg, msg.get_rect(center=camera_rect.center))
+
+        lighting_label = str(getattr(self, "lighting_status", "unknown") or "unknown").upper()
+        if lighting_label == "GOOD":
+            lighting_color = COLORS["success"]
+        elif lighting_label in {"LOW_LIGHT", "LOW_CONTRAST", "OVEREXPOSED"}:
+            lighting_color = COLORS["accent"]
+        else:
+            lighting_color = COLORS["text_dim"]
+
+        progress = 0
+        if getattr(self, "calibration_active", False):
+            progress = int(
+                min(
+                    100,
+                    ((time.time() - self.calibration_started_at) / max(0.001, self.calibration_duration_s)) * 100.0,
+                )
+            )
+
+        side_lines = [
+            ("LIGHT", lighting_label, lighting_color),
+            ("MODEL", "MEDIAPIPE" if self.settings.get("use_mediapipe_signs", False) else "YOLO", COLORS["text"]),
+            ("DETECTED", str(getattr(self, "detected_sign", "idle") or "idle").upper(), COLORS["text"]),
+            ("CONF", f"{int(float(getattr(self, 'detected_confidence', 0.0) or 0.0) * 100)}%", COLORS["text_dim"]),
+            ("SAMPLES", str(len(getattr(self, "calibration_samples", []) or [])), COLORS["text_dim"]),
+            ("PROGRESS", f"{progress}%" if self.calibration_active else "READY", COLORS["text"]),
+        ]
+
+        y = side_rect.y + 18
+        for label, value, color in side_lines:
+            k = self.fonts["body_sm"].render(label, True, COLORS["text_dim"])
+            v = self.fonts["body"].render(str(value), True, color)
+            self.screen.blit(k, (side_rect.x + 14, y))
+            self.screen.blit(v, (side_rect.x + 14, y + 20))
+            y += 58
+
+        hint_lines = [
+            "Press C to start calibration.",
+            "Keep both hands visible.",
+            "Move naturally for 8-12 seconds.",
+        ]
+        y = side_rect.bottom - 90
+        for text in hint_lines:
+            surf = self.fonts["tiny"].render(text, True, COLORS["text_dim"])
+            self.screen.blit(surf, (side_rect.x + 14, y))
+            y += 20
+
+        status_text = str(getattr(self, "calibration_message", "") or "")
+        if not status_text:
+            status_text = "Calibration profile will be stored to cloud."
+        status = self.fonts["body_sm"].render(status_text, True, COLORS["text"])
+        self.screen.blit(status, status.get_rect(center=(SCREEN_WIDTH // 2, panel_y + panel_h - 132)))
+
+        start_btn = self.calibration_gate_buttons.get("start")
+        back_btn = self.calibration_gate_buttons.get("back")
+        if start_btn:
+            start_btn.rect.x = panel_x + (panel_w - start_btn.rect.width) // 2
+            start_btn.rect.y = panel_y + panel_h - 110
+            start_btn.enabled = not bool(getattr(self, "calibration_gate_return_pending", False))
+            if getattr(self, "calibration_gate_return_pending", False):
+                start_btn.text = "SAVING..."
+            elif getattr(self, "calibration_active", False):
+                start_btn.text = "CALIBRATING..."
+            else:
+                start_btn.text = "START CALIBRATION"
+            start_btn.render(self.screen)
+        if back_btn:
+            back_btn.rect.x = panel_x + 24
+            back_btn.rect.y = panel_y + panel_h - 70
+            back_btn.enabled = not bool(getattr(self, "calibration_active", False))
+            back_btn.render(self.screen)
+
     def render_about(self):
         """Render upgraded About page."""
         if self.bg_image:

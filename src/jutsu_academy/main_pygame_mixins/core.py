@@ -841,6 +841,11 @@ class CoreMixin:
         self.calibration_profile = {}
         self.calibration_loaded_for = None
         self.calibration_active = False
+        self.calibration_last_sync_ok = False
+        self.calibration_restore_diag_state = None
+        self.calibration_gate_pending_mode = ""
+        self.calibration_gate_return_pending = False
+        self.calibration_gate_return_at = 0.0
         self.calibration_started_at = 0.0
         self.calibration_duration_s = 12.0
         self.calibration_min_samples = 100
@@ -938,6 +943,7 @@ class CoreMixin:
         self._create_library_ui()
         self._create_quest_ui()
         self._create_tutorial_ui()
+        self._create_calibration_gate_ui()
         self.playing_back_button = Button(24, 20, 120, 42, "< BACK", font_size=22, color=COLORS["bg_card"])
         
         # FPS tracking
@@ -983,6 +989,7 @@ class CoreMixin:
         self._create_library_ui()
         self._create_quest_ui()
         self._create_tutorial_ui()
+        self._create_calibration_gate_ui()
 
         if hasattr(self, "playing_back_button"):
             self.playing_back_button = Button(24, 20, 120, 42, "< BACK", font_size=22, color=COLORS["bg_card"])

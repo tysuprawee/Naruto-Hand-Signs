@@ -10,6 +10,14 @@ class RuntimeMixin:
         events = pygame.event.get()
         self._activate_next_alert()
         self._refresh_quest_periods()
+        if (
+            self.state == GameState.CALIBRATION_GATE
+            and getattr(self, "calibration_gate_return_pending", False)
+            and (not getattr(self, "calibration_active", False))
+            and (time.time() >= float(getattr(self, "calibration_gate_return_at", 0.0) or 0.0))
+        ):
+            self._exit_calibration_gate()
+            return
 
         # Poll app_config periodically so maintenance/update toggles can apply live.
         now = time.time()
@@ -22,7 +30,7 @@ class RuntimeMixin:
         if self.force_maintenance_required and self.state not in [GameState.MAINTENANCE_REQUIRED, GameState.QUIT_CONFIRM]:
             if self.state == GameState.SETTINGS:
                 self._stop_settings_camera_preview()
-            if self.state == GameState.PLAYING:
+            if self.state in [GameState.PLAYING, GameState.CALIBRATION_GATE]:
                 self._reset_active_effects(reset_calibration=True)
                 self._stop_camera()
             self.show_announcements = False
@@ -53,7 +61,7 @@ class RuntimeMixin:
         if self.force_update_required and self.state not in [GameState.UPDATE_REQUIRED, GameState.QUIT_CONFIRM]:
             if self.state == GameState.SETTINGS:
                 self._stop_settings_camera_preview()
-            if self.state == GameState.PLAYING:
+            if self.state in [GameState.PLAYING, GameState.CALIBRATION_GATE]:
                 self._reset_active_effects(reset_calibration=True)
                 self._stop_camera()
             self.show_announcements = False
@@ -147,13 +155,15 @@ class RuntimeMixin:
                         # ESC in menu -> Quit Confirm
                         self.prev_state = GameState.MENU
                         self.state = GameState.QUIT_CONFIRM
-                    elif self.state in [GameState.SETTINGS, GameState.ABOUT, GameState.PRACTICE_SELECT, GameState.JUTSU_LIBRARY, GameState.QUESTS, GameState.TUTORIAL]:
+                    elif self.state in [GameState.SETTINGS, GameState.ABOUT, GameState.PRACTICE_SELECT, GameState.JUTSU_LIBRARY, GameState.QUESTS, GameState.TUTORIAL, GameState.CALIBRATION_GATE]:
                         if self.state == GameState.SETTINGS:
                             self._stop_settings_camera_preview()
                         if self.state == GameState.JUTSU_LIBRARY:
                             self.state = GameState.PRACTICE_SELECT
                         elif self.state == GameState.QUESTS:
                             self.state = GameState.PRACTICE_SELECT
+                        elif self.state == GameState.CALIBRATION_GATE:
+                            self._exit_calibration_gate()
                         elif self.state == GameState.TUTORIAL:
                             self.tutorial_seen = True
                             self.tutorial_seen_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -179,7 +189,7 @@ class RuntimeMixin:
                         self.jutsu_active = False
                         self.fire_particles.emitting = False
                     elif event.key == pygame.K_c:
-                        self.start_calibration(manual=True)
+                        self.start_calibration(manual=True, force_show_diag=True)
                         self.play_sound("click")
                     elif event.key == pygame.K_m:
                         self.toggle_detection_model()
@@ -206,6 +216,14 @@ class RuntimeMixin:
                                     self.video_cap.release()
                                     self.video_cap = None
                                 self.current_video = None
+                elif self.state == GameState.CALIBRATION_GATE:
+                    if event.key == pygame.K_c:
+                        self.start_calibration(manual=True, force_show_diag=True)
+                        self.play_sound("click")
+                    elif event.key in [pygame.K_SPACE, pygame.K_RETURN]:
+                        if not getattr(self, "calibration_active", False):
+                            self.start_calibration(manual=True, force_show_diag=True)
+                            self.play_sound("click")
             elif event.type == pygame.MOUSEWHEEL:
                 if self.state == GameState.ABOUT:
                     self.about_scroll_y -= event.y * 30
@@ -452,11 +470,17 @@ class RuntimeMixin:
             for name, btn in self.practice_buttons.items():
                 if btn.update(mouse_pos, mouse_click, mouse_down, self.play_sound):
                     if name == "freeplay":
-                        self.library_mode = "freeplay"
-                        self.state = GameState.JUTSU_LIBRARY
+                        if self._mode_requires_calibration_gate():
+                            self._enter_calibration_gate("freeplay")
+                        else:
+                            self.library_mode = "freeplay"
+                            self.state = GameState.JUTSU_LIBRARY
                     elif name == "challenge":
-                        self.library_mode = "challenge"
-                        self.state = GameState.JUTSU_LIBRARY
+                        if self._mode_requires_calibration_gate():
+                            self._enter_calibration_gate("challenge")
+                        else:
+                            self.library_mode = "challenge"
+                            self.state = GameState.JUTSU_LIBRARY
                     elif name == "library":
                         self.library_mode = "browse"
                         self.state = GameState.JUTSU_LIBRARY
@@ -471,6 +495,21 @@ class RuntimeMixin:
                         threading.Thread(target=self._fetch_leaderboard, daemon=True).start()
                     elif name == "back":
                         self.state = GameState.MENU
+
+        elif self.state == GameState.CALIBRATION_GATE:
+            buttons = getattr(self, "calibration_gate_buttons", {})
+            if isinstance(buttons, dict):
+                if "start" in buttons:
+                    buttons["start"].enabled = not bool(getattr(self, "calibration_gate_return_pending", False))
+                if "back" in buttons:
+                    buttons["back"].enabled = not bool(getattr(self, "calibration_active", False))
+            for name, btn in buttons.items():
+                if btn.update(mouse_pos, mouse_click, mouse_down, self.play_sound):
+                    if name == "start":
+                        if not getattr(self, "calibration_active", False):
+                            self.start_calibration(manual=True, force_show_diag=True)
+                    elif name == "back":
+                        self._exit_calibration_gate()
         
         elif self.state == GameState.LEADERBOARD:
             # Mode Selector Click (Arrows)
@@ -643,6 +682,8 @@ class RuntimeMixin:
                     self.render_settings()
                 elif self.state == GameState.PRACTICE_SELECT:
                     self.render_practice_select()
+                elif self.state == GameState.CALIBRATION_GATE:
+                    self.render_calibration_gate()
                 elif self.state == GameState.ABOUT:
                     self.render_about()
                 elif self.state == GameState.TUTORIAL:
