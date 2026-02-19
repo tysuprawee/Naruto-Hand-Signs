@@ -2,6 +2,73 @@ from src.jutsu_academy.main_pygame_shared import *
 
 
 class AuthMixin:
+    def _has_backend_connection(self, timeout_s=1.5):
+        """
+        Strict connectivity check for required backend host (Supabase).
+        We treat any non-5xx HTTP response from the configured project host as reachable.
+        """
+        timeout_s = float(max(0.4, timeout_s))
+        nm = getattr(self, "network_manager", None)
+        base_url = str(getattr(nm, "url", "") or "").strip().rstrip("/")
+        api_key = str(getattr(nm, "key", "") or "").strip()
+        if not base_url:
+            return False
+
+        headers = {}
+        if api_key:
+            headers["apikey"] = api_key
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        probes = [
+            f"{base_url}/rest/v1/",
+            f"{base_url}/auth/v1/settings",
+        ]
+        for url in probes:
+            try:
+                r = requests.get(url, headers=headers, timeout=timeout_s, allow_redirects=False)
+                code = int(getattr(r, "status_code", 0) or 0)
+                if 100 <= code < 500:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _has_internet_connection(self, timeout_s=1.5):
+        """Fast best-effort connectivity check for required online gameplay paths."""
+        # For this app, backend availability is the true gate.
+        if self._has_backend_connection(timeout_s=timeout_s):
+            return True
+
+        timeout_s = float(max(0.4, timeout_s))
+
+        # Primary: raw socket to public DNS (fast, no DNS lookup dependency).
+        for host in ("1.1.1.1", "8.8.8.8"):
+            try:
+                sock = socket.create_connection((host, 53), timeout=timeout_s)
+                sock.close()
+                return True
+            except OSError:
+                pass
+
+        # Fallback: HTTPS probe to backend/public endpoint.
+        probe_urls = ["https://discord.com/api/v10/gateway"]
+
+        for url in probe_urls:
+            try:
+                r = requests.get(url, timeout=timeout_s)
+                if int(getattr(r, "status_code", 0) or 0) < 500:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _handle_connection_lost(self, force_logout=True):
+        """Transition to hard offline gate and terminate authenticated session."""
+        self.connection_monitor_grace_until = time.time() + 12.0
+        if bool(force_logout) and getattr(self, "discord_user", None):
+            self.logout_discord()
+        self.state = GameState.CONNECTION_LOST
+
     def _load_user_session(self):
         """Load saved user session and refresh profile."""
         try:
@@ -53,23 +120,38 @@ class AuthMixin:
 
     def _monitor_connection_loop(self):
         """Monitor internet connection in background."""
+        interval_s = float(max(5.0, getattr(self, "connection_monitor_interval_s", 10.0)))
+        fail_limit = int(max(3, getattr(self, "connection_monitor_fail_limit", 5)))
         while True:
             try:
-                # Ping Google DNS
-                socket.create_connection(("8.8.8.8", 53), timeout=3)
-                self.connection_fail_count = 0
-            except OSError:
-                if self.state != GameState.CONNECTION_LOST:
-                    print(f"[!] Connection check failed ({self.connection_fail_count + 1})")
+                # Avoid false kicks while auth flow/state transitions are happening.
+                if bool(getattr(self, "login_in_progress", False)):
+                    time.sleep(interval_s)
+                    continue
+                if self.state in {GameState.LOGIN_MODAL, GameState.WELCOME_MODAL, GameState.CONNECTION_LOST}:
+                    time.sleep(interval_s)
+                    continue
+                if time.time() < float(getattr(self, "connection_monitor_grace_until", 0.0) or 0.0):
+                    time.sleep(interval_s)
+                    continue
+
+                if self._has_backend_connection(timeout_s=3.5):
+                    self.connection_fail_count = 0
+                    self.connection_last_ok_at = time.time()
+                else:
                     self.connection_fail_count += 1
-                    
-                    if self.connection_fail_count >= 3:
+                    print(f"[!] Connection check failed ({self.connection_fail_count}/{fail_limit})")
+
+                    if self.connection_fail_count >= fail_limit:
                         print("[!] Connection lost. Terminating session.")
-                        # Logout and show connection lost screen
-                        self.logout_discord()
-                        self.state = GameState.CONNECTION_LOST
+                        self._handle_connection_lost(force_logout=True)
+            except Exception:
+                if self.state not in {GameState.CONNECTION_LOST, GameState.LOGIN_MODAL, GameState.WELCOME_MODAL}:
+                    self.connection_fail_count += 1
+                    if self.connection_fail_count >= fail_limit:
+                        self._handle_connection_lost(force_logout=True)
             
-            time.sleep(10) # Check every 10 seconds
+            time.sleep(interval_s)
 
     def _create_rounded_avatar(self, img_data, size=(40, 40)):
         """Convert raw image data to a rounded pygame surface using PIL for smooth masking."""
@@ -197,6 +279,8 @@ class AuthMixin:
         self.login_started_at = now
         self.login_error = ""
         self.discord_auth_url = None
+        self.connection_fail_count = 0
+        self.connection_monitor_grace_until = max(float(getattr(self, "connection_monitor_grace_until", 0.0) or 0.0), now + 120.0)
 
         print(f"[AUTH][attempt={attempt_id}] Starting login thread")
         threading.Thread(target=self._do_discord_login, args=(attempt_id,), daemon=True).start()
@@ -242,6 +326,8 @@ class AuthMixin:
             if user:
                 self.discord_user = user
                 self.username = user.get("username", "User")
+                self.connection_fail_count = 0
+                self.connection_monitor_grace_until = time.time() + 45.0
                 if hasattr(self, "_sync_network_identity"):
                     self._sync_network_identity()
                 if getattr(self, "network_manager", None):
@@ -257,11 +343,11 @@ class AuthMixin:
                 self._quest_sync_inflight = False
                 if hasattr(self, "load_settings_from_cloud"):
                     try:
-                        self.load_settings_from_cloud(apply_runtime=True)
+                        self.load_settings_from_cloud(apply_runtime=False)
+                        self._pending_runtime_settings_apply = True
                     except Exception:
                         pass
                 self._load_player_meta()
-                self._save_user_session()
                 self._save_user_session()
                 threading.Thread(target=self._load_discord_avatar, daemon=True).start()
                 print(f"[AUTH][attempt={attempt_id}] Success: {self.username}")

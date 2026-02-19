@@ -500,7 +500,7 @@ class CoreMixin:
         return merged
 
     def _load_player_meta(self):
-        # Guest uses local meta. Logged-in users are cloud-authoritative only.
+        # Cloud-authoritative meta only. Guest does not persist local meta.
         self.tutorial_seen = False
         self.tutorial_seen_at = None
         self.tutorial_version = "1.0"
@@ -509,17 +509,8 @@ class CoreMixin:
         self.quest_state = self._default_quest_state()
 
         if self.username == "Guest":
-            local_meta = self._load_player_meta_local()
-            if isinstance(local_meta, dict) and local_meta:
-                if bool(local_meta.get("tutorial_seen", False)):
-                    self.tutorial_seen = True
-                local_seen_at = local_meta.get("tutorial_seen_at")
-                if local_seen_at:
-                    self.tutorial_seen_at = local_seen_at
-                local_ver = local_meta.get("tutorial_version")
-                if local_ver:
-                    self.tutorial_version = str(local_ver)
-                self.mastery_data = self._normalize_mastery_map(local_meta.get("mastery"))
+            # Ensure stale guest files are removed; guests are not allowed to persist progression/meta.
+            self._clear_player_meta_local()
             self._refresh_quest_periods()
             return
 
@@ -577,7 +568,7 @@ class CoreMixin:
 
     def _save_player_meta(self):
         if self.username == "Guest":
-            self._save_player_meta_local()
+            self._clear_player_meta_local()
             return
         # Logged-in users stay cloud-authoritative; avoid trust-on-local meta cache.
         self._clear_player_meta_local()
@@ -624,6 +615,7 @@ class CoreMixin:
         self.profile_dropdown_open = False
         self.login_modal_message = ""
         self.pending_action = None  # Action to perform after login
+        self._pending_runtime_settings_apply = False
         self._load_user_session()
         
         # Settings
@@ -687,13 +679,21 @@ class CoreMixin:
         self.model = None
         self.recorder = SignRecorder() # MediaPipe + KNN
         
-        # Connection Monitor
-        self.connection_fail_count = 0
-        threading.Thread(target=self._monitor_connection_loop, daemon=True).start()
-        
         # Network & Leaderboard
         self.network_manager = NetworkManager()
         self._sync_network_identity()
+        self.connection_monitor_interval_s = 10.0
+        self.connection_monitor_fail_limit = 5
+        self.connection_monitor_grace_until = time.time() + 25.0
+        self.connection_last_ok_at = 0.0
+        self.connection_fail_count = 0
+        threading.Thread(target=self._monitor_connection_loop, daemon=True).start()
+        if not self._has_backend_connection(timeout_s=1.5):
+            print("[!] Startup connectivity preflight failed.")
+            self._handle_connection_lost(force_logout=True)
+        else:
+            self.connection_last_ok_at = time.time()
+
         if self.username != "Guest" and self.network_manager.client:
             try:
                 self.network_manager.ensure_profile_identity_bound(
@@ -951,7 +951,7 @@ class CoreMixin:
         self.frame_count = 0
         self.fps_timer = time.time()
 
-        if not self.tutorial_seen:
+        if (not self.tutorial_seen) and self.state == GameState.MENU:
             self.state = GameState.TUTORIAL
         
         print("[+] Jutsu Academy initialized!")

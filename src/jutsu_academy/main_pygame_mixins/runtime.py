@@ -8,6 +8,13 @@ class RuntimeMixin:
         
         # Capture events first
         events = pygame.event.get()
+        if getattr(self, "_pending_runtime_settings_apply", False):
+            self._pending_runtime_settings_apply = False
+            try:
+                if hasattr(self, "apply_settings_runtime"):
+                    self.apply_settings_runtime()
+            except Exception as e:
+                print(f"[!] Runtime settings apply failed on main thread: {e}")
         self._activate_next_alert()
         self._refresh_quest_periods()
         if (
@@ -336,6 +343,9 @@ class RuntimeMixin:
             for name, btn in self.menu_buttons.items():
                 if btn.update(mouse_pos, mouse_click, mouse_down, self.play_sound):
                     if name == "practice":
+                        if not self._has_backend_connection(timeout_s=2.5):
+                            self._handle_connection_lost(force_logout=True)
+                            return
                         # Check login requirement
                         if not self.discord_user:
                             self.state = GameState.LOGIN_MODAL
@@ -470,12 +480,18 @@ class RuntimeMixin:
             for name, btn in self.practice_buttons.items():
                 if btn.update(mouse_pos, mouse_click, mouse_down, self.play_sound):
                     if name == "freeplay":
+                        if not self._has_backend_connection(timeout_s=2.5):
+                            self._handle_connection_lost(force_logout=True)
+                            return
                         if self._mode_requires_calibration_gate():
                             self._enter_calibration_gate("freeplay")
                         else:
                             self.library_mode = "freeplay"
                             self.state = GameState.JUTSU_LIBRARY
                     elif name == "challenge":
+                        if not self._has_backend_connection(timeout_s=2.5):
+                            self._handle_connection_lost(force_logout=True)
+                            return
                         if self._mode_requires_calibration_gate():
                             self._enter_calibration_gate("challenge")
                         else:
@@ -617,6 +633,9 @@ class RuntimeMixin:
                             break
 
                         if item["name"] in self.jutsu_names:
+                            if not self._has_backend_connection(timeout_s=2.5):
+                                self._handle_connection_lost(force_logout=True)
+                                return
                             jutsu_idx = self.jutsu_names.index(item["name"])
                             self.play_sound("click")
                             mode = "practice" if self.library_mode == "freeplay" else "challenge"

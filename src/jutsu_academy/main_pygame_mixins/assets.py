@@ -402,6 +402,23 @@ class AssetsMixin:
         self.settings.update(persisted)
         self._apply_runtime_setting_overrides()
 
+    def apply_settings_runtime(self):
+        """Apply already-loaded settings to runtime/display (main thread only)."""
+        res_idx = int(self.settings.get("resolution_idx", 0) or 0)
+        if 0 <= res_idx < len(RESOLUTION_OPTIONS):
+            _, rw, rh = RESOLUTION_OPTIONS[res_idx]
+        else:
+            _, rw, rh = RESOLUTION_OPTIONS[0]
+            self.settings["resolution_idx"] = 0
+        self.screen_w = rw
+        self.screen_h = rh
+        self.fullscreen = bool(self.settings.get("fullscreen", False))
+        if hasattr(self, "_apply_display_mode"):
+            self._apply_display_mode()
+        if (not getattr(self, "is_muted", False)) and pygame.mixer.get_init():
+            pygame.mixer.music.set_volume(self._effective_music_volume(self.settings.get("music_vol", 0.5)))
+        return {"ok": True}
+
     def load_settings_from_cloud(self, apply_runtime=True):
         """Best-effort cloud sync of persisted user settings for authenticated users."""
         if getattr(self, "username", "Guest") == "Guest":
@@ -430,20 +447,7 @@ class AssetsMixin:
         if not apply_runtime:
             return {"ok": True}
 
-        res_idx = int(self.settings.get("resolution_idx", 0) or 0)
-        if 0 <= res_idx < len(RESOLUTION_OPTIONS):
-            _, rw, rh = RESOLUTION_OPTIONS[res_idx]
-        else:
-            _, rw, rh = RESOLUTION_OPTIONS[0]
-            self.settings["resolution_idx"] = 0
-        self.screen_w = rw
-        self.screen_h = rh
-        self.fullscreen = bool(self.settings.get("fullscreen", False))
-        if hasattr(self, "_apply_display_mode"):
-            self._apply_display_mode()
-        if (not getattr(self, "is_muted", False)) and pygame.mixer.get_init():
-            pygame.mixer.music.set_volume(self._effective_music_volume(self.settings.get("music_vol", 0.5)))
-        return {"ok": True}
+        return self.apply_settings_runtime()
 
     def save_settings(self):
         """Persist settings to cloud only (no local settings file)."""
