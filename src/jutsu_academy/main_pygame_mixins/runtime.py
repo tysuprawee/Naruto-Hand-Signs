@@ -225,12 +225,12 @@ class RuntimeMixin:
                                 self.current_video = None
                 elif self.state == GameState.CALIBRATION_GATE:
                     if event.key == pygame.K_c:
-                        self.start_calibration(manual=True, force_show_diag=True)
-                        self.play_sound("click")
+                        if self.start_calibration(manual=True, force_show_diag=True):
+                            self.play_sound("click")
                     elif event.key in [pygame.K_SPACE, pygame.K_RETURN]:
                         if not getattr(self, "calibration_active", False):
-                            self.start_calibration(manual=True, force_show_diag=True)
-                            self.play_sound("click")
+                            if self.start_calibration(manual=True, force_show_diag=True):
+                                self.play_sound("click")
             elif event.type == pygame.MOUSEWHEEL:
                 if self.state == GameState.ABOUT:
                     self.about_scroll_y -= event.y * 30
@@ -516,14 +516,62 @@ class RuntimeMixin:
             buttons = getattr(self, "calibration_gate_buttons", {})
             if isinstance(buttons, dict):
                 if "start" in buttons:
-                    buttons["start"].enabled = not bool(getattr(self, "calibration_gate_return_pending", False))
+                    buttons["start"].enabled = not bool(
+                        getattr(self, "calibration_gate_return_pending", False)
+                        or getattr(self, "calibration_active", False)
+                    )
+                if "scan" in buttons:
+                    buttons["scan"].enabled = not bool(
+                        getattr(self, "calibration_gate_return_pending", False)
+                        or getattr(self, "calibration_active", False)
+                    )
+                if "settings" in buttons:
+                    buttons["settings"].enabled = not bool(getattr(self, "calibration_active", False))
                 if "back" in buttons:
                     buttons["back"].enabled = not bool(getattr(self, "calibration_active", False))
+
+            cam_dropdown = getattr(self, "calibration_camera_dropdown", None)
+            if cam_dropdown and cam_dropdown.update(mouse_pos, mouse_click, self.play_sound):
+                self.settings["camera_idx"] = cam_dropdown.selected_idx
+                self._stop_camera()
+                selected_name = None
+                if 0 <= cam_dropdown.selected_idx < len(cam_dropdown.options):
+                    selected_name = cam_dropdown.options[cam_dropdown.selected_idx]
+                if self._ensure_calibration_camera_ready(scan_devices=False):
+                    if selected_name:
+                        self.calibration_message = f"Camera selected: {selected_name}"
+                    else:
+                        self.calibration_message = "Camera selected."
+                else:
+                    self.calibration_message = self.calibration_camera_error or "Camera unavailable for calibration."
+                self.calibration_message_until = time.time() + 4.0
+
             for name, btn in buttons.items():
                 if btn.update(mouse_pos, mouse_click, mouse_down, self.play_sound):
-                    if name == "start":
+                    if name == "scan":
+                        self._refresh_settings_camera_options(force=True)
+                        self._sync_calibration_camera_dropdown()
+                        self._stop_camera()
+                        if self._ensure_calibration_camera_ready(scan_devices=False):
+                            names = list(getattr(self, "cameras", []) or [])
+                            idx = int(self.settings.get("camera_idx", 0))
+                            selected_name = names[idx] if 0 <= idx < len(names) else None
+                            if selected_name:
+                                self.calibration_message = f"Camera ready: {selected_name}"
+                            else:
+                                self.calibration_message = "Camera scan complete."
+                        else:
+                            self.calibration_message = self.calibration_camera_error or "Camera unavailable for calibration."
+                        self.calibration_message_until = time.time() + 4.0
+                    elif name == "start":
                         if not getattr(self, "calibration_active", False):
                             self.start_calibration(manual=True, force_show_diag=True)
+                    elif name == "settings":
+                        self._stop_camera()
+                        self.settings_preview_enabled = True
+                        self._refresh_settings_camera_options(force=True)
+                        self._start_settings_camera_preview(self.settings.get("camera_idx", 0))
+                        self.state = GameState.SETTINGS
                     elif name == "back":
                         self._exit_calibration_gate()
         
@@ -648,6 +696,19 @@ class RuntimeMixin:
                         self.state = GameState.PRACTICE_SELECT
         
         elif self.state == GameState.PLAYING:
+            # Mastery panel intercepts all clicks while open
+            if mouse_click and getattr(self, "mastery_panel_data", None):
+                if hasattr(self, "_mastery_retry_rect") and self._mastery_retry_rect.collidepoint(mouse_pos):
+                    self.play_sound("click")
+                    self.mastery_panel_data = None
+                    self.current_step = 0
+                    self.sequence_run_start = None
+                    self.jutsu_active = False
+                    self.fire_particles.emitting = False
+                elif hasattr(self, "_mastery_cont_rect") and self._mastery_cont_rect.collidepoint(mouse_pos):
+                    self.play_sound("click")
+                    self.mastery_panel_data = None
+                return
             if mouse_click and hasattr(self, "model_toggle_rect") and self.model_toggle_rect.collidepoint(mouse_pos):
                 self.toggle_detection_model()
                 self.play_sound("click")

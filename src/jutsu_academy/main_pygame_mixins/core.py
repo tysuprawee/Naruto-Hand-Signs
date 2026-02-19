@@ -852,6 +852,8 @@ class CoreMixin:
         self.calibration_samples = []
         self.calibration_message = ""
         self.calibration_message_until = 0.0
+        self.calibration_camera_available = False
+        self.calibration_camera_error = ""
 
         # Effects
         self.fire_particles = FireParticleSystem(200)

@@ -1210,7 +1210,10 @@ class RenderingMixin:
         self.screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, panel_y + 50)))
         self.screen.blit(subtitle, subtitle.get_rect(center=(SCREEN_WIDTH // 2, panel_y + 92)))
 
-        camera_rect = pygame.Rect(panel_x + 40, panel_y + 126, 540, 405)
+        if hasattr(self, "_sync_calibration_camera_dropdown"):
+            self._sync_calibration_camera_dropdown()
+
+        camera_rect = pygame.Rect(panel_x + 40, panel_y + 146, 540, 380)
         side_rect = pygame.Rect(camera_rect.right + 22, camera_rect.y, panel_rect.right - camera_rect.right - 62, camera_rect.height)
         pygame.draw.rect(self.screen, (12, 12, 18), camera_rect, border_radius=14)
         pygame.draw.rect(self.screen, COLORS["border"], camera_rect, 2, border_radius=14)
@@ -1253,9 +1256,27 @@ class RenderingMixin:
                 self.screen.blit(fitted, (draw_x, draw_y))
                 self.screen.set_clip(prev_clip)
 
+        self.calibration_camera_available = bool(frame_ready)
+        if frame_ready:
+            self.calibration_camera_error = ""
+
         if not frame_ready:
-            msg = self.fonts["body_sm"].render("Camera unavailable for calibration.", True, COLORS["error"])
-            self.screen.blit(msg, msg.get_rect(center=camera_rect.center))
+            if not getattr(self, "calibration_camera_error", ""):
+                self.calibration_camera_error = "Camera unavailable for calibration."
+
+            no_cam_title = self.fonts["body"].render("NO CAMERA FEED", True, COLORS["error"])
+            self.screen.blit(no_cam_title, no_cam_title.get_rect(center=(camera_rect.centerx, camera_rect.centery - 18)))
+
+            error_lines = self._wrap_text_to_width(
+                self.fonts["small"],
+                str(self.calibration_camera_error or "Camera unavailable for calibration."),
+                camera_rect.width - 72,
+            )
+            y = camera_rect.centery + 10
+            for line in error_lines[:3]:
+                surf = self.fonts["small"].render(line, True, COLORS["text_dim"])
+                self.screen.blit(surf, surf.get_rect(center=(camera_rect.centerx, y)))
+                y += self.fonts["small"].get_linesize()
 
         lighting_label = str(getattr(self, "lighting_status", "unknown") or "unknown").upper()
         if lighting_label == "GOOD":
@@ -1274,58 +1295,125 @@ class RenderingMixin:
                 )
             )
 
+        detected_value = str(getattr(self, "detected_sign", "idle") or "idle").upper()
+        conf_value = f"{int(float(getattr(self, 'detected_confidence', 0.0) or 0.0) * 100)}%"
+        if not frame_ready:
+            detected_value = "NO CAMERA"
+            conf_value = "--"
+
         side_lines = [
             ("LIGHT", lighting_label, lighting_color),
             ("MODEL", "MEDIAPIPE" if self.settings.get("use_mediapipe_signs", False) else "YOLO", COLORS["text"]),
-            ("DETECTED", str(getattr(self, "detected_sign", "idle") or "idle").upper(), COLORS["text"]),
-            ("CONF", f"{int(float(getattr(self, 'detected_confidence', 0.0) or 0.0) * 100)}%", COLORS["text_dim"]),
+            ("DETECTED", detected_value, COLORS["text"]),
+            ("CONF", conf_value, COLORS["text_dim"]),
             ("SAMPLES", str(len(getattr(self, "calibration_samples", []) or [])), COLORS["text_dim"]),
             ("PROGRESS", f"{progress}%" if self.calibration_active else "READY", COLORS["text"]),
         ]
 
-        y = side_rect.y + 18
+        y = side_rect.y + 14
+        row_h = 44
+        value_max_width = side_rect.width - 28
         for label, value, color in side_lines:
             k = self.fonts["body_sm"].render(label, True, COLORS["text_dim"])
-            v = self.fonts["body"].render(str(value), True, color)
+            value_text = self._fit_single_line_text(self.fonts["body"], str(value), value_max_width)
+            v = self.fonts["body"].render(value_text, True, color)
             self.screen.blit(k, (side_rect.x + 14, y))
             self.screen.blit(v, (side_rect.x + 14, y + 20))
-            y += 58
+            y += row_h
 
-        hint_lines = [
-            "Press C to start calibration.",
-            "Keep both hands visible.",
-            "Move naturally for 8-12 seconds.",
-        ]
-        y = side_rect.bottom - 90
+        if frame_ready:
+            hint_seed = [
+                "Press C or START to calibrate.",
+                "Keep both hands visible.",
+                "Move naturally for 8-12 seconds.",
+            ]
+        else:
+            hint_seed = [
+                "Press START to retry camera.",
+                "Make sure a camera is connected.",
+                "Use SETTINGS to scan/select device.",
+                "Close other apps if camera is busy.",
+            ]
+        hint_lines = []
+        for text in hint_seed:
+            hint_lines.extend(self._wrap_text_to_width(self.fonts["tiny"], text, side_rect.width - 28))
+        hint_lines = hint_lines[:3]
+
+        line_h = 18
+        hint_top_min = side_rect.y + 14 + (row_h * len(side_lines)) + 6
+        hint_top = side_rect.bottom - 14 - (len(hint_lines) * line_h)
+        hint_top = max(hint_top_min, hint_top)
+        y = hint_top
         for text in hint_lines:
             surf = self.fonts["tiny"].render(text, True, COLORS["text_dim"])
             self.screen.blit(surf, (side_rect.x + 14, y))
-            y += 20
+            y += line_h
 
         status_text = str(getattr(self, "calibration_message", "") or "")
         if not status_text:
             status_text = "Calibration profile will be stored to cloud."
-        status = self.fonts["body_sm"].render(status_text, True, COLORS["text"])
-        self.screen.blit(status, status.get_rect(center=(SCREEN_WIDTH // 2, panel_y + panel_h - 132)))
+        status_lines = self._wrap_text_to_width(self.fonts["body_sm"], status_text, side_rect.width - 28)[:2]
+        status_line_h = self.fonts["body_sm"].get_linesize()
+        status_y = camera_rect.bottom + 20 - ((len(status_lines) - 1) * status_line_h // 2)
+        for line in status_lines:
+            status = self.fonts["body_sm"].render(line, True, COLORS["text"])
+            self.screen.blit(status, status.get_rect(center=(side_rect.centerx, status_y)))
+            status_y += status_line_h
+
+        camera_dropdown = getattr(self, "calibration_camera_dropdown", None)
+        scan_btn = self.calibration_gate_buttons.get("scan")
+        camera_row_y = camera_rect.bottom + 14
+        if camera_dropdown:
+            camera_dropdown.x = camera_rect.x + 94
+            camera_dropdown.y = camera_row_y
+            camera_dropdown.width = camera_rect.width - 94 - 12 - (scan_btn.rect.width if scan_btn else 96)
+            camera_dropdown.rect = pygame.Rect(
+                camera_dropdown.x,
+                camera_dropdown.y,
+                camera_dropdown.width,
+                camera_dropdown.height,
+            )
+            cam_label = self.fonts["body_sm"].render("CAMERA", True, COLORS["text_dim"])
+            self.screen.blit(cam_label, (camera_rect.x, camera_dropdown.y + 8))
 
         start_btn = self.calibration_gate_buttons.get("start")
+        settings_btn = self.calibration_gate_buttons.get("settings")
         back_btn = self.calibration_gate_buttons.get("back")
+        if scan_btn and camera_dropdown:
+            scan_btn.rect.x = camera_dropdown.rect.right + 12
+            scan_btn.rect.y = camera_dropdown.rect.y
+            scan_btn.rect.height = camera_dropdown.rect.height
+            scan_btn.text = "SCAN"
+            scan_btn.color = COLORS["bg_card"]
+            scan_btn.render(self.screen)
         if start_btn:
             start_btn.rect.x = panel_x + (panel_w - start_btn.rect.width) // 2
-            start_btn.rect.y = panel_y + panel_h - 110
-            start_btn.enabled = not bool(getattr(self, "calibration_gate_return_pending", False))
+            start_btn.rect.y = panel_y + panel_h - 112
+            start_btn.enabled = not bool(
+                getattr(self, "calibration_gate_return_pending", False)
+                or getattr(self, "calibration_active", False)
+            )
             if getattr(self, "calibration_gate_return_pending", False):
                 start_btn.text = "SAVING..."
             elif getattr(self, "calibration_active", False):
                 start_btn.text = "CALIBRATING..."
+            elif not bool(getattr(self, "calibration_camera_available", False)):
+                start_btn.text = "RETRY CAMERA"
             else:
                 start_btn.text = "START CALIBRATION"
             start_btn.render(self.screen)
+        if settings_btn:
+            settings_btn.rect.x = panel_x + 278
+            settings_btn.rect.y = panel_y + panel_h - 66
+            settings_btn.enabled = not bool(getattr(self, "calibration_active", False))
+            settings_btn.render(self.screen)
         if back_btn:
             back_btn.rect.x = panel_x + 24
-            back_btn.rect.y = panel_y + panel_h - 70
+            back_btn.rect.y = panel_y + panel_h - 66
             back_btn.enabled = not bool(getattr(self, "calibration_active", False))
             back_btn.render(self.screen)
+        if camera_dropdown:
+            camera_dropdown.render(self.screen)
 
     def render_about(self):
         """Render upgraded About page."""

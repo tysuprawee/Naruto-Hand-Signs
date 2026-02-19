@@ -150,8 +150,17 @@ class UISetupMixin:
     def _create_calibration_gate_ui(self):
         """Create first-time calibration gate UI."""
         cx = SCREEN_WIDTH // 2
+        cam_idx = self.settings.get("camera_idx", 0)
+        if len(self.cameras) == 0:
+            cam_idx = 0
+        elif cam_idx < 0 or cam_idx >= len(self.cameras):
+            cam_idx = 0
+            self.settings["camera_idx"] = 0
+        self.calibration_camera_dropdown = Dropdown(cx - 120, SCREEN_HEIGHT - 220, 260, self.cameras, cam_idx)
         self.calibration_gate_buttons = {
+            "scan": Button(cx + 146, SCREEN_HEIGHT - 220, 96, 40, "SCAN", font_size=24, color=COLORS["bg_card"]),
             "start": Button(cx - 170, SCREEN_HEIGHT - 160, 340, 58, "START CALIBRATION"),
+            "settings": Button(cx + 20, SCREEN_HEIGHT - 90, 240, 48, "SETTINGS", color=(58, 92, 162)),
             "back": Button(cx - 120, SCREEN_HEIGHT - 90, 240, 48, "BACK", color=COLORS["bg_card"]),
         }
 

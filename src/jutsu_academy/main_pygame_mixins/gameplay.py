@@ -82,6 +82,7 @@ class GameplayMixin:
         self.pending_sounds = []
         self.pending_effects = []
         self.post_effect_alerts = []
+        self.mastery_panel_data = None
         self.current_video = None
         if self.video_cap:
             self.video_cap.release()
@@ -174,15 +175,65 @@ class GameplayMixin:
             return False
         return True
 
+    def _sync_calibration_camera_dropdown(self):
+        """Keep calibration camera selector aligned with current detected camera list."""
+        dropdown = getattr(self, "calibration_camera_dropdown", None)
+        if not dropdown:
+            return
+
+        options = list(getattr(self, "cameras", []) or [])
+        dropdown.options = options
+        if not options:
+            dropdown.selected_idx = 0
+            dropdown.is_open = False
+            self.settings["camera_idx"] = 0
+            return
+
+        idx = int(self.settings.get("camera_idx", 0))
+        if idx < 0 or idx >= len(options):
+            idx = 0
+            self.settings["camera_idx"] = 0
+        dropdown.selected_idx = idx
+
+    def _ensure_calibration_camera_ready(self, scan_devices=False):
+        """Ensure calibration gate has an active camera stream."""
+        if self.cap is not None and self.cap.isOpened():
+            self.calibration_camera_available = True
+            self.calibration_camera_error = ""
+            return True
+
+        if scan_devices and hasattr(self, "_refresh_settings_camera_options"):
+            try:
+                self._refresh_settings_camera_options(force=True)
+                self._sync_calibration_camera_dropdown()
+            except Exception:
+                pass
+
+        if self._start_camera():
+            self.calibration_camera_available = True
+            self.calibration_camera_error = ""
+            return True
+
+        self.calibration_camera_available = False
+        camera_count = len(getattr(self, "cameras", []) or [])
+        if camera_count <= 0:
+            self.calibration_camera_error = "No camera found. Connect a camera, then open Settings and run Scan Cameras."
+        else:
+            self.calibration_camera_error = "Camera unavailable. Make sure your camera is connected, close other camera apps, then retry."
+        return False
+
     def _enter_calibration_gate(self, pending_mode):
         """Open calibration gate screen before allowing Free Play / Rank Mode."""
         self.calibration_gate_pending_mode = str(pending_mode or "")
         self.calibration_gate_return_pending = False
         self.calibration_gate_return_at = 0.0
         self.calibration_last_sync_ok = False
+        self.calibration_camera_available = False
+        self.calibration_camera_error = ""
 
         self._reset_active_effects(reset_calibration=True)
         self._load_calibration_profile(force_refresh=True)
+        self._sync_calibration_camera_dropdown()
 
         # Safety: profile may have appeared during refresh, skip gate in that case.
         if isinstance(self.calibration_profile, dict) and self.calibration_profile:
@@ -197,13 +248,11 @@ class GameplayMixin:
             self.state = GameState.ERROR_MODAL
             return False
 
-        if not self._start_camera():
-            self.error_title = "Camera Error"
-            self.error_message = "Could not access camera for calibration.\nClose other apps using camera and try again."
-            self.state = GameState.ERROR_MODAL
-            return False
+        if self._ensure_calibration_camera_ready(scan_devices=True):
+            self.calibration_message = "Press C or START CALIBRATION."
+        else:
+            self.calibration_message = self.calibration_camera_error or "Camera unavailable for calibration."
 
-        self.calibration_message = "Press C or START CALIBRATION."
         self.calibration_message_until = time.time() + 10.0
         self.state = GameState.CALIBRATION_GATE
         return True
@@ -214,6 +263,9 @@ class GameplayMixin:
         self.calibration_gate_return_pending = False
         self.calibration_gate_return_at = 0.0
         self.calibration_gate_pending_mode = ""
+        self.calibration_camera_available = False
+        self.calibration_camera_error = ""
+        self._sync_calibration_camera_dropdown()
         self.state = GameState.PRACTICE_SELECT
 
     def _save_calibration_profile(self, profile):
@@ -237,6 +289,13 @@ class GameplayMixin:
             return False
 
     def start_calibration(self, manual=True, force_show_diag=False):
+        should_scan = (self.state == GameState.CALIBRATION_GATE)
+        if not self._ensure_calibration_camera_ready(scan_devices=should_scan):
+            self.calibration_active = False
+            self.calibration_message = self.calibration_camera_error or "Camera unavailable for calibration."
+            self.calibration_message_until = time.time() + 5.0
+            return False
+
         if force_show_diag and self.calibration_restore_diag_state is None:
             self.calibration_restore_diag_state = bool(getattr(self, "show_detection_panel", False))
             self.show_detection_panel = True
@@ -253,6 +312,7 @@ class GameplayMixin:
         else:
             self.calibration_message = "Running first-time calibration..."
             self.calibration_message_until = time.time() + 6.0
+        return True
 
     def _evaluate_lighting(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -535,6 +595,48 @@ class GameplayMixin:
         surf = self.fonts["title_md"].render(text, True, color)
         rect = surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + y_offset))
         self.screen.blit(surf, rect)
+
+    def _queue_post_effect_alert(self, alert_type, payload=None, min_delay_s=0.0):
+        """Queue an alert to fire after the current jutsu effect finishes."""
+        if not hasattr(self, "post_effect_alerts"):
+            self.post_effect_alerts = []
+        self.post_effect_alerts.append({
+            "type": str(alert_type),
+            "payload": payload or {},
+            "min_delay_s": float(min_delay_s),
+            "queued_at": time.time(),
+        })
+
+    def _dispatch_post_effect_alerts(self):
+        """Fire queued post-effect alerts once the jutsu effect has ended."""
+        if not hasattr(self, "post_effect_alerts") or not self.post_effect_alerts:
+            return
+        if self.jutsu_active:
+            return
+        now = time.time()
+        remaining = []
+        for alert in self.post_effect_alerts:
+            delay_ok = (now - alert.get("queued_at", now)) >= alert.get("min_delay_s", 0.0)
+            if not delay_ok:
+                remaining.append(alert)
+                continue
+            atype = alert.get("type", "")
+            payload = alert.get("payload", {})
+            if atype == "mastery":
+                # Rendered inline in render_playing via self.mastery_panel_data
+                self.mastery_panel_data = payload
+            elif atype == "level_up":
+                prev = int(payload.get("previous_level", self.progression.level))
+                label = str(payload.get("source_label", ""))
+                if hasattr(self, "_notify_level_up"):
+                    self._notify_level_up(previous_level=prev, source_label=label)
+                else:
+                    self.show_alert("Level Up!", f"LV {prev} → LV {self.progression.level}", "AWESOME")
+            elif atype == "unlocks":
+                prev = int(payload.get("previous_level", self.progression.level))
+                if hasattr(self, "process_unlock_alerts"):
+                    self.process_unlock_alerts(previous_level=prev)
+        self.post_effect_alerts = remaining
 
     def stop_game(self, return_to_library=False):
         """Stop the game and return to menu."""
