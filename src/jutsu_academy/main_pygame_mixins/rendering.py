@@ -1213,7 +1213,7 @@ class RenderingMixin:
         if hasattr(self, "_sync_calibration_camera_dropdown"):
             self._sync_calibration_camera_dropdown()
 
-        camera_rect = pygame.Rect(panel_x + 40, panel_y + 146, 540, 380)
+        camera_rect = pygame.Rect(panel_x + 40, panel_y + 146, 540, 360)
         side_rect = pygame.Rect(camera_rect.right + 22, camera_rect.y, panel_rect.right - camera_rect.right - 62, camera_rect.height)
         pygame.draw.rect(self.screen, (12, 12, 18), camera_rect, border_radius=14)
         pygame.draw.rect(self.screen, COLORS["border"], camera_rect, 2, border_radius=14)
@@ -1311,7 +1311,7 @@ class RenderingMixin:
         ]
 
         y = side_rect.y + 14
-        row_h = 44
+        row_h = 42
         value_max_width = side_rect.width - 28
         for label, value, color in side_lines:
             k = self.fonts["body_sm"].render(label, True, COLORS["text_dim"])
@@ -1321,23 +1321,26 @@ class RenderingMixin:
             self.screen.blit(v, (side_rect.x + 14, y + 20))
             y += row_h
 
+        status_text = str(getattr(self, "calibration_message", "") or "")
+        if not status_text:
+            status_text = "Press C or START to calibrate."
+        status_line = self._fit_single_line_text(self.fonts["tiny"], status_text, side_rect.width - 28)
+
         if frame_ready:
             hint_seed = [
-                "Press C or START to calibrate.",
                 "Keep both hands visible.",
                 "Move naturally for 8-12 seconds.",
             ]
         else:
             hint_seed = [
-                "Press START to retry camera.",
                 "Make sure a camera is connected.",
-                "Use SETTINGS to scan/select device.",
+                "Use SCAN or SETTINGS to choose device.",
                 "Close other apps if camera is busy.",
             ]
-        hint_lines = []
+        hint_lines = [status_line] if status_line else []
         for text in hint_seed:
             hint_lines.extend(self._wrap_text_to_width(self.fonts["tiny"], text, side_rect.width - 28))
-        hint_lines = hint_lines[:3]
+        hint_lines = hint_lines[:4]
 
         line_h = 18
         hint_top_min = side_rect.y + 14 + (row_h * len(side_lines)) + 6
@@ -1349,29 +1352,36 @@ class RenderingMixin:
             self.screen.blit(surf, (side_rect.x + 14, y))
             y += line_h
 
-        status_text = str(getattr(self, "calibration_message", "") or "")
-        if not status_text:
-            status_text = "Calibration profile will be stored to cloud."
-        status_lines = self._wrap_text_to_width(self.fonts["body_sm"], status_text, side_rect.width - 28)[:2]
-        status_line_h = self.fonts["body_sm"].get_linesize()
-        status_y = camera_rect.bottom + 20 - ((len(status_lines) - 1) * status_line_h // 2)
-        for line in status_lines:
-            status = self.fonts["body_sm"].render(line, True, COLORS["text"])
-            self.screen.blit(status, status.get_rect(center=(side_rect.centerx, status_y)))
-            status_y += status_line_h
-
         camera_dropdown = getattr(self, "calibration_camera_dropdown", None)
         scan_btn = self.calibration_gate_buttons.get("scan")
-        camera_row_y = camera_rect.bottom + 14
+        footer_top = camera_rect.bottom + 12
+        camera_row_h = 40
+        start_btn_h = 50
+        secondary_btn_h = 42
+        row_gap = 8
+
+        camera_row_y = footer_top
+        start_row_y = camera_row_y + camera_row_h + row_gap
+        secondary_row_y = start_row_y + start_btn_h + row_gap
+
+        max_secondary_y = panel_rect.bottom - 14 - secondary_btn_h
+        if secondary_row_y > max_secondary_y:
+            overflow = secondary_row_y - max_secondary_y
+            camera_row_y -= overflow
+            start_row_y -= overflow
+            secondary_row_y -= overflow
+
         if camera_dropdown:
-            camera_dropdown.x = camera_rect.x + 94
+            camera_dropdown.force_open_upward = True
+            camera_dropdown.x = camera_rect.x + 96
             camera_dropdown.y = camera_row_y
-            camera_dropdown.width = camera_rect.width - 94 - 12 - (scan_btn.rect.width if scan_btn else 96)
+            scan_w = scan_btn.rect.width if scan_btn else 96
+            camera_dropdown.width = max(180, camera_rect.width - 96 - 12 - scan_w - 12)
             camera_dropdown.rect = pygame.Rect(
                 camera_dropdown.x,
                 camera_dropdown.y,
                 camera_dropdown.width,
-                camera_dropdown.height,
+                camera_row_h,
             )
             cam_label = self.fonts["body_sm"].render("CAMERA", True, COLORS["text_dim"])
             self.screen.blit(cam_label, (camera_rect.x, camera_dropdown.y + 8))
@@ -1382,13 +1392,16 @@ class RenderingMixin:
         if scan_btn and camera_dropdown:
             scan_btn.rect.x = camera_dropdown.rect.right + 12
             scan_btn.rect.y = camera_dropdown.rect.y
-            scan_btn.rect.height = camera_dropdown.rect.height
+            scan_btn.rect.width = 96
+            scan_btn.rect.height = camera_row_h
             scan_btn.text = "SCAN"
             scan_btn.color = COLORS["bg_card"]
             scan_btn.render(self.screen)
         if start_btn:
+            start_btn.rect.width = 360
+            start_btn.rect.height = start_btn_h
             start_btn.rect.x = panel_x + (panel_w - start_btn.rect.width) // 2
-            start_btn.rect.y = panel_y + panel_h - 112
+            start_btn.rect.y = start_row_y
             start_btn.enabled = not bool(
                 getattr(self, "calibration_gate_return_pending", False)
                 or getattr(self, "calibration_active", False)
@@ -1403,13 +1416,24 @@ class RenderingMixin:
                 start_btn.text = "START CALIBRATION"
             start_btn.render(self.screen)
         if settings_btn:
-            settings_btn.rect.x = panel_x + 278
-            settings_btn.rect.y = panel_y + panel_h - 66
+            settings_btn.rect.width = 220
+            settings_btn.rect.height = secondary_btn_h
+            secondary_gap = 16
+            pair_total = settings_btn.rect.width * 2 + secondary_gap
+            left_x = panel_x + (panel_w - pair_total) // 2
+            right_x = left_x + settings_btn.rect.width + secondary_gap
+            settings_btn.rect.x = right_x
+            settings_btn.rect.y = secondary_row_y
             settings_btn.enabled = not bool(getattr(self, "calibration_active", False))
             settings_btn.render(self.screen)
         if back_btn:
-            back_btn.rect.x = panel_x + 24
-            back_btn.rect.y = panel_y + panel_h - 66
+            back_btn.rect.width = 220
+            back_btn.rect.height = secondary_btn_h
+            secondary_gap = 16
+            pair_total = back_btn.rect.width * 2 + secondary_gap
+            left_x = panel_x + (panel_w - pair_total) // 2
+            back_btn.rect.x = left_x
+            back_btn.rect.y = secondary_row_y
             back_btn.enabled = not bool(getattr(self, "calibration_active", False))
             back_btn.render(self.screen)
         if camera_dropdown:

@@ -157,6 +157,7 @@ class UISetupMixin:
             cam_idx = 0
             self.settings["camera_idx"] = 0
         self.calibration_camera_dropdown = Dropdown(cx - 120, SCREEN_HEIGHT - 220, 260, self.cameras, cam_idx)
+        self.calibration_camera_dropdown.force_open_upward = True
         self.calibration_gate_buttons = {
             "scan": Button(cx + 146, SCREEN_HEIGHT - 220, 96, 40, "SCAN", font_size=24, color=COLORS["bg_card"]),
             "start": Button(cx - 170, SCREEN_HEIGHT - 160, 340, 58, "START CALIBRATION"),

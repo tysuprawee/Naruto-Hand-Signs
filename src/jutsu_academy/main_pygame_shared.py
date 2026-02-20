@@ -383,6 +383,7 @@ class Dropdown:
         self.rect = pygame.Rect(x, y, width, self.height)
         self.font = None
         self.open_upward = False
+        self.force_open_upward = None
         self.icon_down = None
         self.icon_up = None
         self._icons_loaded = False
@@ -410,6 +411,9 @@ class Dropdown:
         return pygame.Rect(self.x, self.y + (i + 1) * self.height, self.width, self.height)
 
     def _compute_open_direction(self):
+        if isinstance(self.force_open_upward, bool):
+            self.open_upward = self.force_open_upward
+            return
         screen = pygame.display.get_surface()
         if not screen:
             self.open_upward = False
