@@ -960,24 +960,43 @@ class PlayingMixin:
         # HUD toggles (outside camera zone): model switch + diagnostics panel.
         top_controls_y = hud_h + 8
         self.model_toggle_rect = pygame.Rect(SCREEN_WIDTH - 334, top_controls_y, 182, 30)
-        self.diag_toggle_rect = pygame.Rect(SCREEN_WIDTH - 142, top_controls_y, 126, 30)
+        self.diag_toggle_rect  = pygame.Rect(SCREEN_WIDTH - 142, top_controls_y, 126, 30)
         mouse_pos = pygame.mouse.get_pos()
         model_hover = self.model_toggle_rect.collidepoint(mouse_pos)
-        diag_hover = self.diag_toggle_rect.collidepoint(mouse_pos)
-        if model_hover or diag_hover:
+        diag_hover  = self.diag_toggle_rect.collidepoint(mouse_pos)
+
+        # [i] info button sits to the LEFT of the model toggle
+        info_btn_size = 22
+        info_btn_rect = pygame.Rect(
+            self.model_toggle_rect.left - info_btn_size - 6,
+            top_controls_y + (30 - info_btn_size) // 2,
+            info_btn_size, info_btn_size,
+        )
+        self._model_info_rect = info_btn_rect
+        info_hover = info_btn_rect.collidepoint(mouse_pos)
+
+        if model_hover or diag_hover or info_hover:
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
 
         use_mediapipe = bool(self.settings.get("use_mediapipe_signs", False))
         model_btn_col = COLORS["bg_hover"] if model_hover else COLORS["bg_card"]
-        model_border = COLORS["success"] if use_mediapipe else COLORS["accent"]
+        model_border  = COLORS["success"] if use_mediapipe else COLORS["accent"]
         pygame.draw.rect(self.screen, model_btn_col, self.model_toggle_rect, border_radius=8)
-        pygame.draw.rect(self.screen, model_border, self.model_toggle_rect, 1, border_radius=8)
+        pygame.draw.rect(self.screen, model_border,  self.model_toggle_rect, 1, border_radius=8)
         model_text = "MODEL: MEDIAPIPE" if use_mediapipe else "MODEL: YOLO"
         model_surf = self.fonts["small"].render(model_text, True, COLORS["text"])
         self.screen.blit(model_surf, model_surf.get_rect(center=self.model_toggle_rect.center))
 
+        # Draw [i] circle
+        i_col  = (100, 160, 255) if info_hover else (70, 110, 200)
+        i_bg   = (25, 35, 60)    if info_hover else (18, 24, 45)
+        pygame.draw.circle(self.screen, i_bg,  info_btn_rect.center, info_btn_size // 2)
+        pygame.draw.circle(self.screen, i_col, info_btn_rect.center, info_btn_size // 2, 1)
+        i_surf = self.fonts["tiny"].render("i", True, i_col)
+        self.screen.blit(i_surf, i_surf.get_rect(center=info_btn_rect.center))
+
         btn_col = COLORS["bg_hover"] if diag_hover else COLORS["bg_card"]
-        pygame.draw.rect(self.screen, btn_col, self.diag_toggle_rect, border_radius=8)
+        pygame.draw.rect(self.screen, btn_col,         self.diag_toggle_rect, border_radius=8)
         pygame.draw.rect(self.screen, COLORS["border"], self.diag_toggle_rect, 1, border_radius=8)
         diag_text = "DIAG: ON" if getattr(self, "show_detection_panel", False) else "DIAG: OFF"
         diag_surf = self.fonts["small"].render(diag_text, True, COLORS["text"])
@@ -1030,9 +1049,12 @@ class PlayingMixin:
             if hasattr(self, "left_arrow_rect"): del self.left_arrow_rect
             if hasattr(self, "right_arrow_rect"): del self.right_arrow_rect
         
-        # ESC hint
+        # ESC hint + calibrate hint (always visible, bottom bar)
         hint = self.fonts["body_sm"].render("Press ESC to exit", True, COLORS["text_muted"])
-        self.screen.blit(hint, (SCREEN_WIDTH // 2 - 60, SCREEN_HEIGHT - 30))
+        self.screen.blit(hint, (SCREEN_WIDTH // 2 - hint.get_width() // 2, SCREEN_HEIGHT - 30))
+
+        cal_hint = self.fonts["body_sm"].render("[C] Calibrate", True, COLORS["text_muted"])
+        self.screen.blit(cal_hint, (SCREEN_WIDTH - cal_hint.get_width() - 16, SCREEN_HEIGHT - 30))
 
         if hasattr(self, "playing_back_button"):
             self.playing_back_button.render(self.screen)
@@ -1242,13 +1264,6 @@ class PlayingMixin:
         unlocked     = list(data.get("newly_unlocked", []))
         source_label = str(data.get("source_label", ""))
         opened_at    = float(data.get("opened_at", time.time()))
-
-        # ── Play sound on very first frame via pending_sounds (main-thread safe) ─
-        if not data.get("_sound_queued"):
-            data["_sound_queued"] = True
-            if not hasattr(self, "pending_sounds"):
-                self.pending_sounds = []
-            self.pending_sounds.append({"name": "level", "time": time.time()})
 
         # ── Animation (ease-out cubic, 1.2 s) ─────────────────────────────────
         ANIM_T  = 1.2

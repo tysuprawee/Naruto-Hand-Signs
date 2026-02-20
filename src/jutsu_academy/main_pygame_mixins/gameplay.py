@@ -82,6 +82,7 @@ class GameplayMixin:
         self.pending_sounds = []
         self.pending_effects = []
         self.post_effect_alerts = []
+        self.reward_panel_queue = []
         self.mastery_panel_data = None
         self.level_up_panel_data = None
         self.current_video = None
@@ -624,8 +625,11 @@ class GameplayMixin:
             atype = alert.get("type", "")
             payload = alert.get("payload", {})
             if atype == "mastery":
-                # Rendered inline in render_playing via self.mastery_panel_data
-                self.mastery_panel_data = payload
+                if hasattr(self, "_notify_mastery_update"):
+                    self._notify_mastery_update(
+                        jutsu_name=str(payload.get("jutsu_name", "")),
+                        mastery_info=payload.get("mastery_info"),
+                    )
             elif atype == "level_up":
                 prev = int(payload.get("previous_level", self.progression.level))
                 label = str(payload.get("source_label", ""))

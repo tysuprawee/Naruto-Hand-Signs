@@ -728,6 +728,7 @@ class CoreMixin:
         self.active_alert = None
         self.alert_ok_rect = pygame.Rect(0, 0, 0, 0)
         self.post_effect_alerts = []
+        self.reward_panel_queue = []
         
         # Announcements
         self.announcements = []
@@ -1072,15 +1073,13 @@ class CoreMixin:
 
         newly_unlocked = self.process_unlock_alerts(previous_level=previous_level, queue_alerts=False)
 
-        self.level_up_panel_data = {
+        self._queue_reward_panel("level_up", {
             "previous_level": int(previous_level),
             "new_level":      current_level,
             "rank":           str(self.progression.rank),
             "newly_unlocked": newly_unlocked,
             "source_label":   str(source_label),
-            "opened_at":      time.time(),
-        }
-        self.play_sound("level")
+        }, sound_name="level")
         return newly_unlocked
 
     def _notify_mastery_update(self, jutsu_name, mastery_info):
@@ -1092,13 +1091,51 @@ class CoreMixin:
         if not mastery_info.get("improved", False):
             return False
 
-        # Route directly to the graphical mastery panel.
-        self.mastery_panel_data = {
+        self._queue_reward_panel("mastery", {
             "jutsu_name": jutsu_name,
             "mastery_info": mastery_info,
-            "opened_at": time.time(),
-        }
-        self.play_sound("level")
+        }, sound_name="level")
+        return True
+
+    def _queue_reward_panel(self, panel_type, payload=None, sound_name="level"):
+        """Queue mastery/level-up panels so they open one-by-one without audio overlap."""
+        queue = getattr(self, "reward_panel_queue", None)
+        if queue is None:
+            queue = []
+            self.reward_panel_queue = queue
+        queue.append({
+            "type": str(panel_type or "").strip().lower(),
+            "payload": dict(payload or {}),
+            "sound": str(sound_name or "").strip(),
+        })
+        self._activate_next_reward_panel()
+
+    def _activate_next_reward_panel(self):
+        """Activate the next queued reward panel only when no other reward panel is open."""
+        if getattr(self, "mastery_panel_data", None) or getattr(self, "level_up_panel_data", None):
+            return False
+
+        queue = getattr(self, "reward_panel_queue", None)
+        if not queue:
+            return False
+
+        item = queue.pop(0)
+        panel_type = str(item.get("type", "") or "").strip().lower()
+        payload = dict(item.get("payload") or {})
+        payload["opened_at"] = time.time()
+
+        if panel_type == "mastery":
+            self.mastery_panel_data = payload
+        elif panel_type == "level_up":
+            self.level_up_panel_data = payload
+        else:
+            return False
+
+        sound_name = str(item.get("sound", "") or "").strip()
+        if sound_name:
+            if not hasattr(self, "pending_sounds") or self.pending_sounds is None:
+                self.pending_sounds = []
+            self.pending_sounds.append({"name": sound_name, "time": time.time()})
         return True
 
     def _activate_next_alert(self):

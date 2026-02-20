@@ -16,6 +16,8 @@ class RuntimeMixin:
             except Exception as e:
                 print(f"[!] Runtime settings apply failed on main thread: {e}")
         self._activate_next_alert()
+        if hasattr(self, "_activate_next_reward_panel"):
+            self._activate_next_reward_panel()
         self._refresh_quest_periods()
         if (
             self.state == GameState.CALIBRATION_GATE
@@ -701,12 +703,36 @@ class RuntimeMixin:
                 if hasattr(self, "_mastery_cont_rect") and self._mastery_cont_rect.collidepoint(mouse_pos):
                     self.play_sound("click")
                     self.mastery_panel_data = None
+                    if hasattr(self, "_activate_next_reward_panel"):
+                        self._activate_next_reward_panel()
                 return
             # Level-up panel intercepts clicks while open (shown after mastery panel)
             if mouse_click and getattr(self, "level_up_panel_data", None):
                 if hasattr(self, "_level_up_cont_rect") and self._level_up_cont_rect.collidepoint(mouse_pos):
                     self.play_sound("click")
                     self.level_up_panel_data = None
+                    if hasattr(self, "_activate_next_reward_panel"):
+                        self._activate_next_reward_panel()
+                return
+            # [i] Model info popup
+            if mouse_click and hasattr(self, "_model_info_rect") and self._model_info_rect.collidepoint(mouse_pos):
+                self.play_sound("click")
+                self.show_alert(
+                    "Which Model Should I Use?",
+                    (
+                        "MEDIAPIPE (recommended)\n"
+                        "Best accuracy & fairness — detects hand landmarks "
+                        "directly without a custom dataset. Use this for ranked "
+                        "runs and everyday training.\n\n"
+                        "YOLO (faster on weak CPUs)\n"
+                        "Runs a lightweight object-detection model trained on "
+                        "Naruto signs. Slightly less consistent but very fast. "
+                        "Good if your FPS is low on MediaPipe.\n\n"
+                        "Tip: after switching models press  [C]  to recalibrate "
+                        "so detection thresholds match the new model."
+                    ),
+                    "GOT IT",
+                )
                 return
             if mouse_click and hasattr(self, "model_toggle_rect") and self.model_toggle_rect.collidepoint(mouse_pos):
                 self.toggle_detection_model()
@@ -821,10 +847,14 @@ class RuntimeMixin:
                         still = self._render_level_up_panel()
                         if not still:
                             self.level_up_panel_data = None
+                            if hasattr(self, "_activate_next_reward_panel"):
+                                self._activate_next_reward_panel()
                         elif mouse_click := pygame.mouse.get_pressed()[0]:
                             if hasattr(self, "_level_up_cont_rect") and self._level_up_cont_rect.collidepoint(pygame.mouse.get_pos()):
                                 self.play_sound("click")
                                 self.level_up_panel_data = None
+                                if hasattr(self, "_activate_next_reward_panel"):
+                                    self._activate_next_reward_panel()
 
                 pygame.display.flip()
         finally:
