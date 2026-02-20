@@ -83,6 +83,7 @@ class GameplayMixin:
         self.pending_effects = []
         self.post_effect_alerts = []
         self.mastery_panel_data = None
+        self.level_up_panel_data = None
         self.current_video = None
         if self.video_cap:
             self.video_cap.release()

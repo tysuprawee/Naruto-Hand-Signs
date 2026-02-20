@@ -189,17 +189,17 @@ export default function Home() {
                 <a href="https://www.instagram.com/james.uzumaki_/" target="_blank" onClick={() => trackClick("instagram_hero")} className="h-14 w-14 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 hover:text-pink-500 hover:border-pink-500/50 rounded-lg flex items-center justify-center transition-all opacity-85 hover:opacity-100">
                   <Instagram className="w-6 h-6" />
                 </a>
-                <button
-                  onClick={() => {
-                    trackClick("discord_hero");
-                    openModal("Discord Community", "Stay tuned, we're working on it!");
-                  }}
-                  className="h-14 w-14 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 hover:text-indigo-500 hover:border-indigo-500/50 rounded-lg flex items-center justify-center transition-all opacity-85 hover:opacity-100 group"
+                <a
+                  href="https://discord.gg/s6ZJUVG5U7"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => trackClick("discord_hero")}
+                  className="h-14 w-14 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 hover:text-indigo-400 hover:border-indigo-500/50 rounded-lg flex items-center justify-center transition-all opacity-85 hover:opacity-100 group"
                 >
-                  <svg className="w-6 h-6 fill-current group-hover:fill-indigo-500" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg">
+                  <svg className="w-6 h-6 fill-current group-hover:fill-indigo-400" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg">
                     <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.11,77.11,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22c.63-15.02-2.39-32.91-18.9-72.15ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z" />
                   </svg>
-                </button>
+                </a>
               </div>
             </div>
 
@@ -374,6 +374,11 @@ export default function Home() {
               </a>
               <a href="https://www.instagram.com/james.uzumaki_/" target="_blank" className="hover:text-pink-500 transition-colors">
                 <Instagram className="w-5 h-5" />
+              </a>
+              <a href="https://discord.gg/s6ZJUVG5U7" target="_blank" rel="noopener noreferrer" className="hover:text-indigo-400 transition-colors">
+                <svg className="w-5 h-5 fill-current" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.11,77.11,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22c.63-15.02-2.39-32.91-18.9-72.15ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z" />
+                </svg>
               </a>
             </div>
           </div>

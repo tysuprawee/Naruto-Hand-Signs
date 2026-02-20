@@ -698,16 +698,15 @@ class RuntimeMixin:
         elif self.state == GameState.PLAYING:
             # Mastery panel intercepts all clicks while open
             if mouse_click and getattr(self, "mastery_panel_data", None):
-                if hasattr(self, "_mastery_retry_rect") and self._mastery_retry_rect.collidepoint(mouse_pos):
+                if hasattr(self, "_mastery_cont_rect") and self._mastery_cont_rect.collidepoint(mouse_pos):
                     self.play_sound("click")
                     self.mastery_panel_data = None
-                    self.current_step = 0
-                    self.sequence_run_start = None
-                    self.jutsu_active = False
-                    self.fire_particles.emitting = False
-                elif hasattr(self, "_mastery_cont_rect") and self._mastery_cont_rect.collidepoint(mouse_pos):
+                return
+            # Level-up panel intercepts clicks while open (shown after mastery panel)
+            if mouse_click and getattr(self, "level_up_panel_data", None):
+                if hasattr(self, "_level_up_cont_rect") and self._level_up_cont_rect.collidepoint(mouse_pos):
                     self.play_sound("click")
-                    self.mastery_panel_data = None
+                    self.level_up_panel_data = None
                 return
             if mouse_click and hasattr(self, "model_toggle_rect") and self.model_toggle_rect.collidepoint(mouse_pos):
                 self.toggle_detection_model()
@@ -815,6 +814,17 @@ class RuntimeMixin:
 
                 if self.active_alert:
                     self.render_alert_modal()
+
+                # Rich level-up panel: shown over any state, handled by mouse below
+                if getattr(self, "level_up_panel_data", None) and self.state != GameState.PLAYING:
+                    if hasattr(self, "_render_level_up_panel"):
+                        still = self._render_level_up_panel()
+                        if not still:
+                            self.level_up_panel_data = None
+                        elif mouse_click := pygame.mouse.get_pressed()[0]:
+                            if hasattr(self, "_level_up_cont_rect") and self._level_up_cont_rect.collidepoint(pygame.mouse.get_pos()):
+                                self.play_sound("click")
+                                self.level_up_panel_data = None
 
                 pygame.display.flip()
         finally:

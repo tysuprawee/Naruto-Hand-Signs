@@ -1065,29 +1065,26 @@ class CoreMixin:
         return newly_unlocked
 
     def _notify_level_up(self, previous_level, source_label=""):
-        """Queue level-up feedback panel and include newly unlocked skills."""
+        """Show rich level-up panel and include newly unlocked skills."""
         current_level = int(self.progression.level)
         if current_level <= int(previous_level):
             return []
 
         newly_unlocked = self.process_unlock_alerts(previous_level=previous_level, queue_alerts=False)
 
-        source_prefix = f"{source_label}: " if source_label else ""
-        msg = f"{source_prefix}LV.{previous_level} -> LV.{current_level} ({self.progression.rank})."
-        if newly_unlocked:
-            if len(newly_unlocked) == 1:
-                msg += f" New skill unlocked: {newly_unlocked[0]}."
-            else:
-                preview = ", ".join(newly_unlocked[:3])
-                if len(newly_unlocked) > 3:
-                    preview += f" +{len(newly_unlocked) - 3} more"
-                msg += f" New skills unlocked: {preview}."
-
-        self.show_alert("Level Up", msg, "AWESOME", alert_sound="level")
+        self.level_up_panel_data = {
+            "previous_level": int(previous_level),
+            "new_level":      current_level,
+            "rank":           str(self.progression.rank),
+            "newly_unlocked": newly_unlocked,
+            "source_label":   str(source_label),
+            "opened_at":      time.time(),
+        }
+        self.play_sound("level")
         return newly_unlocked
 
     def _notify_mastery_update(self, jutsu_name, mastery_info):
-        """Queue mastery feedback panel with target times for each mastery tier."""
+        """Show rich mastery panel (replaces old show_alert popup)."""
         if not jutsu_name:
             return False
         if not isinstance(mastery_info, dict):
@@ -1095,49 +1092,13 @@ class CoreMixin:
         if not mastery_info.get("improved", False):
             return False
 
-        prev_tier = str(mastery_info.get("previous_tier", "none") or "none")
-        new_tier = str(mastery_info.get("new_tier", "none") or "none")
-        first_record = bool(mastery_info.get("first_record", False))
-
-        # Keep the popup meaningful and avoid noisy spam for tiny best-time changes in same tier.
-        if (not first_record) and (new_tier == prev_tier):
-            return False
-
-        thresholds = mastery_info.get("thresholds")
-        if not isinstance(thresholds, dict):
-            thresholds = self._mastery_thresholds(jutsu_name)
-
-        bronze_t = float(thresholds.get("bronze", 0.0) or 0.0)
-        silver_t = float(thresholds.get("silver", 0.0) or 0.0)
-        gold_t = float(thresholds.get("gold", 0.0) or 0.0)
-        new_best = float(mastery_info.get("new_best", 0.0) or 0.0)
-
-        prev_name = prev_tier.upper()
-        new_name = new_tier.upper()
-        if first_record and prev_tier == "none" and new_tier == "none":
-            tier_line = "Mastery: NONE (first clear recorded)"
-        else:
-            tier_line = f"Mastery: {prev_name} -> {new_name}"
-
-        next_line = ""
-        if new_tier == "none":
-            next_line = f"Next target: BRONZE <= {bronze_t:.2f}s"
-        elif new_tier == "bronze":
-            next_line = f"Next target: SILVER <= {silver_t:.2f}s"
-        elif new_tier == "silver":
-            next_line = f"Next target: GOLD <= {gold_t:.2f}s"
-        else:
-            next_line = "Max mastery reached."
-
-        msg = (
-            f"{jutsu_name} new best: {new_best:.2f}s\n"
-            f"{tier_line}\n"
-            f"Target times:\n"
-            f"Bronze <= {bronze_t:.2f}s, Silver <= {silver_t:.2f}s\n"
-            f"Gold <= {gold_t:.2f}s\n"
-            f"{next_line}"
-        )
-        self.show_alert("Mastery Update", msg, "NICE", alert_sound="level")
+        # Route directly to the graphical mastery panel.
+        self.mastery_panel_data = {
+            "jutsu_name": jutsu_name,
+            "mastery_info": mastery_info,
+            "opened_at": time.time(),
+        }
+        self.play_sound("level")
         return True
 
     def _activate_next_alert(self):

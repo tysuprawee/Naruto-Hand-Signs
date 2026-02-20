@@ -758,12 +758,9 @@ class PlayingMixin:
             elif self.challenge_state == "results":
                 self._render_challenge_results(cam_x, cam_y, new_w, new_h)
 
-        # Mastery unlock panel (shown after jutsu effect for improved runs)
-        if getattr(self, "mastery_panel_data", None):
-            still_open = self._render_mastery_panel(cam_x, cam_y, new_w, new_h)
-            if not still_open:
-                self.mastery_panel_data = None
-        
+        # Mastery/level-up panels are rendered at the very end of this method
+        # (after all HUD) so the dim correctly covers the bottom bar too.
+
         # Sound Scheduler
         if hasattr(self, "pending_sounds") and self.pending_sounds:
             now = time.time()
@@ -1040,20 +1037,42 @@ class PlayingMixin:
         if hasattr(self, "playing_back_button"):
             self.playing_back_button.render(self.screen)
 
+        # ── Modal overlays drawn LAST so dim covers entire screen including HUD ─
+        if getattr(self, "mastery_panel_data", None):
+            still_open = self._render_mastery_panel(cam_x, cam_y, new_w, new_h)
+            if not still_open:
+                self.mastery_panel_data = None
+
+        # Level-up panel shown after mastery clears (or standalone)
+        if getattr(self, "level_up_panel_data", None) and not getattr(self, "mastery_panel_data", None):
+            still_open = self._render_level_up_panel()
+            if not still_open:
+                self.level_up_panel_data = None
+
     def _render_mastery_panel(self, cam_x, cam_y, cam_w, cam_h):
         """Render a rich mastery-unlock modal overlay. Returns True while open."""
         data = getattr(self, "mastery_panel_data", None)
         if not isinstance(data, dict):
             return False
 
-        jutsu_name = str(data.get("jutsu_name", "Jutsu"))
-        info = data.get("mastery_info", {})
-        new_best   = float(info.get("new_best", 0.0))
-        prev_best  = info.get("previous_best")
-        new_tier   = str(info.get("new_tier",  "none")).lower()
-        thresholds = info.get("thresholds", {})
-        first_rec  = bool(info.get("first_record", False))
+        jutsu_name  = str(data.get("jutsu_name", "Jutsu"))
+        info        = data.get("mastery_info", {})
+        new_best    = float(info.get("new_best", 0.0))
+        prev_best   = info.get("previous_best")
+        new_tier    = str(info.get("new_tier",  "none")).lower()
+        thresholds  = info.get("thresholds", {})
+        first_rec   = bool(info.get("first_record", False))
         tier_changed = str(info.get("new_tier", "none")) != str(info.get("previous_tier", "none"))
+
+        # ── Animation progress (ease-out-cubic) ───────────────────────────────
+        ANIM_TIME  = 1.2   # seconds for bar + time fill
+        opened_at  = float(data.get("opened_at", time.time()))
+        elapsed    = time.time() - opened_at
+        t_raw      = min(1.0, elapsed / ANIM_TIME)
+        ease       = 1.0 - (1.0 - t_raw) ** 3   # ease-out cubic
+
+        # Animated display time (counts up from 0 → new_best in ANIM_TIME)
+        display_time = new_best * ease
 
         # ── Dim whole screen ───────────────────────────────────────────────────
         dim = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -1061,175 +1080,307 @@ class PlayingMixin:
         self.screen.blit(dim, (0, 0))
 
         # ── Card geometry ──────────────────────────────────────────────────────
-        CW, CH = min(cam_w - 20, 440), min(cam_h - 40, 430)
+        CW, CH = min(cam_w - 20, 440), min(cam_h - 40, 420)
         cx = cam_x + (cam_w - CW) // 2
         cy = cam_y + (cam_h - CH) // 2
 
-        # Dark card with warm border
         card_surf = pygame.Surface((CW, CH), pygame.SRCALPHA)
         pygame.draw.rect(card_surf, (18, 14, 10, 235), (0, 0, CW, CH), border_radius=20)
         self.screen.blit(card_surf, (cx, cy))
-        # Amber glow border
         pygame.draw.rect(self.screen, (180, 110, 30), (cx, cy, CW, CH), 2, border_radius=20)
-        # Subtle inner highlight line
         pygame.draw.rect(self.screen, (255, 200, 80, 40), (cx + 2, cy + 2, CW - 4, CH - 4), 1, border_radius=19)
 
-        y_cur = cy + 22
+        y_cur = cy + 20
 
         # ── Title ──────────────────────────────────────────────────────────────
-        title_col = (255, 220, 80)
-        t = self.fonts.get("title_md") or self.fonts["title_sm"]
-        title_surf = t.render("MASTERY UNLOCKED" if tier_changed or first_rec else "NEW BEST!", True, title_col)
+        title_col  = (255, 220, 80)
+        t_font     = self.fonts.get("title_md") or self.fonts["title_sm"]
+        title_text = "MASTERY UNLOCKED" if tier_changed or first_rec else "NEW BEST!"
+        title_surf = t_font.render(title_text, True, title_col)
         self.screen.blit(title_surf, title_surf.get_rect(centerx=cx + CW // 2, top=y_cur))
-        y_cur += title_surf.get_height() + 6
+        y_cur += title_surf.get_height() + 4
 
         # ── Jutsu name ─────────────────────────────────────────────────────────
         name_surf = self.fonts["body"].render(jutsu_name, True, (200, 180, 130))
         self.screen.blit(name_surf, name_surf.get_rect(centerx=cx + CW // 2, top=y_cur))
-        y_cur += name_surf.get_height() + 10
+        y_cur += name_surf.get_height() + 8
 
-        # ── Big time ───────────────────────────────────────────────────────────
-        big_font = self.fonts.get("title_lg") or self.fonts["title_md"]
-        time_str = f"{new_best:.2f}s"
+        # ── Big animated time ──────────────────────────────────────────────────
+        big_font  = self.fonts.get("title_lg") or self.fonts["title_md"]
+        time_str  = f"{display_time:.2f}s"
         time_surf = big_font.render(time_str, True, (255, 245, 200))
         self.screen.blit(time_surf, time_surf.get_rect(centerx=cx + CW // 2, top=y_cur))
         y_cur += time_surf.get_height() + 2
 
-        nb_lbl = self.fonts["body_sm"].render("New best" if prev_best is not None else "First record!", True, (160, 220, 160))
+        sub_text = "New best" if prev_best is not None else "First record!"
+        nb_lbl   = self.fonts["body_sm"].render(sub_text, True, (160, 220, 160))
         self.screen.blit(nb_lbl, nb_lbl.get_rect(centerx=cx + CW // 2, top=y_cur))
-        y_cur += nb_lbl.get_height() + 12
+        y_cur += nb_lbl.get_height() + 10
 
-        # ── Tier badge row ─────────────────────────────────────────────────────
-        TIER_COLS = {"bronze": (196, 128, 60), "silver": (180, 190, 200), "gold": (255, 200, 40), "none": (100, 100, 100)}
-        tier_col = TIER_COLS.get(new_tier, TIER_COLS["none"])
+        # ── Tier badge pill ────────────────────────────────────────────────────
+        TIER_COLS  = {"bronze": (196, 128, 60), "silver": (180, 190, 200), "gold": (255, 200, 40), "none": (100, 100, 100)}
+        tier_col   = TIER_COLS.get(new_tier, TIER_COLS["none"])
         badge_icon = self.mastery_icons.get(new_tier, self.mastery_icons.get("none"))
 
-        # Pill background
-        pill_w, pill_h = 240, 40
+        pill_w, pill_h = 240, 38
         pill_x = cx + (CW - pill_w) // 2
         pill_surf = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
-        pygame.draw.rect(pill_surf, (*tier_col, 40), (0, 0, pill_w, pill_h), border_radius=20)
-        pygame.draw.rect(pill_surf, (*tier_col, 200), (0, 0, pill_w, pill_h), 2, border_radius=20)
+        pygame.draw.rect(pill_surf, (*tier_col, 40),  (0, 0, pill_w, pill_h), border_radius=19)
+        pygame.draw.rect(pill_surf, (*tier_col, 200), (0, 0, pill_w, pill_h), 2, border_radius=19)
         self.screen.blit(pill_surf, (pill_x, y_cur))
 
-        # Badge icon (48×48)
         if badge_icon:
-            big_badge = pygame.transform.smoothscale(badge_icon, (36, 36))
-            self.screen.blit(big_badge, (pill_x + 10, y_cur + 2))
+            big_badge = pygame.transform.smoothscale(badge_icon, (32, 32))
+            self.screen.blit(big_badge, (pill_x + 10, y_cur + 3))
 
-        tier_label = (new_tier.upper() if new_tier != "none" else "UNRANKED")
-        tier_surf = self.fonts["title_sm"].render(tier_label, True, tier_col)
-        self.screen.blit(tier_surf, tier_surf.get_rect(midleft=(pill_x + 54, y_cur + pill_h // 2)))
+        tier_label = new_tier.upper() if new_tier != "none" else "UNRANKED"
+        tier_surf  = self.fonts["title_sm"].render(tier_label, True, tier_col)
+        self.screen.blit(tier_surf, tier_surf.get_rect(midleft=(pill_x + 50, y_cur + pill_h // 2)))
         if tier_changed or first_rec:
             unlk = self.fonts["body_sm"].render("Unlocked!", True, (200, 255, 180))
-            self.screen.blit(unlk, unlk.get_rect(midright=(pill_x + pill_w - 12, y_cur + pill_h // 2)))
+            self.screen.blit(unlk, unlk.get_rect(midright=(pill_x + pill_w - 10, y_cur + pill_h // 2)))
         y_cur += pill_h + 6
 
-        # ── Time improvement delta ─────────────────────────────────────────────
+        # ── Delta ──────────────────────────────────────────────────────────────
         if prev_best is not None:
-            delta = new_best - prev_best  # negative = improvement
+            delta     = new_best - prev_best
             delta_col = (100, 230, 120) if delta < 0 else (230, 110, 80)
-            arrow = "▲" if delta < 0 else "▼"
-            delta_surf = self.fonts["body_sm"].render(f"{arrow} {abs(delta):.2f}s", True, delta_col)
-            self.screen.blit(delta_surf, delta_surf.get_rect(centerx=cx + CW // 2, top=y_cur))
-            y_cur += delta_surf.get_height() + 10
+            arrow     = "▲" if delta < 0 else "▼"
+            d_surf    = self.fonts["body_sm"].render(f"{arrow} {abs(delta):.2f}s", True, delta_col)
+            self.screen.blit(d_surf, d_surf.get_rect(centerx=cx + CW // 2, top=y_cur))
+            y_cur += d_surf.get_height() + 8
         else:
-            y_cur += 8
+            y_cur += 6
 
-        # ── Progress timeline (Bronze ──●── Silver ──── Gold) ─────────────────
+        # ── Progress bar (animated fill from left) ────────────────────────────
         bronze_t = float(thresholds.get("bronze", new_best + 1))
         silver_t = float(thresholds.get("silver", new_best + 0.5))
         gold_t   = float(thresholds.get("gold",   new_best))
 
-        bar_x = cx + 28
-        bar_w = CW - 56
-        bar_y = y_cur + 24
+        bar_x  = cx + 28
+        bar_w  = CW - 56
+        bar_y  = y_cur + 22
 
-        # Three milestone labels
-        milestones = [
-            (bronze_t, "bronze"),
-            (silver_t, "silver"),
-            (gold_t,   "gold"),
-        ]
-        # Map time → x (lower time = further right = better)
         lo, hi = gold_t, bronze_t
-        span = max(0.001, hi - lo)
+        span   = max(0.001, hi - lo)
 
         def t_to_x(t):
-            frac = (hi - t) / span   # 0=bronze, 1=gold
+            frac = (hi - t) / span   # 0=bronze end, 1=gold end
             return bar_x + int(frac * bar_w)
 
-        # Track
-        pygame.draw.rect(self.screen, (50, 40, 30), (bar_x, bar_y, bar_w, 8), border_radius=4)
-        # Fill up to current best
-        fill_x = t_to_x(max(gold_t, min(bronze_t, new_best)))
-        fill_start = bar_x
-        fill_len = fill_x - bar_x
-        if fill_len > 0:
-            pygame.draw.rect(self.screen, tier_col, (fill_start, bar_y, fill_len, 8), border_radius=4)
+        target_fill_x = t_to_x(max(gold_t, min(bronze_t, new_best)))
+        full_fill_len  = target_fill_x - bar_x
+        anim_fill_len  = int(full_fill_len * ease)   # grows from 0 → full_fill_len
 
-        # Milestone dots + labels
+        # Track background
+        pygame.draw.rect(self.screen, (50, 40, 30), (bar_x, bar_y, bar_w, 8), border_radius=4)
+        # Animated coloured fill
+        if anim_fill_len > 0:
+            pygame.draw.rect(self.screen, tier_col, (bar_x, bar_y, anim_fill_len, 8), border_radius=4)
+
+        # Milestone dots (always visible so you can see targets)
+        milestones = [(bronze_t, "bronze"), (silver_t, "silver"), (gold_t, "gold")]
         for mt, ml in milestones:
             mx = t_to_x(mt)
             mc = TIER_COLS.get(ml, (120, 120, 120))
             pygame.draw.circle(self.screen, mc, (mx, bar_y + 4), 7)
             lbl = self.fonts["tiny"].render(f"{mt:.1f}s", True, (180, 160, 120))
-            # Alternate above/below to avoid overlap
             off_y = -16 if ml == "silver" else 12
             self.screen.blit(lbl, lbl.get_rect(centerx=mx, top=bar_y + 4 + off_y))
 
-        # Current best marker (orange dot)
-        cur_x = t_to_x(max(gold_t, min(bronze_t, new_best)))
-        pygame.draw.circle(self.screen, (255, 160, 40), (cur_x, bar_y + 4), 8)
-        pygame.draw.circle(self.screen, (255, 240, 160), (cur_x, bar_y + 4), 4)
+        # Moving marker dot that travels with the animation
+        if anim_fill_len > 0:
+            marker_x = bar_x + anim_fill_len
+            pygame.draw.circle(self.screen, (255, 160, 40),  (marker_x, bar_y + 4), 9)
+            pygame.draw.circle(self.screen, (255, 240, 160), (marker_x, bar_y + 4), 4)
+
         y_cur = bar_y + 30
 
         # ── Next tier hint ─────────────────────────────────────────────────────
-        next_tier_map = {"none": ("BRONZE", bronze_t), "bronze": ("SILVER", silver_t), "silver": ("GOLD", gold_t), "gold": None}
-        nxt = next_tier_map.get(new_tier)
+        next_map = {"none": ("BRONZE", bronze_t), "bronze": ("SILVER", silver_t),
+                    "silver": ("GOLD", gold_t), "gold": None}
+        nxt = next_map.get(new_tier)
         if nxt:
             nxt_name, nxt_t = nxt
-            gap = new_best - nxt_t
-            hint_col = (180, 160, 110)
+            gap  = new_best - nxt_t
             hint = self.fonts["body_sm"].render(
-                f"Next: {nxt_name} ({nxt_t:.2f}s)  ─  {gap:.2f}s to go", True, hint_col
+                f"Next: {nxt_name} ({nxt_t:.2f}s)  ─  {gap:.2f}s to go", True, (180, 160, 110)
             )
             self.screen.blit(hint, hint.get_rect(centerx=cx + CW // 2, top=y_cur))
         y_cur += 22
 
-        # ── Buttons ────────────────────────────────────────────────────────────
-        btn_y = cy + CH - 62
-        btn_h = 44
-        btn_gap = 14
-        btn_w = (CW - 60 - btn_gap) // 2
-        retry_rect  = pygame.Rect(cx + 30, btn_y, btn_w, btn_h)
-        cont_rect   = pygame.Rect(cx + 30 + btn_w + btn_gap, btn_y, btn_w, btn_h)
+        # ── Continue button (full-width) ───────────────────────────────────────
+        btn_y   = cy + CH - 58
+        btn_h   = 44
+        cont_rect = pygame.Rect(cx + 30, btn_y, CW - 60, btn_h)
 
-        mouse = pygame.mouse.get_pos()
-        retry_hov = retry_rect.collidepoint(mouse)
-        cont_hov  = cont_rect.collidepoint(mouse)
-        if retry_hov or cont_hov:
+        mouse    = pygame.mouse.get_pos()
+        cont_hov = cont_rect.collidepoint(mouse)
+        if cont_hov:
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
 
-        # Retry button (muted)
-        btn_bg = (50, 46, 40) if not retry_hov else (70, 64, 52)
-        pygame.draw.rect(self.screen, btn_bg, retry_rect, border_radius=12)
-        pygame.draw.rect(self.screen, (100, 90, 70), retry_rect, 1, border_radius=12)
-        rt = self.fonts["body"].render(f"Retry {jutsu_name}", True, (200, 190, 170))
-        self.screen.blit(rt, rt.get_rect(center=retry_rect.center))
-
-        # Continue button (accent)
-        cont_col = (180, 100, 20) if not cont_hov else (210, 130, 30)
+        cont_col = (200, 115, 20) if cont_hov else (170, 90, 15)
         pygame.draw.rect(self.screen, cont_col, cont_rect, border_radius=12)
         pygame.draw.rect(self.screen, (255, 190, 60), cont_rect, 1, border_radius=12)
         ct = self.fonts["body"].render("Continue", True, (255, 255, 255))
         self.screen.blit(ct, ct.get_rect(center=cont_rect.center))
 
-        # Store rects for click handling
-        self._mastery_retry_rect = retry_rect
-        self._mastery_cont_rect  = cont_rect
-        return True  # Panel is still open
+        self._mastery_cont_rect = cont_rect
+        if hasattr(self, "_mastery_retry_rect"):
+            del self._mastery_retry_rect   # no longer used
+        return True  # Panel stays open
 
+    def _render_level_up_panel(self):
+        """Render a rich Level Up modal overlay. Returns True while open."""
+        data = getattr(self, "level_up_panel_data", None)
+        if not isinstance(data, dict):
+            return False
+
+        prev_lv      = int(data.get("previous_level", 1))
+        new_lv       = int(data.get("new_level", prev_lv + 1))
+        rank         = str(data.get("rank", ""))
+        unlocked     = list(data.get("newly_unlocked", []))
+        source_label = str(data.get("source_label", ""))
+        opened_at    = float(data.get("opened_at", time.time()))
+
+        # ── Play sound on very first frame via pending_sounds (main-thread safe) ─
+        if not data.get("_sound_queued"):
+            data["_sound_queued"] = True
+            if not hasattr(self, "pending_sounds"):
+                self.pending_sounds = []
+            self.pending_sounds.append({"name": "level", "time": time.time()})
+
+        # ── Animation (ease-out cubic, 1.2 s) ─────────────────────────────────
+        ANIM_T  = 1.2
+        elapsed = time.time() - opened_at
+        t_raw   = min(1.0, elapsed / ANIM_T)
+        ease    = 1.0 - (1.0 - t_raw) ** 3
+        disp_lv = prev_lv + (new_lv - prev_lv) * ease   # counts up
+
+        # ── Full-screen dim (drawn last in render_playing, so it covers HUD) ──
+        dim = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 190))
+        self.screen.blit(dim, (0, 0))
+
+        # ── Card ──────────────────────────────────────────────────────────────
+        CW = min(460, SCREEN_WIDTH - 80)
+        CH = min(480, SCREEN_HEIGHT - 80)
+        cx = (SCREEN_WIDTH - CW) // 2
+        cy = (SCREEN_HEIGHT - CH) // 2
+
+        card = pygame.Surface((CW, CH), pygame.SRCALPHA)
+        pygame.draw.rect(card, (12, 10, 18, 245), (0, 0, CW, CH), border_radius=22)
+        self.screen.blit(card, (cx, cy))
+        pygame.draw.rect(self.screen, (200, 160, 40), (cx, cy, CW, CH), 2, border_radius=22)
+        pygame.draw.rect(self.screen, (255, 220, 80, 30), (cx+2, cy+2, CW-4, CH-4), 1, border_radius=21)
+
+        y_cur = cy + 16
+
+        # ── Star burst decoration ──────────────────────────────────────────────
+        star_y = y_cur + 8
+        for i in range(7):
+            sx = cx + 28 + i * ((CW - 56) // 6)
+            r  = 3 if i % 2 == 0 else 5
+            pygame.draw.circle(self.screen, (255, 210, 60), (sx, star_y), r)
+        y_cur += 12
+
+        # ── "✦  LEVEL UP  ✦" banner ───────────────────────────────────────────
+        t_font    = self.fonts.get("title_md") or self.fonts["title_sm"]
+        banner    = t_font.render("✦  LEVEL UP  ✦", True, (255, 210, 60))
+        self.screen.blit(banner, banner.get_rect(centerx=cx + CW // 2, top=y_cur))
+        y_cur += banner.get_height() + 4
+
+        # Source sub-label (e.g. "Jutsu Clear")
+        if source_label:
+            sl = self.fonts["body_sm"].render(source_label, True, (160, 150, 120))
+            self.screen.blit(sl, sl.get_rect(centerx=cx + CW // 2, top=y_cur))
+            y_cur += sl.get_height() + 2
+
+        # ── Animated giant level number ────────────────────────────────────────
+        big_font  = self.fonts.get("title_lg") or self.fonts["title_md"]
+        lv_str    = f"LV.{int(disp_lv)}"
+        glow_surf = big_font.render(lv_str, True, (160, 100, 10))
+        lv_surf   = big_font.render(lv_str, True, (255, 245, 180))
+        for dx, dy in [(-2, 2), (2, 2), (0, 3)]:
+            self.screen.blit(glow_surf, glow_surf.get_rect(centerx=cx + CW // 2 + dx, top=y_cur + dy))
+        self.screen.blit(lv_surf, lv_surf.get_rect(centerx=cx + CW // 2, top=y_cur))
+        y_cur += lv_surf.get_height() + 2
+
+        # LV prev → new small label
+        arrow_s = self.fonts["body_sm"].render(
+            f"LV.{prev_lv}  →  LV.{new_lv}", True, (180, 165, 120)
+        )
+        self.screen.blit(arrow_s, arrow_s.get_rect(centerx=cx + CW // 2, top=y_cur))
+        y_cur += arrow_s.get_height() + 8
+
+        # ── Rank badge pill — width auto-fitted to text ────────────────────────
+        if rank:
+            rank_upper = rank.upper()
+            # Try title_sm first; if it overflows the card, fall back to body_sm
+            r_font = self.fonts["title_sm"]
+            r_surf = r_font.render(rank_upper, True, (255, 220, 80))
+            if r_surf.get_width() > CW - 80:
+                r_font = self.fonts.get("body_sm") or self.fonts["title_sm"]
+                r_surf = r_font.render(rank_upper, True, (255, 220, 80))
+
+            pill_pad  = 28                              # horizontal padding inside pill
+            pill_h    = 36
+            pill_w    = min(CW - 40, r_surf.get_width() + pill_pad * 2)
+            pill_x    = cx + (CW - pill_w) // 2
+            pill_bg   = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
+            pygame.draw.rect(pill_bg, (200, 160, 40, 35),  (0, 0, pill_w, pill_h), border_radius=18)
+            pygame.draw.rect(pill_bg, (200, 160, 40, 180), (0, 0, pill_w, pill_h), 2, border_radius=18)
+            self.screen.blit(pill_bg, (pill_x, y_cur))
+            self.screen.blit(r_surf, r_surf.get_rect(center=(pill_x + pill_w // 2, y_cur + pill_h // 2)))
+            y_cur += pill_h + 8
+
+        # ── Newly unlocked jutsu chips ─────────────────────────────────────────
+        if unlocked:
+            # Use a smaller font key for header to avoid wrapping
+            hdr_font = self.fonts.get("tiny") or self.fonts["body_sm"]
+            hdr = hdr_font.render("✦ NEW JUTSU UNLOCKED ✦", True, (140, 215, 155))
+            self.screen.blit(hdr, hdr.get_rect(centerx=cx + CW // 2, top=y_cur))
+            y_cur += hdr.get_height() + 4
+
+            chip_h   = 26
+            chip_gap = 5
+            show_chips = unlocked[:3]
+            remaining  = len(unlocked) - 3
+
+            for jutsu in show_chips:
+                chip_font = self.fonts.get("body_sm") or self.fonts["body"]
+                jt_surf   = chip_font.render(jutsu, True, (180, 255, 200))
+                chip_w    = min(CW - 40, jt_surf.get_width() + 24)
+                chip_x    = cx + (CW - chip_w) // 2
+                chip_bg   = pygame.Surface((chip_w, chip_h), pygame.SRCALPHA)
+                pygame.draw.rect(chip_bg, (50, 170, 80, 40),  (0, 0, chip_w, chip_h), border_radius=13)
+                pygame.draw.rect(chip_bg, (70, 200, 100, 180), (0, 0, chip_w, chip_h), 1, border_radius=13)
+                self.screen.blit(chip_bg, (chip_x, y_cur))
+                self.screen.blit(jt_surf, jt_surf.get_rect(center=(chip_x + chip_w // 2, y_cur + chip_h // 2)))
+                y_cur += chip_h + chip_gap
+
+            if remaining > 0:
+                more = self.fonts["tiny"].render(f"+ {remaining} more", True, (140, 160, 140))
+                self.screen.blit(more, more.get_rect(centerx=cx + CW // 2, top=y_cur))
+                y_cur += more.get_height() + 4
+
+        # ── "AWESOME!" Continue button ─────────────────────────────────────────
+        btn_h  = 46
+        btn_y  = cy + CH - 62
+        cont_rect = pygame.Rect(cx + 30, btn_y, CW - 60, btn_h)
+        mouse     = pygame.mouse.get_pos()
+        hov       = cont_rect.collidepoint(mouse)
+        if hov:
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
+
+        col = (215, 125, 20) if hov else (165, 85, 10)
+        pygame.draw.rect(self.screen, col,           cont_rect, border_radius=13)
+        pygame.draw.rect(self.screen, (255, 200, 60), cont_rect, 1, border_radius=13)
+        ct = self.fonts["body"].render("AWESOME!", True, (255, 255, 255))
+        self.screen.blit(ct, ct.get_rect(center=cont_rect.center))
+
+        self._level_up_cont_rect = cont_rect
+        return True
     def _render_icon_bar(self, x, y, bar_w):
         """Render the jutsu sequence icon bar with dynamic scaling."""
         n = len(self.sequence)
