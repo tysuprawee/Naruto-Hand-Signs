@@ -90,7 +90,17 @@ class RenderingMixin:
             return cached
 
         try:
-            tex = pygame.transform.smoothscale(base, (int(width), int(height))).convert_alpha()
+            orig_w, orig_h = base.get_size()
+            scale = max(width / orig_w, height / orig_h)
+            new_w = int(math.ceil(orig_w * scale))
+            new_h = int(math.ceil(orig_h * scale))
+            scaled = pygame.transform.smoothscale(base, (new_w, new_h))
+            
+            # Center crop
+            x_offset = max(0, (new_w - width) // 2)
+            y_offset = max(0, (new_h - height) // 2)
+            tex = scaled.subsurface(pygame.Rect(x_offset, y_offset, width, height)).copy().convert_alpha()
+            
             cache[key] = tex
             return tex
         except Exception:
@@ -1584,10 +1594,13 @@ class RenderingMixin:
         draw_section(
             "PRIVACY & DATA",
             [
-                "Camera frames are processed locally during gameplay and Settings preview.",
-                "No raw camera frames are uploaded by the game client.",
-                "If Discord login is used, session data is stored locally for authentication continuity.",
-                "Online features (leaderboard/profile/announcements) only send gameplay/profile data needed for those systems.",
+                "Camera frames are processed locally for sign detection and visual effects.",
+                "The client does not upload raw camera frames to Supabase.",
+                "With Discord login, a local user_session.json stores session continuity data (including Discord user/token fields) until logout.",
+                "For logged-in users, profile systems sync to Supabase: progression, quests, mastery, settings, calibration profile, tutorial flags, and leaderboard submissions.",
+                "The profiles.updated_at timestamp is refreshed on successful profile/settings/calibration/progression syncs and can be used as a last-activity signal.",
+                "This app does not currently maintain a dedicated realtime online-presence table; any online status should be treated as an activity estimate.",
+                "On logout, local session cache is deleted and network identity is reset to Guest.",
             ],
         )
 
@@ -1677,37 +1690,162 @@ class RenderingMixin:
         step = self.tutorial_steps[step_idx]
 
         title = self.fonts["title_md"].render("ACADEMY TUTORIAL", True, COLORS["accent"])
-        self.screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, 72)))
+        self.screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, max(64, int(SCREEN_HEIGHT * 0.09)))))
 
-        panel = pygame.Rect(140, 120, SCREEN_WIDTH - 280, SCREEN_HEIGHT - 260)
+        panel_margin_x = max(18, min(140, int(SCREEN_WIDTH * 0.055)))
+        panel_top = max(96, int(SCREEN_HEIGHT * 0.13))
+        panel_bottom_margin = max(16, int(SCREEN_HEIGHT * 0.04))
+        panel = pygame.Rect(
+            panel_margin_x,
+            panel_top,
+            max(280, SCREEN_WIDTH - panel_margin_x * 2),
+            max(220, SCREEN_HEIGHT - panel_top - panel_bottom_margin),
+        )
         pygame.draw.rect(self.screen, COLORS["bg_panel"], panel, border_radius=16)
         pygame.draw.rect(self.screen, COLORS["border"], panel, 2, border_radius=16)
-
-        progress_text = self.fonts["body_sm"].render(f"STEP {step_idx + 1} / {len(self.tutorial_steps)}", True, COLORS["text_dim"])
-        self.screen.blit(progress_text, (panel.x + 20, panel.y + 16))
-
-        step_title = self.fonts["title_sm"].render(step["title"], True, COLORS["success"])
-        self.screen.blit(step_title, (panel.x + 20, panel.y + 46))
-
-        icon = self.tutorial_icons.get(step.get("icon_key", "camera"))
-        if icon:
-            # Draw a subtle border around the larger image
-            img_rect = pygame.Rect(panel.right - 320, panel.y + 40, 280, 280)
-            pygame.draw.rect(self.screen, COLORS["bg_dark"], img_rect.inflate(8, 8), border_radius=12)
-            pygame.draw.rect(self.screen, COLORS["border"], img_rect.inflate(8, 8), 2, border_radius=12)
-            self.screen.blit(icon, (img_rect.x, img_rect.y))
-
-        text_y = panel.y + 106
-        for line in step["lines"]:
-            line_s = self.fonts["body"].render(line, True, COLORS["text"])
-            self.screen.blit(line_s, (panel.x + 24, text_y))
-            text_y += 36
 
         back_btn = self.tutorial_buttons["back"]
         next_btn = self.tutorial_buttons["next"]
         skip_btn = self.tutorial_buttons["skip"]
         back_btn.enabled = step_idx > 0
         next_btn.text = "FINISH" if step_idx == len(self.tutorial_steps) - 1 else "NEXT"
+
+        inner_pad = max(16, min(42, int(panel.w * 0.035)))
+        btn_h = max(44, min(56, int(panel.h * 0.11)))
+        btn_w = max(140, min(190, int(panel.w * 0.22)))
+        btn_gap = max(12, min(24, int(panel.w * 0.02)))
+        max_row_w = panel.w - inner_pad * 2
+        if (btn_w * 3 + btn_gap * 2) > max_row_w:
+            btn_w = max(110, int((max_row_w - btn_gap * 2) / 3))
+
+        btn_total_w = btn_w * 3 + btn_gap * 2
+        btn_x = panel.centerx - btn_total_w // 2
+        btn_y = panel.bottom - inner_pad - btn_h
+        back_btn.rect.update(btn_x, btn_y, btn_w, btn_h)
+        skip_btn.rect.update(btn_x + btn_w + btn_gap, btn_y, btn_w, btn_h)
+        next_btn.rect.update(btn_x + (btn_w + btn_gap) * 2, btn_y, btn_w, btn_h)
+
+        progress_font = self._font_for_size(max(20, min(30, int(panel.h * 0.06))))
+        progress_text = progress_font.render(f"STEP {step_idx + 1} / {len(self.tutorial_steps)}", True, COLORS["text_dim"])
+        progress_y = panel.y + inner_pad - 2
+        self.screen.blit(progress_text, (panel.x + inner_pad, progress_y))
+
+        title_max_w = panel.w - inner_pad * 2
+        title_font = self.fonts.get("title_sm") or self._font_for_size(40)
+        title_lines = self._wrap_text_to_width(title_font, str(step.get("title", "")), title_max_w)
+        if len(title_lines) > 2:
+            title_font = self._font_for_size(34)
+            title_lines = self._wrap_text_to_width(title_font, str(step.get("title", "")), title_max_w)
+        if len(title_lines) > 2:
+            title_font = self._font_for_size(30)
+            title_lines = self._wrap_text_to_width(title_font, str(step.get("title", "")), title_max_w)
+
+        title_y = progress_y + progress_text.get_height() + 10
+        for line in title_lines[:2]:
+            line_s = title_font.render(line, True, COLORS["success"])
+            self.screen.blit(line_s, (panel.x + inner_pad, title_y))
+            title_y += line_s.get_height() + 2
+
+        content_top = title_y + max(12, int(panel.h * 0.02))
+        content_bottom = btn_y - max(14, int(panel.h * 0.025))
+        content_h = max(120, content_bottom - content_top)
+        content_rect = pygame.Rect(panel.x + inner_pad, content_top, panel.w - inner_pad * 2, content_h)
+
+        side_by_side = content_rect.w >= 620 and content_rect.h >= 220
+        layout_gap = max(14, min(28, int(content_rect.w * 0.028)))
+        if side_by_side:
+            image_w = max(250, min(int(content_rect.w * 0.43), int(content_rect.w * 0.52)))
+            text_w = content_rect.w - image_w - layout_gap
+            if text_w < 260:
+                image_w = max(220, content_rect.w - layout_gap - 260)
+                text_w = content_rect.w - image_w - layout_gap
+            image_rect = pygame.Rect(content_rect.right - image_w, content_rect.y, image_w, content_rect.h)
+            text_rect = pygame.Rect(content_rect.x, content_rect.y, max(220, text_w), content_rect.h)
+        else:
+            image_h = max(120, min(int(content_rect.h * 0.50), content_rect.h - 90))
+            image_rect = pygame.Rect(content_rect.x, content_rect.y, content_rect.w, image_h)
+            text_rect = pygame.Rect(
+                content_rect.x,
+                image_rect.bottom + layout_gap,
+                content_rect.w,
+                max(64, content_rect.bottom - (image_rect.bottom + layout_gap)),
+            )
+
+        icon = self.tutorial_icons.get(step.get("icon_key", "camera"))
+        if icon:
+            frame_rect = image_rect.inflate(-2, -2)
+            pygame.draw.rect(self.screen, COLORS["bg_dark"], frame_rect, border_radius=14)
+            pygame.draw.rect(self.screen, COLORS["border"], frame_rect, 2, border_radius=14)
+
+            fit_pad = max(8, min(14, int(min(frame_rect.w, frame_rect.h) * 0.04)))
+            fit_w = max(16, frame_rect.w - fit_pad * 2)
+            fit_h = max(16, frame_rect.h - fit_pad * 2)
+            icon_key = str(step.get("icon_key", "camera"))
+
+            if not hasattr(self, "_tutorial_icon_scale_cache"):
+                self._tutorial_icon_scale_cache = {}
+            cache_key = (icon_key, int(fit_w), int(fit_h))
+            scaled_icon = self._tutorial_icon_scale_cache.get(cache_key)
+            if scaled_icon is None:
+                src_w, src_h = icon.get_size()
+                scale = min(fit_w / max(1, src_w), fit_h / max(1, src_h))
+                out_w = max(1, int(src_w * scale))
+                out_h = max(1, int(src_h * scale))
+                scaled_icon = pygame.transform.smoothscale(icon, (out_w, out_h))
+                self._tutorial_icon_scale_cache[cache_key] = scaled_icon
+
+            icon_x = frame_rect.x + (frame_rect.w - scaled_icon.get_width()) // 2
+            icon_y = frame_rect.y + (frame_rect.h - scaled_icon.get_height()) // 2
+            self.screen.blit(scaled_icon, (icon_x, icon_y))
+
+        lines_src = [str(x) for x in step.get("lines", []) if str(x).strip()]
+        body_sizes = [30, 28, 26, 24, 22, 20, 18]
+        body_font = self.fonts["body"]
+        wrapped_rows = []
+        row_step = body_font.get_linesize()
+        para_gap = max(6, int(row_step * 0.32))
+        for size in body_sizes:
+            font = self._font_for_size(size)
+            rows = []
+            for idx, line in enumerate(lines_src):
+                for wrapped in self._wrap_text_to_width(font, line, text_rect.w):
+                    rows.append(wrapped)
+                if idx < len(lines_src) - 1:
+                    rows.append(None)
+            if rows and rows[-1] is None:
+                rows.pop()
+            row_h = max(20, int(font.get_linesize() * 1.10))
+            gap_h = max(4, int(row_h * 0.30))
+            total_h = 0
+            for row in rows:
+                total_h += (gap_h if row is None else row_h)
+            if total_h <= text_rect.h:
+                body_font = font
+                wrapped_rows = rows
+                row_step = row_h
+                para_gap = gap_h
+                break
+
+        if not wrapped_rows:
+            body_font = self._font_for_size(18)
+            for idx, line in enumerate(lines_src):
+                for wrapped in self._wrap_text_to_width(body_font, line, text_rect.w):
+                    wrapped_rows.append(wrapped)
+                if idx < len(lines_src) - 1:
+                    wrapped_rows.append(None)
+            row_step = max(18, int(body_font.get_linesize() * 1.06))
+            para_gap = max(4, int(row_step * 0.25))
+
+        text_y = text_rect.y
+        for row in wrapped_rows:
+            if row is None:
+                text_y += para_gap
+                continue
+            if text_y + row_step > text_rect.bottom:
+                break
+            line_s = body_font.render(row, True, COLORS["text"])
+            self.screen.blit(line_s, (text_rect.x, text_y))
+            text_y += row_step
 
         for b in self.tutorial_buttons.values():
             b.render(self.screen)
@@ -1914,7 +2052,7 @@ class RenderingMixin:
                     card_bg.blit(bottom_strip, (0, card_h - bottom_strip_h))
                     if not unlocked:
                         veil = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
-                        veil.fill((8, 10, 18, 55))
+                        veil.fill((8, 10, 18, 180)) # Significantly darkened if locked
                         card_bg.blit(veil, (0, 0))
                     if hovered and unlocked:
                         gloss = pygame.Surface((card_w, max(1, card_h // 2)), pygame.SRCALPHA)
@@ -1942,11 +2080,11 @@ class RenderingMixin:
 
                 seq_len = len(jutsu_data.get("sequence", []))
                 seq_y = card_rect.y + card_h - 20
-                seq_surf = self.fonts["tiny"].render(f"SIGNS: {seq_len}", True, COLORS["text_dim"])
+                seq_surf = self.fonts["tiny"].render(f"SIGNS: {seq_len}", True, COLORS["text"])
                 self.screen.blit(seq_surf, (card_rect.x + 10, seq_y))
 
                 tier = self._get_mastery_tier(jutsu_name)
-                tier_text = self.fonts["tiny"].render(f"M: {tier.upper()}", True, COLORS["text_dim"])
+                tier_text = self.fonts["tiny"].render(f"M: {tier.upper()}", True, COLORS["text"])
                 self.screen.blit(tier_text, (card_rect.x + 92, seq_y))
 
                 self.library_item_rects.append({

@@ -38,10 +38,10 @@ class AssetsMixin:
     def _load_feature_icons(self):
         """Load tutorial, mastery, quest and shared UI icons."""
         self.tutorial_icons = {
-            "camera": self._load_ui_image("src/pics/tutorial/step_camera.png", (280, 280)),
-            "signs": self._load_ui_image("src/pics/tutorial/step_signs.png", (280, 280)),
-            "execute": self._load_ui_image("src/pics/tutorial/step_execute.png", (280, 280)),
-            "challenge": self._load_ui_image("src/pics/tutorial/step_challenge.png", (280, 280)),
+            "camera": self._load_ui_image("src/pics/tutorial/step_camera.png"),
+            "signs": self._load_ui_image("src/pics/tutorial/step_signs.png"),
+            "execute": self._load_ui_image("src/pics/tutorial/step_execute.png"),
+            "challenge": self._load_ui_image("src/pics/tutorial/step_challenge.png"),
             "panel_bg": self._load_ui_image("src/pics/tutorial/panel_bg.png"),
         }
         self.mastery_icons = {

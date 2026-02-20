@@ -589,6 +589,14 @@ class PlayingMixin:
                     if now - self.last_sign_time > self.cooldown:
                         if self.current_step == 0:
                             self.sequence_run_start = now
+                            self.combo_triggered_steps = set()
+                            self.combo_clone_hold = False
+                            self.combo_chidori_triple = False
+                            self.combo_rasengan_triple = False
+                            self.current_video = None
+                            if getattr(self, "video_cap", None):
+                                self.video_cap.release()
+                                self.video_cap = None
                         step_completed = self.current_step + 1
                         self.current_step += 1
                         self.last_sign_time = now
@@ -850,12 +858,44 @@ class PlayingMixin:
             self._no_hands_since = None
         
         if self.jutsu_active:
-             jutsu_name = self.jutsu_names[self.current_jutsu_idx]
-             if self.jutsu_list[jutsu_name].get("effect") == "lightning":
-                  # Create a lightning-blue transparent overlay
-                  blue_overlay = pygame.Surface((new_w, new_h), pygame.SRCALPHA)
-                  blue_overlay.fill((0, 80, 150, 40)) # Light blue tint
-                  self.screen.blit(blue_overlay, (cam_x, cam_y))
+            jutsu_name = self.jutsu_names[self.current_jutsu_idx]
+            effect_name = str(self.jutsu_list[jutsu_name].get("effect") or "").strip().lower()
+
+            if effect_name == "lightning":
+                blue_overlay = pygame.Surface((new_w, new_h), pygame.SRCALPHA)
+                blue_overlay.fill((0, 80, 150, 40))
+                self.screen.blit(blue_overlay, (cam_x, cam_y))
+            elif effect_name == "fire" and "phoenix" not in str(jutsu_name).strip().lower():
+                now = time.time()
+                pulse = 0.58 + 0.42 * math.sin(now * 15.5)
+
+                heat_overlay = pygame.Surface((new_w, new_h), pygame.SRCALPHA)
+                heat_overlay.fill((255, 90, 20, int(28 + 24 * pulse)))
+                self.screen.blit(heat_overlay, (cam_x, cam_y))
+
+                if mouth_screen:
+                    fx, fy = mouth_screen
+                elif self.mouth_pos:
+                    fx = cam_x + int(self.mouth_pos[0] * scale)
+                    fy = cam_y + int(self.mouth_pos[1] * scale)
+                else:
+                    fx = cam_x + new_w // 2
+                    fy = cam_y + int(new_h * 0.62)
+
+                breath = 0.68 + 0.32 * math.sin(now * 21.0 + 0.35)
+                wind_shift = int(np.clip(-float(getattr(self, "head_yaw", 0.0) or 0.0) * 75.0, -24.0, 24.0))
+                fx = int(fx + wind_shift)
+                fy = int(fy + math.sin(now * 17.0) * 2.0)
+
+                for radius, alpha, color in (
+                    (int(78 * breath), 55, (255, 65, 18)),
+                    (int(58 * breath), 80, (255, 120, 38)),
+                    (int(36 * breath), 105, (255, 195, 88)),
+                ):
+                    rr = max(8, int(radius))
+                    s = pygame.Surface((rr * 2, rr * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(s, (*color, alpha), (rr, rr), rr)
+                    self.screen.blit(s, (fx - rr, fy - rr), special_flags=pygame.BLEND_ADD)
 
         
         # Fire particles
@@ -1383,9 +1423,30 @@ class PlayingMixin:
         if prev_best is not None:
             delta     = new_best - prev_best
             delta_col = (100, 230, 120) if delta < 0 else (230, 110, 80)
-            arrow     = "▲" if delta < 0 else "▼"
-            d_surf    = self.fonts["body_sm"].render(f"{arrow} {abs(delta):.2f}s", True, delta_col)
-            self.screen.blit(d_surf, d_surf.get_rect(centerx=cx + CW // 2, top=y_cur))
+            
+            d_surf = self.fonts["body_sm"].render(f" {abs(delta):.2f}s", True, delta_col)
+            d_rect = d_surf.get_rect(centerx=cx + CW // 2, top=y_cur)
+            self.screen.blit(d_surf, d_rect)
+            
+            # Draw triangle manually
+            tri_w = 12
+            tri_h = 10
+            tri_x = d_rect.left - tri_w + 2
+            tri_y = d_rect.centery - tri_h // 2
+            
+            if delta < 0: # Green Up Arrow
+                pygame.draw.polygon(self.screen, delta_col, [
+                    (tri_x + tri_w // 2, tri_y), 
+                    (tri_x + tri_w, tri_y + tri_h), 
+                    (tri_x, tri_y + tri_h)
+                ])
+            else: # Red Down Arrow
+                pygame.draw.polygon(self.screen, delta_col, [
+                    (tri_x, tri_y), 
+                    (tri_x + tri_w, tri_y), 
+                    (tri_x + tri_w // 2, tri_y + tri_h)
+                ])
+                
             y_cur += d_surf.get_height() + 8
         else:
             y_cur += 6
@@ -1517,7 +1578,7 @@ class PlayingMixin:
 
         # ── "✦  LEVEL UP  ✦" banner ───────────────────────────────────────────
         t_font    = self.fonts.get("title_md") or self.fonts["title_sm"]
-        banner    = t_font.render("✦  LEVEL UP  ✦", True, (255, 210, 60))
+        banner    = t_font.render("  LEVEL UP  ", True, (255, 210, 60))
         self.screen.blit(banner, banner.get_rect(centerx=cx + CW // 2, top=y_cur))
         y_cur += banner.get_height() + 4
 
@@ -1539,7 +1600,7 @@ class PlayingMixin:
 
         # LV prev → new small label
         arrow_s = self.fonts["body_sm"].render(
-            f"LV.{prev_lv}  →  LV.{new_lv}", True, (180, 165, 120)
+            f"LV.{prev_lv}  ->  LV.{new_lv}", True, (180, 165, 120)
         )
         self.screen.blit(arrow_s, arrow_s.get_rect(centerx=cx + CW // 2, top=y_cur))
         y_cur += arrow_s.get_height() + 8
@@ -1569,7 +1630,7 @@ class PlayingMixin:
         if unlocked:
             # Use a smaller font key for header to avoid wrapping
             hdr_font = self.fonts.get("tiny") or self.fonts["body_sm"]
-            hdr = hdr_font.render("✦ NEW JUTSU UNLOCKED ✦", True, (140, 215, 155))
+            hdr = hdr_font.render("- NEW JUTSU UNLOCKED -", True, (140, 215, 155))
             self.screen.blit(hdr, hdr.get_rect(centerx=cx + CW // 2, top=y_cur))
             y_cur += hdr.get_height() + 4
 

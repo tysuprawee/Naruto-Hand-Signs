@@ -195,8 +195,8 @@ class RuntimeMixin:
                     elif event.key == pygame.K_r:
                         self.current_step = 0
                         self.sequence_run_start = None
-                        self.jutsu_active = False
-                        self.fire_particles.emitting = False
+                        if hasattr(self, "_reset_active_effects"):
+                            self._reset_active_effects(reset_calibration=False)
                     elif event.key == pygame.K_c:
                         self.start_calibration(manual=True, force_show_diag=True)
                         self.play_sound("click")
@@ -221,15 +221,12 @@ class RuntimeMixin:
                                 self.challenge_state = "waiting"
                                 self.current_step = 0
                                 self.sequence_run_start = None
-                                self.jutsu_active = False
                                 self.submission_complete = False
                                 self.challenge_rank_info = ""
                                 if hasattr(self, "_challenge_reset_proof"):
                                     self._challenge_reset_proof()
-                                if self.video_cap:
-                                    self.video_cap.release()
-                                    self.video_cap = None
-                                self.current_video = None
+                                if hasattr(self, "_reset_active_effects"):
+                                    self._reset_active_effects(reset_calibration=False)
                 elif self.state == GameState.CALIBRATION_GATE:
                     if event.key == pygame.K_c:
                         if self.start_calibration(manual=True, force_show_diag=True):

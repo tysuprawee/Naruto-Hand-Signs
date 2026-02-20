@@ -181,6 +181,7 @@ class FireParticleSystem:
         self.phoenix_lane_angles = (-1.08, -0.62, 0.0, 0.62, 1.08)
         self.phoenix_lane_offsets = (-42.0, -21.0, 0.0, 21.0, 42.0)
         self._phoenix_burst_accum_s = 0.0
+        self._muzzle_pulse = 0.0
 
     def set_style(self, style):
         style_norm = str(style or "fireball").strip().lower()
@@ -198,34 +199,56 @@ class FireParticleSystem:
         self.emit_y = y
     
     def _spawn_fireball_particle(self):
-        angle = np.random.uniform(-0.5, 0.5)
-        speed = np.random.uniform(100, 200)
-        vx = speed * math.sin(angle) * 0.3
-        vy = -speed
+        wind_n = float(np.clip(self.wind_x / 320.0, -1.0, 1.0))
+        angle = float(np.random.uniform(-0.36, 0.36) + wind_n * 0.20)
+        speed = float(np.random.uniform(240.0, 520.0))
+        vx = speed * math.sin(angle) * 0.76 + wind_n * 165.0
+        vy = -speed * float(np.random.uniform(0.78, 1.22))
 
-        lifetime = np.random.uniform(0.5, 1.2)
-        size = np.random.uniform(8, 25)
-
-        temp = np.random.random()
-        if temp > 0.8:
+        roll = float(np.random.random())
+        if roll < 0.44:
+            kind = "fireball_core"
+            lifetime = float(np.random.uniform(0.28, 0.64))
+            size = float(np.random.uniform(14.0, 34.0))
+            color = COLORS["fire_core"] if np.random.random() > 0.35 else COLORS["fire_mid"]
+            sway_strength = 10.0
+            gravity = 64.0
+        elif roll < 0.82:
+            kind = "fireball_ember"
+            lifetime = float(np.random.uniform(0.52, 1.35))
+            size = float(np.random.uniform(5.0, 16.0))
+            color = COLORS["fire_mid"] if np.random.random() > 0.40 else COLORS["fire_outer"]
+            sway_strength = 33.0
+            gravity = 130.0
+        elif roll < 0.93:
+            kind = "fireball_spark"
+            lifetime = float(np.random.uniform(0.18, 0.44))
+            size = float(np.random.uniform(2.0, 5.8))
             color = COLORS["fire_core"]
-        elif temp > 0.4:
-            color = COLORS["fire_mid"]
+            sway_strength = 6.0
+            gravity = 190.0
         else:
-            color = COLORS["fire_outer"]
+            kind = "fireball_smoke"
+            lifetime = float(np.random.uniform(0.85, 1.95))
+            size = float(np.random.uniform(16.0, 40.0))
+            color = (72, 46, 34)
+            sway_strength = 16.0
+            gravity = -16.0
+            vx *= 0.48
+            vy *= 0.38
 
         self.particles.append(
             Particle(
-                self.emit_x + np.random.uniform(-15, 15),
-                self.emit_y + np.random.uniform(-5, 5),
+                self.emit_x + np.random.uniform(-16, 16),
+                self.emit_y + np.random.uniform(-10, 10),
                 vx,
                 vy,
                 lifetime,
                 size,
                 color,
-                kind="fireball",
-                sway_strength=30.0,
-                gravity=0.0,
+                kind=kind,
+                sway_strength=sway_strength,
+                gravity=gravity,
             )
         )
 
@@ -291,11 +314,60 @@ class FireParticleSystem:
                     self._phoenix_burst_accum_s -= self.phoenix_burst_interval_s
                     self.emit()
             else:
-                self.emit(8)
+                if int(self.max_particles) >= 180:
+                    emit_n = 18
+                elif int(self.max_particles) >= 120:
+                    emit_n = 14
+                else:
+                    emit_n = 7
+                self.emit(emit_n)
+                self._muzzle_pulse = min(1.0, self._muzzle_pulse + dt * 7.5)
+        else:
+            self._muzzle_pulse = max(0.0, self._muzzle_pulse - dt * 4.5)
     
     def render(self, surface):
+        if self.style == "fireball" and (self.emitting or self._muzzle_pulse > 0.02):
+            now = time.time()
+            pulse = 0.72 + 0.28 * math.sin(now * 13.0)
+            pwr = max(0.0, min(1.0, self._muzzle_pulse)) * pulse
+
+            jitter_x = int(math.sin(now * 19.0) * 2.0)
+            jitter_y = int(math.cos(now * 17.0) * 2.0)
+            base_x = int(self.emit_x + jitter_x)
+            base_y = int(self.emit_y + jitter_y)
+            wind_push = int(np.clip(self.wind_x, -260.0, 260.0) * 0.11)
+
+            for radius_mul, alpha_mul, color, ox, oy in (
+                (2.55, 0.28, (255, 70, 20), -2, 2),
+                (1.95, 0.42, (255, 112, 36), 0, 0),
+                (1.38, 0.58, (255, 170, 58), 1, -1),
+                (0.90, 0.74, (255, 235, 175), 0, -1),
+            ):
+                r = int(max(6, 20 * radius_mul))
+                a = int(max(0, min(255, 255 * pwr * alpha_mul)))
+                s = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                pygame.draw.circle(s, (*color, a), (r, r), r)
+                surface.blit(
+                    s,
+                    (base_x + ox + wind_push - r, base_y + oy - r),
+                    special_flags=pygame.BLEND_ADD,
+                )
+
+            flare_w = int(max(24, 72 * (0.45 + pwr)))
+            flare_h = int(max(10, 19 * (0.45 + pwr)))
+            flare_alpha = int(max(0, min(220, 190 * pwr)))
+            flare = pygame.Surface((flare_w * 2, flare_h * 2), pygame.SRCALPHA)
+            pygame.draw.ellipse(flare, (255, 120, 32, flare_alpha), (0, 0, flare_w * 2, flare_h * 2))
+            surface.blit(
+                flare,
+                (base_x - flare_w + wind_push, base_y - flare_h),
+                special_flags=pygame.BLEND_ADD,
+            )
+
+        particle_t = time.time()
         for p in self.particles:
-            alpha = p.get_alpha()
+            flicker = 0.88 + 0.12 * math.sin(particle_t * 26.0 + p.x * 0.07 + p.y * 0.05)
+            alpha = int(p.get_alpha() * flicker)
             life_ratio = p.lifetime / p.max_lifetime
             size = int(p.size * life_ratio)
             
@@ -316,17 +388,92 @@ class FireParticleSystem:
                         (tx - trail_size * 2, ty - trail_size * 2),
                         special_flags=pygame.BLEND_ADD,
                     )
+            elif p.kind == "fireball_smoke":
+                smoke_a = max(0, int(alpha * 0.34))
+                if smoke_a > 0:
+                    smoke_r = max(4, int(size * 1.20))
+                    smoke = pygame.Surface((smoke_r * 2, smoke_r * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(smoke, (*p.color, smoke_a), (smoke_r, smoke_r), smoke_r)
+                    inner_r = max(2, int(smoke_r * 0.70))
+                    inner_col = (95, 64, 44, max(0, int(smoke_a * 0.72)))
+                    pygame.draw.circle(smoke, inner_col, (smoke_r, smoke_r), inner_r)
+                    surface.blit(smoke, (int(p.x - smoke_r), int(p.y - smoke_r)))
+                continue
+            else:
+                speed = math.hypot(p.vx, p.vy)
+                inv_speed = 1.0 / max(1e-4, speed)
+                dir_x = p.vx * inv_speed
+                dir_y = p.vy * inv_speed
+
+                if p.kind == "fireball_core":
+                    trail_len = 5
+                    trail_decay = 0.11
+                    trail_alpha_base = 0.54
+                    spacing = 4.2
+                elif p.kind == "fireball_spark":
+                    trail_len = 6
+                    trail_decay = 0.14
+                    trail_alpha_base = 0.68
+                    spacing = 3.1
+                else:
+                    trail_len = 3
+                    trail_decay = 0.13
+                    trail_alpha_base = 0.46
+                    spacing = 3.8
+
+                for t in range(trail_len):
+                    back = (t + 1) * (spacing + size * 0.22)
+                    tx = int(p.x - dir_x * back)
+                    ty = int(p.y - dir_y * back)
+                    trail_size = max(1, int(size * (0.70 - t * trail_decay)))
+                    trail_alpha = max(0, int(alpha * (trail_alpha_base - t * 0.11)))
+                    if trail_alpha <= 0:
+                        continue
+                    trail_color = (*p.color, trail_alpha)
+                    trail_surf = pygame.Surface((trail_size * 4, trail_size * 4), pygame.SRCALPHA)
+                    pygame.draw.circle(trail_surf, trail_color, (trail_size * 2, trail_size * 2), trail_size)
+                    surface.blit(
+                        trail_surf,
+                        (tx - trail_size * 2, ty - trail_size * 2),
+                        special_flags=pygame.BLEND_ADD,
+                    )
             
-            for i in range(3):
-                glow_size = size + i * 4
-                glow_alpha = max(0, alpha - i * 60)
+            if p.kind == "fireball_core":
+                glow_steps = (
+                    (1.85, 0.28, COLORS["fire_outer"]),
+                    (1.35, 0.42, COLORS["fire_mid"]),
+                    (0.92, 0.64, COLORS["fire_core"]),
+                )
+            elif p.kind == "fireball_spark":
+                glow_steps = (
+                    (1.40, 0.22, COLORS["fire_mid"]),
+                    (0.95, 0.50, COLORS["fire_core"]),
+                )
+            else:
+                glow_steps = (
+                    (1.55, 0.24, COLORS["fire_outer"]),
+                    (1.10, 0.44, COLORS["fire_mid"]),
+                    (0.80, 0.60, p.color),
+                )
+
+            for glow_mul, alpha_mul, glow_color in glow_steps:
+                glow_size = max(1, int(size * glow_mul))
+                glow_alpha = max(0, int(alpha * alpha_mul))
                 if glow_alpha <= 0:
                     continue
                 
-                color_with_alpha = (*p.color, glow_alpha)
+                color_with_alpha = (*glow_color, glow_alpha)
                 temp_surf = pygame.Surface((glow_size * 2, glow_size * 2), pygame.SRCALPHA)
                 pygame.draw.circle(temp_surf, color_with_alpha, (glow_size, glow_size), glow_size)
                 surface.blit(temp_surf, (int(p.x - glow_size), int(p.y - glow_size)), special_flags=pygame.BLEND_ADD)
+
+            if p.kind == "fireball_core":
+                core_r = max(1, int(size * 0.40))
+                core_a = max(0, min(255, int(alpha * 0.96)))
+                if core_a > 0:
+                    core = pygame.Surface((core_r * 2, core_r * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(core, (255, 250, 215, core_a), (core_r, core_r), core_r)
+                    surface.blit(core, (int(p.x - core_r), int(p.y - core_r)), special_flags=pygame.BLEND_ADD)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

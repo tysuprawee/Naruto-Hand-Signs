@@ -132,6 +132,25 @@ class WaterDragonEffect(BaseEffect):
 
         # Pre-allocate a small surface for glow circles (avoids per-frame alloc).
         self._glow_surf_cache: dict[int, pygame.Surface] = {}
+        
+        self._dragon_head_img = None
+        self._dragon_head_loaded = False
+        
+    def _get_dragon_head_img(self):
+        if self._dragon_head_loaded:
+            return self._dragon_head_img
+            
+        import os
+        p = "src/pics/dragon.png"
+        try:
+            if os.path.exists(p):
+                # Using convert_alpha() works safely here because it's called during render
+                self._dragon_head_img = pygame.image.load(p).convert_alpha()
+        except:
+            self._dragon_head_img = None
+            
+        self._dragon_head_loaded = True
+        return self._dragon_head_img
 
     # ── helpers ──────────────────────────────────────────────────────────
     @staticmethod
@@ -476,8 +495,48 @@ class WaterDragonEffect(BaseEffect):
                 screen.blit(head_surf, (int(hx - head_r), int(hy - head_r)),
                             special_flags=pygame.BLEND_RGB_ADD)
 
-            # Larger "Scary Red" eye
+            # Larger "Scary Red" eye (fallback if no image)
             eye_r = max(4, head_r // 2)
+            
+            # --- Draw the real Dragon Head Image ---
+            head_img = self._get_dragon_head_img()
+            if head_img is not None:
+                # Calculate angle of the head (from the 2nd to last point to the last point)
+                if len(points) >= 2:
+                    px, py, _ = points[-2]
+                    dx = hx - px
+                    dy = hy - py
+                    angle_rad = math.atan2(dy, dx)
+                    # Convert to degrees (Pygame rotate is CCW, math.atan2 is CW, so negative)
+                    angle_deg = -math.degrees(angle_rad)
+                else:
+                    angle_deg = 0
+
+                # Scale head image dynamically based on DRAGON_HEAD_SIZE
+                target_w = int(head_r * 4.5)
+                target_h = int(target_w * (head_img.get_height() / max(1, head_img.get_width())))
+                
+                scaled_head = pygame.transform.smoothscale(head_img, (target_w, target_h))
+                
+                # Rotate
+                rotated_head = pygame.transform.rotate(scaled_head, angle_deg)
+                
+                # Center blit
+                head_rect = rotated_head.get_rect(center=(int(hx), int(hy)))
+                
+                # Set dynamic alpha for the dragon head image
+                rotated_head.set_alpha(int(255 * global_alpha))
+                
+                # Draw the image normally without additive blend, so we can actually see its colors
+                screen.blit(rotated_head, head_rect)
+            else:
+                # Fallback to red eye coordinate
+                if eye_r > 0:
+                    eye_a = max(0, min(255, int(head_a * 0.9)))
+                    if eye_a > 2:
+                        eye_surf = self._glow_surface(eye_r, (255, 30, 20), eye_a)
+                        screen.blit(eye_surf, (int(hx - eye_r + head_r//3), int(hy - eye_r - head_r//4)),
+                                    special_flags=pygame.BLEND_RGB_ADD)
             eye_a = min(255, int(head_a * 1.5))
             eye = self._glow_surface(eye_r, WATER_COLORS["eye_glow"], min(255, eye_a))
             screen.blit(eye, (int(hx - eye_r), int(hy - eye_r)),
