@@ -94,6 +94,10 @@ class GameplayMixin:
         self.mouth_pos = None
         self.left_eye_pos = None
         self.right_eye_pos = None
+        self.left_eye_size = None
+        self.right_eye_size = None
+        self.left_eye_angle = 0.0
+        self.right_eye_angle = 0.0
         self.smooth_hand_pos = None
         self.smooth_hand_effect_scale = None
         self.hand_effect_scale = 1.0
@@ -872,6 +876,10 @@ class GameplayMixin:
         if not self.face_landmarker:
             self.left_eye_pos = None
             self.right_eye_pos = None
+            self.left_eye_size = None
+            self.right_eye_size = None
+            self.left_eye_angle = 0.0
+            self.right_eye_angle = 0.0
             return
         
         try:
@@ -885,16 +893,104 @@ class GameplayMixin:
                 
                 mouth = face[13]
                 self.mouth_pos = (int(mouth.x * w), int(mouth.y * h))
-                
-                # Eye landmarks (159: left eye upper, 386: right eye upper)
-                if len(face) > 386:
-                    l_eye = face[159]
-                    r_eye = face[386]
-                    self.left_eye_pos = (int(l_eye.x * w), int(l_eye.y * h))
-                    self.right_eye_pos = (int(r_eye.x * w), int(r_eye.y * h))
+
+                def _eye_geometry(inner_idx, outer_idx, upper_idx, lower_idx):
+                    max_idx = max(inner_idx, outer_idx, upper_idx, lower_idx)
+                    if len(face) <= max_idx:
+                        return None
+
+                    p_inner = face[inner_idx]
+                    p_outer = face[outer_idx]
+                    p_upper = face[upper_idx]
+                    p_lower = face[lower_idx]
+
+                    center_x = (p_inner.x + p_outer.x + p_upper.x + p_lower.x) * 0.25 * w
+                    center_y = (p_inner.y + p_outer.y + p_upper.y + p_lower.y) * 0.25 * h
+
+                    width_px = math.hypot((p_outer.x - p_inner.x) * w, (p_outer.y - p_inner.y) * h)
+                    height_px = math.hypot((p_lower.x - p_upper.x) * w, (p_lower.y - p_upper.y) * h)
+
+                    iris_d = max(10.0, min(width_px * 0.56, height_px * 2.35))
+                    eye_w = iris_d * 1.08
+                    eye_h = iris_d * 1.02
+                    eye_angle = math.degrees(
+                        math.atan2((p_outer.y - p_inner.y) * h, (p_outer.x - p_inner.x) * w)
+                    )
+
+                    return (center_x, center_y), (eye_w, eye_h), eye_angle
+
+                left_geom = _eye_geometry(133, 33, 159, 145)
+                right_geom = _eye_geometry(362, 263, 386, 374)
+
+                def _smooth_point(prev, cur, alpha):
+                    if prev is None:
+                        return cur
+                    return (
+                        prev[0] + (cur[0] - prev[0]) * alpha,
+                        prev[1] + (cur[1] - prev[1]) * alpha,
+                    )
+
+                def _smooth_scalar(prev, cur, alpha):
+                    return float(prev + (cur - prev) * alpha)
+
+                def _adaptive_smooth_pos(prev, cur):
+                    if prev is None:
+                        return cur
+                    dx = float(cur[0] - prev[0])
+                    dy = float(cur[1] - prev[1])
+                    move_px = math.hypot(dx, dy)
+
+                    # Snap hard on larger jumps to keep the iris overlay locked during turns.
+                    if move_px >= 13.0:
+                        return cur
+
+                    # Low lag even on moderate movement.
+                    alpha = 0.72 if move_px >= 5.5 else 0.58
+                    return _smooth_point(prev, cur, alpha)
+
+                alpha_size = 0.46
+                alpha_angle = 0.55
+
+                if left_geom and right_geom:
+                    left_pos_raw, left_size_raw, left_angle_raw = left_geom
+                    right_pos_raw, right_size_raw, right_angle_raw = right_geom
+
+                    if self.left_eye_pos is None:
+                        self.left_eye_pos = (int(left_pos_raw[0]), int(left_pos_raw[1]))
+                        self.left_eye_size = (float(left_size_raw[0]), float(left_size_raw[1]))
+                        self.left_eye_angle = float(left_angle_raw)
+                    else:
+                        sm_left_pos = _adaptive_smooth_pos(self.left_eye_pos, left_pos_raw)
+                        sm_left_size = _smooth_point(
+                            self.left_eye_size if self.left_eye_size is not None else left_size_raw,
+                            left_size_raw,
+                            alpha_size,
+                        )
+                        self.left_eye_pos = (int(sm_left_pos[0]), int(sm_left_pos[1]))
+                        self.left_eye_size = (float(sm_left_size[0]), float(sm_left_size[1]))
+                        self.left_eye_angle = _smooth_scalar(self.left_eye_angle, left_angle_raw, alpha_angle)
+
+                    if self.right_eye_pos is None:
+                        self.right_eye_pos = (int(right_pos_raw[0]), int(right_pos_raw[1]))
+                        self.right_eye_size = (float(right_size_raw[0]), float(right_size_raw[1]))
+                        self.right_eye_angle = float(right_angle_raw)
+                    else:
+                        sm_right_pos = _adaptive_smooth_pos(self.right_eye_pos, right_pos_raw)
+                        sm_right_size = _smooth_point(
+                            self.right_eye_size if self.right_eye_size is not None else right_size_raw,
+                            right_size_raw,
+                            alpha_size,
+                        )
+                        self.right_eye_pos = (int(sm_right_pos[0]), int(sm_right_pos[1]))
+                        self.right_eye_size = (float(sm_right_size[0]), float(sm_right_size[1]))
+                        self.right_eye_angle = _smooth_scalar(self.right_eye_angle, right_angle_raw, alpha_angle)
                 else:
                     self.left_eye_pos = None
                     self.right_eye_pos = None
+                    self.left_eye_size = None
+                    self.right_eye_size = None
+                    self.left_eye_angle = 0.0
+                    self.right_eye_angle = 0.0
                 
                 nose_x = face[1].x
                 left_x = face[234].x
@@ -903,6 +999,14 @@ class GameplayMixin:
                 if width > 0:
                     rel_nose = (nose_x - left_x) / width
                     self.head_yaw = (rel_nose - 0.5) * 2
+            else:
+                self.mouth_pos = None
+                self.left_eye_pos = None
+                self.right_eye_pos = None
+                self.left_eye_size = None
+                self.right_eye_size = None
+                self.left_eye_angle = 0.0
+                self.right_eye_angle = 0.0
         except:
             pass
 

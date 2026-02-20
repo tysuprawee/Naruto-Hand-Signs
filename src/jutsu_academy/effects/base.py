@@ -14,6 +14,10 @@ class EffectContext:
     face_center: Any = None
     left_eye_pos: Any = None
     right_eye_pos: Any = None
+    left_eye_size: Any = None
+    right_eye_size: Any = None
+    left_eye_angle: float = 0.0
+    right_eye_angle: float = 0.0
     cam_x: int = 0
     cam_y: int = 0
     scale_x: float = 1.0

@@ -814,6 +814,12 @@ class CoreMixin:
         
         # Tracking & Smoothing
         self.mouth_pos = None
+        self.left_eye_pos = None
+        self.right_eye_pos = None
+        self.left_eye_size = None
+        self.right_eye_size = None
+        self.left_eye_angle = 0.0
+        self.right_eye_angle = 0.0
         self.hand_pos = None
         self.smooth_hand_pos = None
         self.hand_effect_scale = 1.0

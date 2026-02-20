@@ -111,6 +111,7 @@ OFFICIAL_JUTSUS = {
         "sound_path": None,
         "video_path": None,
         "effect": "eye",
+        "duration": 20.0,
         "min_level": 10
     }
 }
