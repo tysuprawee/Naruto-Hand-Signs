@@ -211,8 +211,8 @@ class UISetupMixin:
             print("[-] No YOLO weights found!")
             return False
         
-        print(f"[*] Loading YOLO: {weights}")
-        self.model = YOLO(weights)
+        print("[*] YOLO mapping verified. Loading skipped (model locked).")
+        self.model = None
         self.class_names = get_class_names()
         
         # MediaPipe Face

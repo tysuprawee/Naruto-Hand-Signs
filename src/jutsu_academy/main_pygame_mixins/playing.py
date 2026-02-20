@@ -70,6 +70,126 @@ class PlayingMixin:
         prev_hash = self.challenge_run_hash or ""
         self.challenge_run_hash = hashlib.sha256((prev_hash + "|" + canonical).encode("utf-8")).hexdigest()
 
+    def _start_phoenix_fireballs(self):
+        self.phoenix_fireballs_active = True
+        self.phoenix_fireballs = []
+        for sys in getattr(self, "phoenix_fireball_systems", []):
+            sys.set_style("fireball")
+            sys.emitting = True
+            sys.particles.clear()
+
+    def _stop_phoenix_fireballs(self):
+        self.phoenix_fireballs_active = False
+        self.phoenix_fireballs = []
+        for sys in getattr(self, "phoenix_fireball_systems", []):
+            sys.emitting = False
+            sys.particles.clear()
+
+    def _update_phoenix_fireballs(self, dt, cam_x, cam_y, cam_w, cam_h, mouth_screen_pos):
+        if not bool(getattr(self, "phoenix_fireballs_active", False)):
+            return
+        systems = list(getattr(self, "phoenix_fireball_systems", []) or [])
+        if not systems:
+            return
+
+        count = min(int(getattr(self, "phoenix_fireball_count", 5) or 5), len(systems))
+        if count <= 0:
+            return
+
+        min_x = cam_x + 26
+        max_x = cam_x + cam_w - 26
+        min_y = cam_y + 24
+        max_y = cam_y + cam_h - 24
+
+        if not self.phoenix_fireballs:
+            if mouth_screen_pos:
+                cx, cy = mouth_screen_pos
+            else:
+                cx = cam_x + cam_w * 0.5
+                cy = cam_y + cam_h * 0.68
+
+            spread = np.linspace(-1.15, 1.15, count)
+            balls = []
+            for ang in spread:
+                speed = float(np.random.uniform(330.0, 560.0))
+                theta = float(ang + np.random.uniform(-0.24, 0.24))
+                vx = speed * math.sin(theta)
+                vy = -speed * np.random.uniform(0.72, 1.24)
+                balls.append(
+                    {
+                        "x": float(cx + np.random.uniform(-12.0, 12.0)),
+                        "y": float(cy + np.random.uniform(-8.0, 8.0)),
+                        "vx": float(vx),
+                        "vy": float(vy),
+                        "r": float(np.random.uniform(16.0, 22.0)),
+                    }
+                )
+            self.phoenix_fireballs = balls
+
+        wind_bias = -float(getattr(self, "head_yaw", 0.0) or 0.0) * 80.0
+        for idx in range(count):
+            b = self.phoenix_fireballs[idx]
+
+            swirl_x = math.sin(time.time() * 3.8 + idx * 1.17) * 180.0
+            swirl_y = math.cos(time.time() * 4.3 + idx * 0.93) * 140.0
+            b["vx"] += (float(np.random.uniform(-270.0, 270.0)) + swirl_x) * dt
+            b["vy"] += (float(np.random.uniform(-230.0, 230.0)) + swirl_y) * dt
+
+            # Occasional chaotic kick so paths feel less predictable.
+            if np.random.random() < (2.0 * dt):
+                impulse = float(np.random.uniform(120.0, 280.0))
+                kick_theta = float(np.random.uniform(-math.pi, math.pi))
+                b["vx"] += impulse * math.cos(kick_theta)
+                b["vy"] += impulse * math.sin(kick_theta)
+
+            speed = math.hypot(b["vx"], b["vy"])
+            if speed > 700.0:
+                scale = 700.0 / max(1e-6, speed)
+                b["vx"] *= scale
+                b["vy"] *= scale
+
+            b["x"] += (b["vx"] + wind_bias) * dt
+            b["y"] += b["vy"] * dt
+
+            if b["x"] < min_x:
+                b["x"] = min_x
+                b["vx"] = abs(b["vx"]) * 0.98
+            elif b["x"] > max_x:
+                b["x"] = max_x
+                b["vx"] = -abs(b["vx"]) * 0.98
+
+            if b["y"] < min_y:
+                b["y"] = min_y
+                b["vy"] = abs(b["vy"]) * 0.98
+            elif b["y"] > max_y:
+                b["y"] = max_y
+                b["vy"] = -abs(b["vy"]) * 0.98
+
+            sys = systems[idx]
+            sys.set_style("fireball")
+            sys.emitting = True
+            sys.set_position(b["x"], b["y"])
+            sys.wind_x = b["vx"] * 0.14
+            sys.update(dt)
+
+    def _render_phoenix_fireballs(self):
+        if not bool(getattr(self, "phoenix_fireballs_active", False)):
+            return
+        systems = list(getattr(self, "phoenix_fireball_systems", []) or [])
+        count = min(len(self.phoenix_fireballs), len(systems))
+        for idx in range(count):
+            b = self.phoenix_fireballs[idx]
+            r = max(8, int(float(b.get("r", 16.0))))
+            x = int(float(b.get("x", 0.0)))
+            y = int(float(b.get("y", 0.0)))
+            core = pygame.Surface((r * 6, r * 6), pygame.SRCALPHA)
+            cx = cy = r * 3
+            pygame.draw.circle(core, (255, 255, 220, 145), (cx, cy), int(r * 0.90))
+            pygame.draw.circle(core, (255, 175, 70, 165), (cx, cy), int(r * 1.45))
+            pygame.draw.circle(core, (255, 90, 35, 125), (cx, cy), int(r * 2.05))
+            self.screen.blit(core, (x - cx, y - cy), special_flags=pygame.BLEND_ADD)
+            systems[idx].render(self.screen)
+
     def _trigger_jutsu_payload(self, jutsu_name, effect_name):
         """Trigger sound/effect/video payload for a (sub)jutsu event."""
         # Queue signature sound (supports combo checkpoints without clobbering previous sound).
@@ -98,13 +218,28 @@ class PlayingMixin:
         if sound_name:
             if not hasattr(self, "pending_sounds") or self.pending_sounds is None:
                 self.pending_sounds = []
-            self.pending_sounds.append({
-                "name": sound_name,
-                "time": time.time() + max(0.0, float(sound_delay_s)),
-            })
+            if jutsu_name == "Phoenix Flower":
+                for i in range(5):
+                    self.pending_sounds.append({
+                        "name": sound_name,
+                        "time": time.time() + max(0.0, float(sound_delay_s)) + (i * 0.4),
+                    })
+            else:
+                self.pending_sounds.append({
+                    "name": sound_name,
+                    "time": time.time() + max(0.0, float(sound_delay_s)),
+                })
 
         if effect_name == "fire":
-            self.fire_particles.emitting = True
+            jutsu_key = str(jutsu_name or "").strip().lower()
+            if "phoenix" in jutsu_key:
+                self.fire_particles.emitting = False
+                self._start_phoenix_fireballs()
+            else:
+                self._stop_phoenix_fireballs()
+                if hasattr(self.fire_particles, "set_style"):
+                    self.fire_particles.set_style("fireball")
+                self.fire_particles.emitting = True
 
         # Delay clone spawn to align better with longer clone signature audio.
         if effect_name == "clone":
@@ -583,6 +718,12 @@ class PlayingMixin:
         # (Camera dimensions already calculated at the top)
         
         # Update particles with correct screen position based on new scale
+        mouth_screen = None
+        if self.mouth_pos:
+            mouth_screen = (
+                cam_x + int(self.mouth_pos[0] * scale),
+                cam_y + int(self.mouth_pos[1] * scale),
+            )
         if self.fire_particles.emitting and self.mouth_pos:
             # Convert camera frame coords to screen coords
             # Landmark coords are normalized (0-1), multiplied by frame size in detect methods
@@ -590,11 +731,11 @@ class PlayingMixin:
             # We need to scale it.
             
             # Note: stored self.mouth_pos is raw frame pixels (640x480)
-            screen_x = cam_x + int(self.mouth_pos[0] * scale)
-            screen_y = cam_y + int(self.mouth_pos[1] * scale)
+            screen_x, screen_y = mouth_screen
             self.fire_particles.set_position(screen_x, screen_y)
             self.fire_particles.wind_x = -self.head_yaw * 200
         self.fire_particles.update(dt)
+        self._update_phoenix_fireballs(dt, cam_x, cam_y, new_w, new_h, mouth_screen)
         self.effect_orchestrator.update(
             EffectContext(
                 dt=dt,
@@ -617,9 +758,11 @@ class PlayingMixin:
         
         # Check jutsu duration
         if self.jutsu_active:
-            if time.time() - self.jutsu_start_time > self.jutsu_duration:
+            elapsed = time.time() - self.jutsu_start_time
+            if elapsed > self.jutsu_duration:
                 self.jutsu_active = False
                 self.fire_particles.emitting = False
+                self._stop_phoenix_fireballs()
                 self.effect_orchestrator.on_jutsu_end(EffectContext())
                 if getattr(self, "combo_clone_hold", False):
                     clone_effect = self.effect_orchestrator.effects.get("clone")
@@ -717,6 +860,7 @@ class PlayingMixin:
         
         # Fire particles
         self.fire_particles.render(self.screen)
+        self._render_phoenix_fireballs()
         self.effect_orchestrator.render(
             self.screen,
             EffectContext(

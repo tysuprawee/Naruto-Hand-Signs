@@ -1691,7 +1691,11 @@ class RenderingMixin:
 
         icon = self.tutorial_icons.get(step.get("icon_key", "camera"))
         if icon:
-            self.screen.blit(icon, (panel.right - 120, panel.y + 26))
+            # Draw a subtle border around the larger image
+            img_rect = pygame.Rect(panel.right - 320, panel.y + 40, 280, 280)
+            pygame.draw.rect(self.screen, COLORS["bg_dark"], img_rect.inflate(8, 8), border_radius=12)
+            pygame.draw.rect(self.screen, COLORS["border"], img_rect.inflate(8, 8), 2, border_radius=12)
+            self.screen.blit(icon, (img_rect.x, img_rect.y))
 
         text_y = panel.y + 106
         for line in step["lines"]:

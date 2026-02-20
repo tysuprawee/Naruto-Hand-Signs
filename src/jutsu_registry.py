@@ -92,7 +92,7 @@ OFFICIAL_JUTSUS = {
     "Water Dragon": {
         "sequence": ["ox", "monkey", "hare", "rat", "boar", "bird", "ox", "horse", "bird"],
         "display_text": "Water Dragon Bullet!",
-        "sound_path": None,
+        "sound_path": "src/sounds/water_dragon.mp3",
         "video_path": None,
         "effect": "water",
         "min_level": 8
@@ -100,7 +100,7 @@ OFFICIAL_JUTSUS = {
     "Phoenix Flower": {
         "sequence": ["rat", "tiger", "dog", "ox", "hare", "tiger"],
         "display_text": "Phoenix Sage Fire!",
-        "sound_path": None,
+        "sound_path": "src/sounds/phoenix_flowers.mp3",
         "video_path": None,
         "effect": "fire",
         "min_level": 3
@@ -108,10 +108,10 @@ OFFICIAL_JUTSUS = {
     "Sharingan": {
         "sequence": ["snake", "ram", "monkey", "boar", "horse", "tiger"],
         "display_text": "SHARINGAN!",
-        "sound_path": None,
+        "sound_path": "src/sounds/sharingan.mp3",
         "video_path": None,
         "effect": "eye",
-        "duration": 20.0,
+        "duration": 10.0,
         "min_level": 10
     }
 }

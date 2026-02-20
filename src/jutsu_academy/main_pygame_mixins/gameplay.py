@@ -74,6 +74,8 @@ class GameplayMixin:
     def _reset_active_effects(self, reset_calibration=True):
         """Reset effect/audio/video runtime state for safe screen transitions."""
         self.fire_particles.emitting = False
+        if hasattr(self, "_stop_phoenix_fireballs"):
+            self._stop_phoenix_fireballs()
         self.jutsu_active = False
         self.sequence_run_start = None
         self.combo_clone_hold = False

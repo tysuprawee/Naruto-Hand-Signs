@@ -875,6 +875,12 @@ class CoreMixin:
 
         # Effects
         self.fire_particles = FireParticleSystem(200)
+        self.phoenix_fireballs_active = False
+        self.phoenix_fireball_count = 5
+        self.phoenix_fireballs = []
+        self.phoenix_fireball_systems = [FireParticleSystem(72) for _ in range(self.phoenix_fireball_count)]
+        for _sys in self.phoenix_fireball_systems:
+            _sys.set_style("fireball")
         self.effect_orchestrator = EffectOrchestrator()
         self.effect_orchestrator.register("clone", ShadowCloneEffect(swap_xy=True), passive=True)
         self.effect_orchestrator.register("reaper", ReaperDeathSealEffect())

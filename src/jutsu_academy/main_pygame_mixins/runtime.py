@@ -201,8 +201,13 @@ class RuntimeMixin:
                         self.start_calibration(manual=True, force_show_diag=True)
                         self.play_sound("click")
                     elif event.key == pygame.K_m:
-                        self.toggle_detection_model()
-                        self.play_sound("click")
+                        self.play_sound("error")
+                        if hasattr(self, "show_alert"):
+                            self.show_alert(
+                                "Model Locked",
+                                "The YOLO model has been locked to ensure competitive integrity and standardized detection times. Please continue using MediaPipe.",
+                                "UNDERSTOOD"
+                            )
                     elif event.key == pygame.K_SPACE:
                         if self.game_mode == "challenge":
                             if self.challenge_state == "waiting":
@@ -724,19 +729,20 @@ class RuntimeMixin:
                         "Best accuracy & fairness — detects hand landmarks "
                         "directly without a custom dataset. Use this for ranked "
                         "runs and everyday training.\n\n"
-                        "YOLO (faster on weak CPUs)\n"
-                        "Runs a lightweight object-detection model trained on "
-                        "Naruto signs. Slightly less consistent but very fast. "
-                        "Good if your FPS is low on MediaPipe.\n\n"
-                        "Tip: after switching models press  [C]  to recalibrate "
-                        "so detection thresholds match the new model."
+                        "YOLO (Locked)\n"
+                        "Currently disabled/locked to ensure competitive integrity "
+                        "and standardized detection times across all shinobi."
                     ),
                     "GOT IT",
                 )
                 return
             if mouse_click and hasattr(self, "model_toggle_rect") and self.model_toggle_rect.collidepoint(mouse_pos):
-                self.toggle_detection_model()
-                self.play_sound("click")
+                self.play_sound("error")
+                self.show_alert(
+                    "Model Locked",
+                    "The YOLO model has been locked to ensure competitive integrity and standardized detection times. Please continue using MediaPipe.",
+                    "UNDERSTOOD"
+                )
                 return
             if mouse_click and hasattr(self, "diag_toggle_rect") and self.diag_toggle_rect.collidepoint(mouse_pos):
                 self.show_detection_panel = not bool(getattr(self, "show_detection_panel", False))

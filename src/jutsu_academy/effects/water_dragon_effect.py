@@ -26,11 +26,11 @@ from src.jutsu_academy.effects.base import BaseEffect, EffectContext
 WATER_COLORS = {
     "core":       (180, 230, 255),   # brightest inner glow (near-white ice-blue)
     "bright":     (100, 200, 255),   # vivid water blue
-    "mid":        (40,  140, 220),   # mid-tone ocean
-    "deep":       (20,  80,  180),   # darker undertone
-    "dark":       (10,  40,  100),   # deepest shadow
+    "mid":        (20,  100, 180),   # darker mid-tone ocean
+    "deep":       (10,  30,  100),   # intense deep water undertone
+    "dark":       (5,   15,  50),    # almost-black shadow
     "mist":       (160, 210, 240),   # translucent mist / spray
-    "eye_glow":   (220, 255, 255),   # dragon eye highlight
+    "eye_glow":   (255, 30,  30),    # menacing glowing red eye
 }
 
 
@@ -97,19 +97,19 @@ class WaterDragonEffect(BaseEffect):
     TOTAL_DURATION_DEFAULT = 6.0    # seconds — entire effect lifetime
 
     # Dragon body geometry
-    DRAGON_SEGMENTS       = 48      # how many body nodes
-    DRAGON_LENGTH_PX      = 300     # max extend distance in screen px
-    DRAGON_AMPLITUDE      = 35      # sine amplitude (px) for serpentine
-    DRAGON_FREQUENCY      = 3.0     # sine cycles along the body
-    DRAGON_HEAD_SIZE      = 22      # radius of head glow
-    DRAGON_BODY_BASE_SIZE = 14      # body segment radius at head
-    DRAGON_BODY_TIP_SIZE  = 3       # body segment radius at tail
+    DRAGON_SEGMENTS       = 64      # more body nodes for a longer tail
+    DRAGON_LENGTH_PX      = 400     # longer extend
+    DRAGON_AMPLITUDE      = 60      # much wider serpentine swings
+    DRAGON_FREQUENCY      = 3.5     # more aggressive coils
+    DRAGON_HEAD_SIZE      = 30      # significantly larger head
+    DRAGON_BODY_BASE_SIZE = 22      # thicker upper body
+    DRAGON_BODY_TIP_SIZE  = 5       # thicker tail
 
     # Wandering orbit parameters — keeps dragon inside camera area
-    ORBIT_RADIUS_X        = 180     # horizontal wander radius (px)
-    ORBIT_RADIUS_Y        = 100     # vertical wander radius (px) — kept small
-    ORBIT_SPEED           = 0.6     # full orbits per second
-    ORBIT_CENTER_Y_OFFSET = -120    # orbit center sits slightly above origin (negative = up)
+    ORBIT_RADIUS_X        = 240     # wider horizontal hunt radius
+    ORBIT_RADIUS_Y        = 130     # more vertical leap
+    ORBIT_SPEED           = 0.85    # viciously faster swarming speed
+    ORBIT_CENTER_Y_OFFSET = -120    # orbit center sits slightly above origin
 
     # Particles
     MAX_PARTICLES         = 350
@@ -476,9 +476,9 @@ class WaterDragonEffect(BaseEffect):
                 screen.blit(head_surf, (int(hx - head_r), int(hy - head_r)),
                             special_flags=pygame.BLEND_RGB_ADD)
 
-            # Tiny "eye" dot
-            eye_r = max(2, head_r // 3)
-            eye_a = min(255, int(head_a * 1.2))
+            # Larger "Scary Red" eye
+            eye_r = max(4, head_r // 2)
+            eye_a = min(255, int(head_a * 1.5))
             eye = self._glow_surface(eye_r, WATER_COLORS["eye_glow"], min(255, eye_a))
             screen.blit(eye, (int(hx - eye_r), int(hy - eye_r)),
                         special_flags=pygame.BLEND_RGB_ADD)

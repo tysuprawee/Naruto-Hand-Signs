@@ -128,7 +128,19 @@ COLORS = {
 # PARTICLE SYSTEM
 # ═══════════════════════════════════════════════════════════════════════════
 class Particle:
-    def __init__(self, x, y, vx, vy, lifetime, size, color):
+    def __init__(
+        self,
+        x,
+        y,
+        vx,
+        vy,
+        lifetime,
+        size,
+        color,
+        kind="fireball",
+        sway_strength=30.0,
+        gravity=0.0,
+    ):
         self.x = x
         self.y = y
         self.vx = vx
@@ -137,12 +149,16 @@ class Particle:
         self.max_lifetime = lifetime
         self.size = size
         self.color = color
+        self.kind = str(kind or "fireball")
+        self.sway_strength = float(sway_strength)
+        self.gravity = float(gravity)
     
     def update(self, dt, wind_x=0):
         self.x += (self.vx + wind_x) * dt
         self.y += self.vy * dt
+        self.vy += self.gravity * dt
         self.lifetime -= dt
-        self.x += math.sin(time.time() * 5 + self.y * 0.05) * 30 * dt
+        self.x += math.sin(time.time() * 5 + self.y * 0.05) * self.sway_strength * dt
     
     def is_alive(self):
         return self.lifetime > 0
@@ -159,47 +175,123 @@ class FireParticleSystem:
         self.emit_x = 0
         self.emit_y = 0
         self.wind_x = 0
+        self.style = "fireball"
+        self.phoenix_burst_interval_s = 0.13
+        self.phoenix_particles_per_lane = 3
+        self.phoenix_lane_angles = (-1.08, -0.62, 0.0, 0.62, 1.08)
+        self.phoenix_lane_offsets = (-42.0, -21.0, 0.0, 21.0, 42.0)
+        self._phoenix_burst_accum_s = 0.0
+
+    def set_style(self, style):
+        style_norm = str(style or "fireball").strip().lower()
+        if style_norm not in ("fireball", "phoenix"):
+            style_norm = "fireball"
+        if self.style != style_norm:
+            self._phoenix_burst_accum_s = 0.0
+        self.style = style_norm
+        if self.style == "phoenix":
+            # Fire an immediate multi-shot burst on the next update tick.
+            self._phoenix_burst_accum_s = self.phoenix_burst_interval_s
     
     def set_position(self, x, y):
         self.emit_x = x
         self.emit_y = y
     
+    def _spawn_fireball_particle(self):
+        angle = np.random.uniform(-0.5, 0.5)
+        speed = np.random.uniform(100, 200)
+        vx = speed * math.sin(angle) * 0.3
+        vy = -speed
+
+        lifetime = np.random.uniform(0.5, 1.2)
+        size = np.random.uniform(8, 25)
+
+        temp = np.random.random()
+        if temp > 0.8:
+            color = COLORS["fire_core"]
+        elif temp > 0.4:
+            color = COLORS["fire_mid"]
+        else:
+            color = COLORS["fire_outer"]
+
+        self.particles.append(
+            Particle(
+                self.emit_x + np.random.uniform(-15, 15),
+                self.emit_y + np.random.uniform(-5, 5),
+                vx,
+                vy,
+                lifetime,
+                size,
+                color,
+                kind="fireball",
+                sway_strength=30.0,
+                gravity=0.0,
+            )
+        )
+
+    def _spawn_phoenix_particle(self, lane_angle, lane_offset_x, lane_offset_y):
+        angle = float(lane_angle) + np.random.uniform(-0.07, 0.07)
+
+        speed = np.random.uniform(165, 290)
+        vx = speed * math.sin(angle)
+        vy = -speed * np.random.uniform(0.82, 1.16)
+
+        lifetime = np.random.uniform(0.34, 0.74)
+        size = np.random.uniform(7, 16)
+
+        heat = np.random.random()
+        if heat > 0.86:
+            color = (255, 255, 220)
+        elif heat > 0.48:
+            color = (255, 170, 55)
+        else:
+            color = (255, 85, 28)
+
+        self.particles.append(
+            Particle(
+                self.emit_x + float(lane_offset_x) + np.random.uniform(-4, 4),
+                self.emit_y + float(lane_offset_y) + np.random.uniform(-3, 3),
+                vx,
+                vy,
+                lifetime,
+                size,
+                color,
+                kind="phoenix",
+                sway_strength=9.0,
+                gravity=145.0,
+            )
+        )
+
     def emit(self, count=5):
         if not self.emitting:
             return
-        
+
+        if self.style == "phoenix":
+            for lane_angle, lane_offset_x in zip(self.phoenix_lane_angles, self.phoenix_lane_offsets):
+                lane_offset_y = -abs(lane_offset_x) * 0.11
+                for _ in range(max(1, int(self.phoenix_particles_per_lane))):
+                    if len(self.particles) >= self.max_particles:
+                        return
+                    self._spawn_phoenix_particle(lane_angle, lane_offset_x, lane_offset_y)
+            return
+
         for _ in range(count):
             if len(self.particles) >= self.max_particles:
                 break
-            
-            angle = np.random.uniform(-0.5, 0.5)
-            speed = np.random.uniform(100, 200)
-            vx = speed * math.sin(angle) * 0.3
-            vy = -speed
-            
-            lifetime = np.random.uniform(0.5, 1.2)
-            size = np.random.uniform(8, 25)
-            
-            temp = np.random.random()
-            if temp > 0.8:
-                color = COLORS["fire_core"]
-            elif temp > 0.4:
-                color = COLORS["fire_mid"]
-            else:
-                color = COLORS["fire_outer"]
-            
-            self.particles.append(Particle(
-                self.emit_x + np.random.uniform(-15, 15),
-                self.emit_y + np.random.uniform(-5, 5),
-                vx, vy, lifetime, size, color
-            ))
+            self._spawn_fireball_particle()
     
     def update(self, dt):
         for p in self.particles:
             p.update(dt, self.wind_x)
         self.particles = [p for p in self.particles if p.is_alive()]
         if self.emitting:
-            self.emit(8)
+            if self.style == "phoenix":
+                self._phoenix_burst_accum_s += max(0.0, float(dt))
+                while self._phoenix_burst_accum_s >= self.phoenix_burst_interval_s:
+                    self._phoenix_burst_accum_s -= self.phoenix_burst_interval_s
+                    self.emit()
+            else:
+                self.emit(8)
     
     def render(self, surface):
         for p in self.particles:
@@ -209,6 +301,21 @@ class FireParticleSystem:
             
             if size < 2:
                 continue
+
+            if p.kind == "phoenix":
+                trail_size = max(2, int(size * 0.62))
+                trail_alpha = max(0, int(alpha * 0.58))
+                if trail_alpha > 0:
+                    tx = int(p.x - p.vx * 0.018)
+                    ty = int(p.y - p.vy * 0.018)
+                    trail_color = (255, 130, 40, trail_alpha)
+                    trail_surf = pygame.Surface((trail_size * 4, trail_size * 4), pygame.SRCALPHA)
+                    pygame.draw.circle(trail_surf, trail_color, (trail_size * 2, trail_size * 2), trail_size)
+                    surface.blit(
+                        trail_surf,
+                        (tx - trail_size * 2, ty - trail_size * 2),
+                        special_flags=pygame.BLEND_ADD,
+                    )
             
             for i in range(3):
                 glow_size = size + i * 4

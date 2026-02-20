@@ -38,17 +38,17 @@ class AssetsMixin:
     def _load_feature_icons(self):
         """Load tutorial, mastery, quest and shared UI icons."""
         self.tutorial_icons = {
-            "camera": self._load_ui_image("src/pics/tutorial/step_camera.png", (80, 80)),
-            "signs": self._load_ui_image("src/pics/tutorial/step_signs.png", (80, 80)),
-            "execute": self._load_ui_image("src/pics/tutorial/step_execute.png", (80, 80)),
-            "challenge": self._load_ui_image("src/pics/tutorial/step_challenge.png", (80, 80)),
+            "camera": self._load_ui_image("src/pics/tutorial/step_camera.png", (280, 280)),
+            "signs": self._load_ui_image("src/pics/tutorial/step_signs.png", (280, 280)),
+            "execute": self._load_ui_image("src/pics/tutorial/step_execute.png", (280, 280)),
+            "challenge": self._load_ui_image("src/pics/tutorial/step_challenge.png", (280, 280)),
             "panel_bg": self._load_ui_image("src/pics/tutorial/panel_bg.png"),
         }
         self.mastery_icons = {
-            "none": self._load_ui_image("src/pics/mastery/locked_badge.png", (28, 28)),
-            "bronze": self._load_ui_image("src/pics/mastery/bronze_badge.png", (28, 28)),
-            "silver": self._load_ui_image("src/pics/mastery/silver_badge.png", (28, 28)),
-            "gold": self._load_ui_image("src/pics/mastery/gold_badge.png", (28, 28)),
+            "none": self._load_ui_image("src/pics/ui/reward_xp.png", (28, 28)),
+            "bronze": self._load_ui_image("src/pics/ui/reward_xp.png", (28, 28)),
+            "silver": self._load_ui_image("src/pics/ui/reward_xp.png", (28, 28)),
+            "gold": self._load_ui_image("src/pics/ui/reward_xp.png", (28, 28)),
         }
         self.quest_icons = {
             "daily": self._load_ui_image("src/pics/quests/daily_icon.png", (48, 48)),
