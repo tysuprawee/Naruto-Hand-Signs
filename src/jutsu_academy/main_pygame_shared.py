@@ -175,6 +175,8 @@ class FireParticleSystem:
         self.emit_x = 0
         self.emit_y = 0
         self.wind_x = 0
+        self.aim_dx = 0.0
+        self.aim_dy = -1.0
         self.style = "fireball"
         self.phoenix_burst_interval_s = 0.13
         self.phoenix_particles_per_lane = 3
@@ -197,13 +199,52 @@ class FireParticleSystem:
     def set_position(self, x, y):
         self.emit_x = x
         self.emit_y = y
+
+    def set_direction(self, dx, dy, smoothing=0.35):
+        tx = float(dx)
+        ty = float(dy)
+        mag = math.hypot(tx, ty)
+        if mag <= 1e-6:
+            return
+        tx /= mag
+        ty /= mag
+
+        alpha = float(np.clip(smoothing, 0.0, 1.0))
+        self.aim_dx = self.aim_dx + (tx - self.aim_dx) * alpha
+        self.aim_dy = self.aim_dy + (ty - self.aim_dy) * alpha
+
+        norm = math.hypot(self.aim_dx, self.aim_dy)
+        if norm > 1e-6:
+            self.aim_dx /= norm
+            self.aim_dy /= norm
+
+    def set_aim(self, yaw=0.0, pitch=0.0):
+        yaw_n = float(np.clip(yaw, -1.0, 1.0))
+        pitch_n = float(np.clip(pitch, -1.0, 1.0))
+        dir_x = yaw_n * 0.95
+        dir_y = -0.82 + pitch_n * 1.05
+        self.set_direction(dir_x, dir_y, smoothing=0.32)
     
     def _spawn_fireball_particle(self):
         wind_n = float(np.clip(self.wind_x / 320.0, -1.0, 1.0))
-        angle = float(np.random.uniform(-0.36, 0.36) + wind_n * 0.20)
+        base_dx = float(self.aim_dx)
+        base_dy = float(self.aim_dy)
+        perp_x = -base_dy
+        perp_y = base_dx
+        spread = float(np.random.uniform(-0.42, 0.42))
+        dir_x = base_dx + perp_x * spread + wind_n * 0.16
+        dir_y = base_dy + perp_y * spread * 0.72
+        dir_n = math.hypot(dir_x, dir_y)
+        if dir_n > 1e-6:
+            dir_x /= dir_n
+            dir_y /= dir_n
+        else:
+            dir_x, dir_y = 0.0, -1.0
+
         speed = float(np.random.uniform(240.0, 520.0))
-        vx = speed * math.sin(angle) * 0.76 + wind_n * 165.0
-        vy = -speed * float(np.random.uniform(0.78, 1.22))
+        speed *= float(np.random.uniform(0.84, 1.16))
+        vx = dir_x * speed + wind_n * 75.0
+        vy = dir_y * speed
 
         roll = float(np.random.random())
         if roll < 0.44:
@@ -330,11 +371,15 @@ class FireParticleSystem:
             now = time.time()
             pulse = 0.72 + 0.28 * math.sin(now * 13.0)
             pwr = max(0.0, min(1.0, self._muzzle_pulse)) * pulse
+            aim_dx = float(self.aim_dx)
+            aim_dy = float(self.aim_dy)
 
             jitter_x = int(math.sin(now * 19.0) * 2.0)
             jitter_y = int(math.cos(now * 17.0) * 2.0)
-            base_x = int(self.emit_x + jitter_x)
-            base_y = int(self.emit_y + jitter_y)
+            dir_push_x = int(aim_dx * 14.0 * pwr)
+            dir_push_y = int(aim_dy * 14.0 * pwr)
+            base_x = int(self.emit_x + jitter_x + dir_push_x)
+            base_y = int(self.emit_y + jitter_y + dir_push_y)
             wind_push = int(np.clip(self.wind_x, -260.0, 260.0) * 0.11)
 
             for radius_mul, alpha_mul, color, ox, oy in (
@@ -358,9 +403,14 @@ class FireParticleSystem:
             flare_alpha = int(max(0, min(220, 190 * pwr)))
             flare = pygame.Surface((flare_w * 2, flare_h * 2), pygame.SRCALPHA)
             pygame.draw.ellipse(flare, (255, 120, 32, flare_alpha), (0, 0, flare_w * 2, flare_h * 2))
+            flare_angle = -math.degrees(math.atan2(aim_dy, aim_dx))
+            flare = pygame.transform.rotate(flare, flare_angle)
+            flare_center_x = base_x + wind_push + int(aim_dx * flare_w * 0.62)
+            flare_center_y = base_y + int(aim_dy * flare_w * 0.62)
+            flare_rect = flare.get_rect(center=(flare_center_x, flare_center_y))
             surface.blit(
                 flare,
-                (base_x - flare_w + wind_push, base_y - flare_h),
+                flare_rect,
                 special_flags=pygame.BLEND_ADD,
             )
 

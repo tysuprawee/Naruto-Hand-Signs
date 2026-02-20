@@ -170,6 +170,8 @@ class PlayingMixin:
             sys.emitting = True
             sys.set_position(b["x"], b["y"])
             sys.wind_x = b["vx"] * 0.14
+            if hasattr(sys, "set_direction"):
+                sys.set_direction(float(b["vx"]), float(b["vy"]), smoothing=0.42)
             sys.update(dt)
 
     def _render_phoenix_fireballs(self):
@@ -253,7 +255,13 @@ class PlayingMixin:
         else:
             self.effect_orchestrator.on_jutsu_start(
                 effect_name,
-                EffectContext(jutsu_name=jutsu_name, effect_duration=effect_duration),
+                EffectContext(
+                    jutsu_name=jutsu_name,
+                    effect_duration=effect_duration,
+                    mouth_pos=self.mouth_pos,
+                    head_yaw=float(getattr(self, "head_yaw", 0.0) or 0.0),
+                    head_pitch=float(getattr(self, "head_pitch", 0.0) or 0.0),
+                ),
             )
 
         jutsu_data = self.jutsu_list.get(jutsu_name, {})
@@ -572,6 +580,8 @@ class PlayingMixin:
                 right_eye_size=self.right_eye_size,
                 left_eye_angle=self.left_eye_angle,
                 right_eye_angle=self.right_eye_angle,
+                head_yaw=float(getattr(self, "head_yaw", 0.0) or 0.0),
+                head_pitch=float(getattr(self, "head_pitch", 0.0) or 0.0),
                 cam_x=cam_x,
                 cam_y=cam_y,
                 scale_x=(new_w / max(1, frame_w)),
@@ -741,7 +751,11 @@ class PlayingMixin:
             # Note: stored self.mouth_pos is raw frame pixels (640x480)
             screen_x, screen_y = mouth_screen
             self.fire_particles.set_position(screen_x, screen_y)
-            self.fire_particles.wind_x = -self.head_yaw * 200
+            aim_yaw = float(getattr(self, "head_yaw", 0.0) or 0.0)
+            aim_pitch = -float(getattr(self, "head_pitch", 0.0) or 0.0)
+            if hasattr(self.fire_particles, "set_aim"):
+                self.fire_particles.set_aim(yaw=aim_yaw, pitch=aim_pitch)
+            self.fire_particles.wind_x = aim_yaw * 210.0
         self.fire_particles.update(dt)
         self._update_phoenix_fireballs(dt, cam_x, cam_y, new_w, new_h, mouth_screen)
         self.effect_orchestrator.update(
@@ -757,6 +771,8 @@ class PlayingMixin:
                 right_eye_size=self.right_eye_size,
                 left_eye_angle=self.left_eye_angle,
                 right_eye_angle=self.right_eye_angle,
+                head_yaw=float(getattr(self, "head_yaw", 0.0) or 0.0),
+                head_pitch=float(getattr(self, "head_pitch", 0.0) or 0.0),
                 cam_x=cam_x,
                 cam_y=cam_y,
                 scale_x=(new_w / max(1, frame_w)),
@@ -882,20 +898,44 @@ class PlayingMixin:
                     fx = cam_x + new_w // 2
                     fy = cam_y + int(new_h * 0.62)
 
-                breath = 0.68 + 0.32 * math.sin(now * 21.0 + 0.35)
-                wind_shift = int(np.clip(-float(getattr(self, "head_yaw", 0.0) or 0.0) * 75.0, -24.0, 24.0))
-                fx = int(fx + wind_shift)
-                fy = int(fy + math.sin(now * 17.0) * 2.0)
+                aim_x = float(np.clip(float(getattr(self, "head_yaw", 0.0) or 0.0), -1.0, 1.0))
+                aim_pitch = float(np.clip(-float(getattr(self, "head_pitch", 0.0) or 0.0), -1.0, 1.0))
+                aim_y = -0.82 + aim_pitch * 1.05
+                aim_norm = math.hypot(aim_x, aim_y)
+                if aim_norm > 1e-6:
+                    aim_x /= aim_norm
+                    aim_y /= aim_norm
+                else:
+                    aim_x, aim_y = 0.0, -1.0
 
-                for radius, alpha, color in (
+                breath = 0.68 + 0.32 * math.sin(now * 21.0 + 0.35)
+                fx = int(fx + aim_x * 12.0)
+                fy = int(fy + aim_y * 8.0 + math.sin(now * 17.0) * 2.0)
+
+                for idx, (radius, alpha, color) in enumerate((
                     (int(78 * breath), 55, (255, 65, 18)),
                     (int(58 * breath), 80, (255, 120, 38)),
                     (int(36 * breath), 105, (255, 195, 88)),
-                ):
+                )):
                     rr = max(8, int(radius))
                     s = pygame.Surface((rr * 2, rr * 2), pygame.SRCALPHA)
                     pygame.draw.circle(s, (*color, alpha), (rr, rr), rr)
-                    self.screen.blit(s, (fx - rr, fy - rr), special_flags=pygame.BLEND_ADD)
+                    off_mul = idx * 0.24
+                    ox = int(aim_x * rr * off_mul)
+                    oy = int(aim_y * rr * off_mul)
+                    self.screen.blit(s, (fx + ox - rr, fy + oy - rr), special_flags=pygame.BLEND_ADD)
+
+                # Directional heat streak so the blast follows where the player looks.
+                streak_len = int(46 + 36 * breath)
+                for i in range(3):
+                    t = (i + 1) / 3.0
+                    tr = max(5, int(20 * (1.0 - t) + 7 * breath))
+                    ta = max(0, min(160, int(120 - i * 28 + pulse * 18)))
+                    tx = int(fx + aim_x * (14 + streak_len * t))
+                    ty = int(fy + aim_y * (14 + streak_len * t))
+                    trail = pygame.Surface((tr * 2, tr * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(trail, (255, 118, 34, ta), (tr, tr), tr)
+                    self.screen.blit(trail, (tx - tr, ty - tr), special_flags=pygame.BLEND_ADD)
 
         
         # Fire particles
@@ -914,6 +954,8 @@ class PlayingMixin:
                 right_eye_size=self.right_eye_size,
                 left_eye_angle=self.left_eye_angle,
                 right_eye_angle=self.right_eye_angle,
+                head_yaw=float(getattr(self, "head_yaw", 0.0) or 0.0),
+                head_pitch=float(getattr(self, "head_pitch", 0.0) or 0.0),
                 cam_x=cam_x,
                 cam_y=cam_y,
                 scale_x=(new_w / max(1, frame_w)),
@@ -1033,7 +1075,12 @@ class PlayingMixin:
             for e in due_fx:
                 self.effect_orchestrator.on_jutsu_start(
                     e.get("effect"),
-                    EffectContext(jutsu_name=e.get("jutsu_name")),
+                    EffectContext(
+                        jutsu_name=e.get("jutsu_name"),
+                        mouth_pos=self.mouth_pos,
+                        head_yaw=float(getattr(self, "head_yaw", 0.0) or 0.0),
+                        head_pitch=float(getattr(self, "head_pitch", 0.0) or 0.0),
+                    ),
                 )
         
         # Video overlay (for Chidori, Rasengan, etc.)

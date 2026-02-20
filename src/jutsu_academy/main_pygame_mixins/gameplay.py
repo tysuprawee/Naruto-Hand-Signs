@@ -100,6 +100,8 @@ class GameplayMixin:
         self.right_eye_size = None
         self.left_eye_angle = 0.0
         self.right_eye_angle = 0.0
+        self.head_yaw = 0.0
+        self.head_pitch = 0.0
         self.smooth_hand_pos = None
         self.smooth_hand_effect_scale = None
         self.hand_effect_scale = 1.0
@@ -882,6 +884,8 @@ class GameplayMixin:
             self.right_eye_size = None
             self.left_eye_angle = 0.0
             self.right_eye_angle = 0.0
+            self.head_yaw = 0.0
+            self.head_pitch = 0.0
             return
         
         try:
@@ -1000,7 +1004,19 @@ class GameplayMixin:
                 width = right_x - left_x
                 if width > 0:
                     rel_nose = (nose_x - left_x) / width
-                    self.head_yaw = (rel_nose - 0.5) * 2
+                    raw_yaw = float((rel_nose - 0.5) * 2.0)
+                    raw_yaw = float(np.clip(raw_yaw, -1.0, 1.0))
+                    self.head_yaw = float(self.head_yaw + (raw_yaw - self.head_yaw) * 0.42)
+
+                top_y = face[10].y
+                bottom_y = face[152].y
+                face_h = float(bottom_y - top_y)
+                if face_h > 1e-6:
+                    rel_nose_y = float((face[1].y - top_y) / face_h)
+                    raw_pitch = float(np.clip((rel_nose_y - 0.56) / 0.22, -1.0, 1.0))
+                    self.head_pitch = float(self.head_pitch + (raw_pitch - self.head_pitch) * 0.35)
+                else:
+                    self.head_pitch *= 0.85
             else:
                 self.mouth_pos = None
                 self.left_eye_pos = None
@@ -1009,8 +1025,11 @@ class GameplayMixin:
                 self.right_eye_size = None
                 self.left_eye_angle = 0.0
                 self.right_eye_angle = 0.0
-        except:
-            pass
+                self.head_yaw *= 0.72
+                self.head_pitch *= 0.72
+        except Exception:
+            self.head_yaw *= 0.8
+            self.head_pitch *= 0.8
 
     def cv2_to_pygame(self, frame):
         """Convert OpenCV frame to Pygame surface."""

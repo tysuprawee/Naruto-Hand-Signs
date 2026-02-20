@@ -18,6 +18,8 @@ class EffectContext:
     right_eye_size: Any = None
     left_eye_angle: float = 0.0
     right_eye_angle: float = 0.0
+    head_yaw: float = 0.0
+    head_pitch: float = 0.0
     cam_x: int = 0
     cam_y: int = 0
     scale_x: float = 1.0

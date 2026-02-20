@@ -608,6 +608,7 @@ class RuntimeMixin:
                     self.leaderboard_mode = self.leaderboard_modes_list[0]
                     
                 # Refetch
+                self.leaderboard_page = 0
                 threading.Thread(target=self._fetch_leaderboard, daemon=True).start()
 
             # Pagination Clicks

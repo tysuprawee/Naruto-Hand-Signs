@@ -828,6 +828,7 @@ class CoreMixin:
         self.hand_lost_frames = 0
         self.max_hold_frames = 15 # frames to keep the effect where it was
         self.head_yaw = 0
+        self.head_pitch = 0
         self.last_mp_result = None
         self.last_palm_spans = []
 

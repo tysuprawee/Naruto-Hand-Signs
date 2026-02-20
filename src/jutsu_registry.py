@@ -52,6 +52,7 @@ OFFICIAL_JUTSUS = {
         "sound_path": "src/sounds/clone.mp3",
         "video_path": None,
         "effect": "clone",
+        "duration": 6.0,
         "min_level": 0
     },
     "Reaper Death Seal": {
@@ -86,7 +87,7 @@ OFFICIAL_JUTSUS = {
         "sound_path": "src/chidori/chidori.mp3",
         "video_path": "src/chidori/chidori.mp4",
         "effect": "lightning",
-        "duration": 6.0,
+        "duration": 8.0,
         "min_level": 5
     },
     "Water Dragon": {
@@ -95,6 +96,7 @@ OFFICIAL_JUTSUS = {
         "sound_path": "src/sounds/water_dragon.mp3",
         "video_path": None,
         "effect": "water",
+        "duration": 8.0,
         "min_level": 8
     },
     "Phoenix Flower": {

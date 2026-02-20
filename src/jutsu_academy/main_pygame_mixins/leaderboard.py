@@ -255,12 +255,14 @@ class LeaderboardMixin:
         mode_rect = mode_surf.get_rect(center=(center_x, y_pos))
         self.screen.blit(mode_surf, mode_rect)
         
+        arrow_gap = max(140, mode_surf.get_width() // 2 + 40)
+        
         # Arrows
         mp = pygame.mouse.get_pos()
         if "left" in self.arrow_icons:
              # Left Arrow
              l_arrow = self.arrow_icons["left"]
-             l_rect = l_arrow.get_rect(center=(center_x - 140, y_pos))
+             l_rect = l_arrow.get_rect(center=(center_x - arrow_gap, y_pos))
              self.mode_arrow_left_rect = l_rect
              
              if l_rect.collidepoint(mp):
@@ -274,7 +276,7 @@ class LeaderboardMixin:
              
              # Right Arrow
              r_arrow = self.arrow_icons["right"]
-             r_rect = r_arrow.get_rect(center=(center_x + 140, y_pos))
+             r_rect = r_arrow.get_rect(center=(center_x + arrow_gap, y_pos))
              self.mode_arrow_right_rect = r_rect
              
              if r_rect.collidepoint(mp):
