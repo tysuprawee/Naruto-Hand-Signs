@@ -316,51 +316,51 @@ export default function Home() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             <div className="group space-y-4">
               <div className="relative aspect-video rounded-xl overflow-hidden border border-ninja-border/50 group-hover:border-ninja-accent transition-colors shadow-xl">
-                <img src="/apppics/page1.png" alt="Library" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                <img src="/apppics/page1.png" alt="Academy Dashboard" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white group-hover:text-ninja-accent transition-colors">Jutsu Library</h3>
-                <p className="text-sm text-ninja-dim mt-1">Browse and unlock dozens of iconic techniques. Each jutsu is fully animated with real hand sign sequences to learn.</p>
+                <h3 className="text-xl font-bold text-white group-hover:text-ninja-accent transition-colors">Academy Dashboard</h3>
+                <p className="text-sm text-ninja-dim mt-1">Navigate through various modes seamlessly. Practice at your own pace in Free Play or challenge the clock in Rank Mode.</p>
               </div>
             </div>
 
             <div className="group space-y-4">
               <div className="relative aspect-video rounded-xl overflow-hidden border border-ninja-border/50 group-hover:border-blue-400 transition-colors shadow-xl">
-                <img src="/apppics/page2.png" alt="Training Mode" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                <img src="/apppics/page2.png" alt="Jutsu Library" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white group-hover:text-blue-400 transition-colors">Real-Time Training</h3>
-                <p className="text-sm text-ninja-dim mt-1">Practice signs in front of your camera. MediaPipe AI instantly detects if your hands are forming the correct seal.</p>
+                <h3 className="text-xl font-bold text-white group-hover:text-blue-400 transition-colors">Jutsu Library</h3>
+                <p className="text-sm text-ninja-dim mt-1">Browse and unlock dozens of iconic techniques. Each jutsu is fully animated with real hand sign sequences to learn.</p>
               </div>
             </div>
 
             <div className="group space-y-4">
               <div className="relative aspect-video rounded-xl overflow-hidden border border-ninja-border/50 group-hover:border-green-400 transition-colors shadow-xl">
-                <img src="/apppics/page3.png" alt="Visual Effects" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                <img src="/apppics/page3.png" alt="Leaderboards" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white group-hover:text-green-400 transition-colors">Visual Effects</h3>
-                <p className="text-sm text-ninja-dim mt-1">Pull off the jutsu flawlessly to trigger spectacular AR effects like fireballs and lightning directly on your webcam feed.</p>
+                <h3 className="text-xl font-bold text-white group-hover:text-green-400 transition-colors">Global Leaderboards</h3>
+                <p className="text-sm text-ninja-dim mt-1">Compete against other shinobi worldwide in speedrun challenges and prove your hand sign execution speed.</p>
               </div>
             </div>
 
             <div className="group space-y-4 lg:col-start-1 lg:col-span-1 lg:translate-x-1/2">
               <div className="relative aspect-video rounded-xl overflow-hidden border border-ninja-border/50 group-hover:border-purple-400 transition-colors shadow-xl">
-                <img src="/apppics/page4.png" alt="Progression" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                <img src="/apppics/page4.png" alt="Progression & Quests" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white group-hover:text-purple-400 transition-colors">Progression</h3>
-                <p className="text-sm text-ninja-dim mt-1">Earn EXP, rank up from Academy Student to Jonin, and claim rewards. Track your jutsu mastery dynamically.</p>
+                <h3 className="text-xl font-bold text-white group-hover:text-purple-400 transition-colors">Progression & Quests</h3>
+                <p className="text-sm text-ninja-dim mt-1">Complete daily and weekly quests. Earn EXP, rank up from Academy Student to Jonin, and claim rewards.</p>
               </div>
             </div>
 
             <div className="group space-y-4 lg:col-span-1 lg:translate-x-1/2">
               <div className="relative aspect-video rounded-xl overflow-hidden border border-ninja-border/50 group-hover:border-orange-400 transition-colors shadow-xl">
-                <img src="/apppics/page5.png" alt="Leaderboards" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                <img src="/apppics/page5.png" alt="Real-time Training" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white group-hover:text-orange-400 transition-colors">Global Leaderboards</h3>
-                <p className="text-sm text-ninja-dim mt-1">Compete against other shinobi worldwide in speedrun challenges and prove your hand sign execution speed.</p>
+                <h3 className="text-xl font-bold text-white group-hover:text-orange-400 transition-colors">Real-Time Training</h3>
+                <p className="text-sm text-ninja-dim mt-1">Practice signs in front of your camera to trigger Spectacular AR effects like fireballs and lightning on your webcam stream.</p>
               </div>
             </div>
           </div>
@@ -449,7 +449,7 @@ export default function Home() {
           <p>&copy; 2026 Shinobi Academy. Built with Google MediaPipe.</p>
         </div>
       </footer>
-    </div>
+    </div >
   );
 }
 
