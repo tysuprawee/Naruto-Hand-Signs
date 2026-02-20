@@ -16,6 +16,25 @@ class AssetsMixin:
         except Exception:
             return None
 
+    def _load_card_texture_image(self, path):
+        """Load card texture image; fallback to OpenCV decode when pygame decoder fails."""
+        p = Path(path)
+        if not p.exists():
+            return None
+        try:
+            return pygame.image.load(str(p)).convert_alpha()
+        except Exception:
+            pass
+        try:
+            frame = cv2.imread(str(p), cv2.IMREAD_COLOR)
+            if frame is None:
+                return None
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = np.transpose(frame, (1, 0, 2))
+            return pygame.surfarray.make_surface(frame).convert_alpha()
+        except Exception:
+            return None
+
     def _load_feature_icons(self):
         """Load tutorial, mastery, quest and shared UI icons."""
         self.tutorial_icons = {
@@ -47,6 +66,30 @@ class AssetsMixin:
             "lock": self._load_ui_image("src/pics/ui/lock.png", (20, 20)),
             "reward_xp": self._load_ui_image("src/pics/ui/reward_xp.png", (20, 20)),
         }
+        self.jutsu_card_textures = {}
+        self.jutsu_card_texture_cache = {}
+        texture_map = {
+            "Shadow Clone": "shadow_clone.jpg",
+            "Rasengan": "rasengan.jpg",
+            "Fireball": "fireball.jpg",
+            "Phoenix Flower": "phoenix_flowers.jpg",
+            "Shadow Clone + Chidori Combo": "shadow_clone_chidori.jpg",
+            "Shadow Clone + Rasengan Combo": "shadow_clone_rasengan.jpg",
+            "Chidori": "chidori.jpg",
+            "Water Dragon": "water_dragon.jpg",
+            "Reaper Death Seal": "reaper_death.jpg",
+            "Sharingan": "sharingan.jpg",
+        }
+        texture_dir = Path("src/pics/textured_buttons")
+        for jutsu_name, filename in texture_map.items():
+            texture_path = texture_dir / filename
+            texture = self._load_card_texture_image(texture_path)
+            if texture is not None:
+                self.jutsu_card_textures[jutsu_name] = texture
+        if self.jutsu_card_textures:
+            print(f"[+] Loaded {len(self.jutsu_card_textures)} jutsu card textures")
+        else:
+            print("[!] No jutsu card textures loaded from src/pics/textured_buttons")
 
     def _macos_camera_names(self):
         """Best-effort camera names on macOS via system_profiler."""
@@ -390,7 +433,7 @@ class AssetsMixin:
 
     def _apply_runtime_setting_overrides(self):
         # Runtime-only detector policy.
-        self.settings["use_mediapipe_signs"] = False
+        self.settings["use_mediapipe_signs"] = True
         self.settings["restricted_signs"] = True
 
     def load_settings(self):

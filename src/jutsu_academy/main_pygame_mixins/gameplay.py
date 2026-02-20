@@ -92,6 +92,8 @@ class GameplayMixin:
 
         self.hand_pos = None
         self.mouth_pos = None
+        self.left_eye_pos = None
+        self.right_eye_pos = None
         self.smooth_hand_pos = None
         self.smooth_hand_effect_scale = None
         self.hand_effect_scale = 1.0
@@ -866,8 +868,10 @@ class GameplayMixin:
             print(f"[!] detect_hands error: {e}")
 
     def detect_face(self, frame):
-        """Detect face landmarks for fire positioning."""
+        """Detect face landmarks for fire positioning and eye position for Sharingan."""
         if not self.face_landmarker:
+            self.left_eye_pos = None
+            self.right_eye_pos = None
             return
         
         try:
@@ -881,6 +885,16 @@ class GameplayMixin:
                 
                 mouth = face[13]
                 self.mouth_pos = (int(mouth.x * w), int(mouth.y * h))
+                
+                # Eye landmarks (159: left eye upper, 386: right eye upper)
+                if len(face) > 386:
+                    l_eye = face[159]
+                    r_eye = face[386]
+                    self.left_eye_pos = (int(l_eye.x * w), int(l_eye.y * h))
+                    self.right_eye_pos = (int(r_eye.x * w), int(r_eye.y * h))
+                else:
+                    self.left_eye_pos = None
+                    self.right_eye_pos = None
                 
                 nose_x = face[1].x
                 left_x = face[234].x

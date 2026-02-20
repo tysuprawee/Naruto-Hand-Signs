@@ -581,15 +581,16 @@ class CoreMixin:
             ShadowCloneEffect,
             WaterDragonEffect,
         )
+        from src.jutsu_academy.effects.sharingan_effect import SharinganEffect
 
         pygame.init()
         pygame.display.set_caption("Jutsu Academy")
 
-        # Apply resolution/fullscreen from settings (overwritten below by load_settings)
+        # Bootstrap with hidden window; reveal after settings bootstrap finishes.
         self.screen_w = SCREEN_WIDTH
         self.screen_h = SCREEN_HEIGHT
         self.fullscreen = False
-        self.screen = pygame.display.set_mode((self.screen_w, self.screen_h))
+        self.screen = pygame.display.set_mode((self.screen_w, self.screen_h), pygame.HIDDEN)
         self.clock = pygame.time.Clock()
         self.running = True
         
@@ -624,14 +625,25 @@ class CoreMixin:
             "sfx_vol": 0.7,
             "camera_idx": 0,
             "debug_hands": False,
-            "use_mediapipe_signs": False,
+            "use_mediapipe_signs": True,
             "restricted_signs": True,
             "resolution_idx": 0,
             "fullscreen": False,
         }
         self.load_settings()
-        self.settings["use_mediapipe_signs"] = False
+        self.settings["use_mediapipe_signs"] = True
         self.settings["restricted_signs"] = True
+
+        # Initialize network early so cloud settings can be loaded before first visible frame/audio.
+        self.network_manager = NetworkManager()
+        self._sync_network_identity()
+        bootstrap_cloud_settings_ok = False
+        if self.username != "Guest" and self.network_manager.client:
+            try:
+                cloud_res = self.load_settings_from_cloud(apply_runtime=False)
+                bootstrap_cloud_settings_ok = bool(isinstance(cloud_res, dict) and cloud_res.get("ok", False))
+            except Exception:
+                pass
 
         # Apply saved resolution/fullscreen *after* load_settings
         res_idx = self.settings.get("resolution_idx", 0)
@@ -680,8 +692,6 @@ class CoreMixin:
         self.recorder = SignRecorder() # MediaPipe + KNN
         
         # Network & Leaderboard
-        self.network_manager = NetworkManager()
-        self._sync_network_identity()
         self.connection_monitor_interval_s = 10.0
         self.connection_monitor_fail_limit = 5
         self.connection_monitor_grace_until = time.time() + 25.0
@@ -702,10 +712,11 @@ class CoreMixin:
                 )
             except Exception:
                 pass
-            try:
-                self.load_settings_from_cloud(apply_runtime=True)
-            except Exception:
-                pass
+            if not bootstrap_cloud_settings_ok:
+                try:
+                    self.load_settings_from_cloud(apply_runtime=True)
+                except Exception:
+                    pass
         self.leaderboard_data = []
         self.leaderboard_loading = False
         self.leaderboard_avatars = {} # Cache for rounded surfaces
@@ -862,6 +873,7 @@ class CoreMixin:
         self.effect_orchestrator.register("clone", ShadowCloneEffect(swap_xy=True), passive=True)
         self.effect_orchestrator.register("reaper", ReaperDeathSealEffect())
         self.effect_orchestrator.register("water", WaterDragonEffect())
+        self.effect_orchestrator.register("eye", SharinganEffect())
         
         # Video overlay for jutsus
         self.current_video = None

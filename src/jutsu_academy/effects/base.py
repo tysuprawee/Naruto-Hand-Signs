@@ -12,6 +12,8 @@ class EffectContext:
     hand_pos: Any = None
     mouth_pos: Any = None
     face_center: Any = None
+    left_eye_pos: Any = None
+    right_eye_pos: Any = None
     cam_x: int = 0
     cam_y: int = 0
     scale_x: float = 1.0

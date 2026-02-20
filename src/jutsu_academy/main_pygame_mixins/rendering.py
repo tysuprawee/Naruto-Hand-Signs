@@ -71,6 +71,31 @@ class RenderingMixin:
             return font, lines
         return font, lines[: max_lines - 1] + [" ".join(lines[max_lines - 1 :])]
 
+    def _get_jutsu_card_texture_surface(self, jutsu_name, width, height, radius=10):
+        textures = getattr(self, "jutsu_card_textures", {})
+        if not isinstance(textures, dict):
+            return None
+        base = textures.get(jutsu_name)
+        if base is None:
+            return None
+
+        cache = getattr(self, "jutsu_card_texture_cache", None)
+        if cache is None:
+            cache = {}
+            self.jutsu_card_texture_cache = cache
+
+        key = (str(jutsu_name), int(width), int(height), int(radius))
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        try:
+            tex = pygame.transform.smoothscale(base, (int(width), int(height))).convert_alpha()
+            cache[key] = tex
+            return tex
+        except Exception:
+            return None
+
     def render_maintenance_required(self):
         """Render hard-blocking maintenance gate when service is unavailable."""
         if self.bg_image:
@@ -1788,7 +1813,7 @@ class RenderingMixin:
             self.screen.fill(COLORS["bg_dark"])
 
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 170))
+        overlay.fill((0, 0, 0, 120))
         self.screen.blit(overlay, (0, 0))
 
         title = self.fonts["title_md"].render("JUTSU LIBRARY", True, COLORS["accent"])
@@ -1826,9 +1851,9 @@ class RenderingMixin:
         panel_w = SCREEN_WIDTH - 140
         panel_y = 140
         panel_gap = 16
-        panel_h = 132
-        card_w = 180
-        card_h = 74
+        panel_h = 150
+        card_w = 200
+        card_h = 88
         card_gap = 14
 
         for idx, (tier_name, items) in enumerate(tiers):
@@ -1836,7 +1861,7 @@ class RenderingMixin:
             panel_rect = pygame.Rect(panel_x, y, panel_w, panel_h)
 
             panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-            pygame.draw.rect(panel_bg, (22, 22, 30, 220), panel_bg.get_rect(), border_radius=14)
+            pygame.draw.rect(panel_bg, (18, 18, 26, 170), panel_bg.get_rect(), border_radius=14)
             pygame.draw.rect(panel_bg, COLORS["border"], panel_bg.get_rect(), 1, border_radius=14)
             self.screen.blit(panel_bg, panel_rect.topleft)
 
@@ -1872,13 +1897,33 @@ class RenderingMixin:
                     status = f"LOCKED | LV.{req_lv}"
 
                 card_bg = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
-                pygame.draw.rect(card_bg, fill, card_bg.get_rect(), border_radius=10)
+                texture = self._get_jutsu_card_texture_surface(jutsu_name, card_w, card_h, radius=10)
+                if texture is not None:
+                    card_bg.blit(texture, (0, 0))
+                    title_strip_h = 34
+                    bottom_strip_h = 34
+                    top_strip = pygame.Surface((card_w, title_strip_h), pygame.SRCALPHA)
+                    top_strip.fill((5, 8, 14, 95 if unlocked else 125))
+                    card_bg.blit(top_strip, (0, 0))
+                    bottom_strip = pygame.Surface((card_w, bottom_strip_h), pygame.SRCALPHA)
+                    bottom_strip.fill((5, 8, 14, 115 if unlocked else 145))
+                    card_bg.blit(bottom_strip, (0, card_h - bottom_strip_h))
+                    if not unlocked:
+                        veil = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+                        veil.fill((8, 10, 18, 55))
+                        card_bg.blit(veil, (0, 0))
+                    if hovered and unlocked:
+                        gloss = pygame.Surface((card_w, max(1, card_h // 2)), pygame.SRCALPHA)
+                        gloss.fill((255, 255, 255, 20))
+                        card_bg.blit(gloss, (0, 0))
+                else:
+                    pygame.draw.rect(card_bg, fill, card_bg.get_rect(), border_radius=10)
                 pygame.draw.rect(card_bg, border, card_bg.get_rect(), 2, border_radius=10)
                 self.screen.blit(card_bg, card_rect.topleft)
 
                 name_font, name_lines = self._fit_full_name_lines(
                     jutsu_name.upper(),
-                    card_w - 52,
+                    card_w - 20,
                     max_lines=2,
                     max_height=30,
                 )
@@ -1897,9 +1942,6 @@ class RenderingMixin:
                 self.screen.blit(seq_surf, (card_rect.x + 10, seq_y))
 
                 tier = self._get_mastery_tier(jutsu_name)
-                badge = self.mastery_icons.get(tier, self.mastery_icons.get("none"))
-                if badge:
-                    self.screen.blit(badge, (card_rect.right - 34, card_rect.y + 6))
                 tier_text = self.fonts["tiny"].render(f"M: {tier.upper()}", True, COLORS["text_dim"])
                 self.screen.blit(tier_text, (card_rect.x + 92, seq_y))
 

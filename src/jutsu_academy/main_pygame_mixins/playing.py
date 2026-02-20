@@ -431,6 +431,8 @@ class PlayingMixin:
                 frame_shape=frame.shape,
                 hand_pos=effect_hand_pos,
                 mouth_pos=self.mouth_pos,
+                left_eye_pos=self.left_eye_pos,
+                right_eye_pos=self.right_eye_pos,
                 cam_x=cam_x,
                 cam_y=cam_y,
                 scale_x=(new_w / max(1, frame_w)),
@@ -596,6 +598,8 @@ class PlayingMixin:
                 frame_shape=frame.shape,
                 hand_pos=effect_hand_pos,
                 mouth_pos=self.mouth_pos,
+                left_eye_pos=self.left_eye_pos,
+                right_eye_pos=self.right_eye_pos,
                 cam_x=cam_x,
                 cam_y=cam_y,
                 scale_x=(new_w / max(1, frame_w)),
@@ -641,6 +645,58 @@ class PlayingMixin:
         pygame.draw.rect(self.screen, COLORS["border"], (cam_x - 6, cam_y - 6, new_w + 12, new_h + 12), 2, border_radius=14)
         
         self.screen.blit(cam_surface, (cam_x, cam_y))
+
+        # ── "Show both hands" overlay (MediaPipe only, no effect, 2 s with only 1 hand) ──
+        use_mp = bool(self.settings.get("use_mediapipe_signs", False))
+        if use_mp and not self.jutsu_active:
+            hands_now = int(getattr(self, "last_detected_hands", 0))
+            if hands_now != 1:
+                # 0 hands (idle) or 2+ hands both reset the timer — only 1 hand triggers it
+                self._no_hands_since = time.time()
+            else:
+                # exactly 1 hand — start / keep the timer
+                if not hasattr(self, "_no_hands_since") or self._no_hands_since is None:
+                    self._no_hands_since = time.time()
+
+                one_hand_secs = time.time() - self._no_hands_since
+                if one_hand_secs >= 2.0:
+                    # ── load + cache image at canvas size ──────────────────────
+                    need_reload = (
+                        not hasattr(self, "_hands_layout_surf")
+                        or self._hands_layout_surf is None
+                        or getattr(self, "_hands_layout_size", None) != (new_w, new_h)
+                    )
+                    if need_reload:
+                        import os
+                        _this_dir = os.path.dirname(os.path.abspath(__file__))
+                        _project_root = os.path.normpath(os.path.join(_this_dir, "..", "..", ".."))
+                        img_path = os.path.join(_project_root, "src", "pics", "hands_layout.png")
+                        try:
+                            raw = pygame.image.load(img_path).convert_alpha()
+                            self._hands_layout_surf = pygame.transform.smoothscale(raw, (new_w, new_h))
+                        except Exception:
+                            self._hands_layout_surf = None
+                        self._hands_layout_size = (new_w, new_h)
+
+                    # overlay image — no tint, just the guide at ~70 % opacity
+                    if self._hands_layout_surf:
+                        img_surf = self._hands_layout_surf.copy()
+                        img_surf.set_alpha(178)
+                        self.screen.blit(img_surf, (cam_x, cam_y))
+
+                    # "Show both hands" label
+                    lbl_font = self.fonts.get("body") or self.fonts["title_sm"]
+                    lbl = lbl_font.render("👐  Show both hands", True, (255, 235, 100))
+                    lbl_bg = pygame.Surface((lbl.get_width() + 28, lbl.get_height() + 14), pygame.SRCALPHA)
+                    pygame.draw.rect(lbl_bg, (10, 10, 20, 200), lbl_bg.get_rect(), border_radius=10)
+                    pygame.draw.rect(lbl_bg, (200, 170, 30, 180), lbl_bg.get_rect(), 1, border_radius=10)
+                    lx = cam_x + (new_w - lbl_bg.get_width()) // 2
+                    ly = cam_y + new_h - lbl_bg.get_height() - 18
+                    self.screen.blit(lbl_bg, (lx, ly))
+                    self.screen.blit(lbl, (lx + 14, ly + 7))
+        else:
+            # reset timer when effect is playing or model is YOLO
+            self._no_hands_since = None
         
         if self.jutsu_active:
              jutsu_name = self.jutsu_names[self.current_jutsu_idx]
@@ -658,6 +714,10 @@ class PlayingMixin:
             EffectContext(
                 frame_bgr=frame,
                 frame_shape=frame.shape,
+                hand_pos=effect_hand_pos,
+                mouth_pos=self.mouth_pos,
+                left_eye_pos=self.left_eye_pos,
+                right_eye_pos=self.right_eye_pos,
                 cam_x=cam_x,
                 cam_y=cam_y,
                 scale_x=(new_w / max(1, frame_w)),
