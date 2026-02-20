@@ -6,6 +6,7 @@ env/
 # Environment Variables (SECRETS - NEVER COMMIT)
 .env
 .env.local
+.env.release
 
 # Session files (contain OAuth tokens - NEVER COMMIT)
 user_session.json
@@ -25,3 +26,9 @@ __pycache__/
 
 # IDE
 .vscode/
+
+# PyInstaller / Build
+dist/
+build/
+*.spec
+JutsuAcademy.app/
