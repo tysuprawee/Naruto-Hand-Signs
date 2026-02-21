@@ -767,6 +767,12 @@ class CoreMixin:
         self.class_names = None
         self.face_landmarker = None
         self.hand_landmarker = None
+        self.hand_landmarker_image = None
+        self.legacy_hands = None
+        self.hand_detector_backend = "none"
+        self.hand_detector_error = ""
+        self.hand_model_path = ""
+        self.hand_model_exists = False
         self.last_mp_timestamp = 0
         
         # Camera

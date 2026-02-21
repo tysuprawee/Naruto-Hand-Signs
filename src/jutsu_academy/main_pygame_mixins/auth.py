@@ -1,7 +1,34 @@
 from src.jutsu_academy.main_pygame_shared import *
+from src.utils.paths import resolve_resource_path
 
 
 class AuthMixin:
+    def _verify_discord_identity_from_token(self, discord_user, timeout_s=5.0):
+        """
+        Validate Discord identity using the bearer token and return canonical user payload.
+        Returns None when token is missing/invalid/unreachable.
+        """
+        if not isinstance(discord_user, dict):
+            return None
+        token = str(discord_user.get("access_token") or "").strip()
+        if not token:
+            return None
+        try:
+            r = requests.get(
+                "https://discord.com/api/users/@me",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=float(max(1.0, timeout_s)),
+            )
+            if int(getattr(r, "status_code", 0) or 0) != 200:
+                return None
+            canonical = r.json() if isinstance(r.json(), dict) else {}
+            if not canonical:
+                return None
+            canonical["access_token"] = token
+            return canonical
+        except Exception:
+            return None
+
     def _has_backend_connection(self, timeout_s=1.5):
         """
         Strict connectivity check for required backend host (Supabase).
@@ -76,16 +103,32 @@ class AuthMixin:
             if session_path.exists():
                 with open(session_path) as f:
                     data = json.load(f)
-                    self.username = data.get("username", "Guest")
-                    self.discord_user = data.get("discord_user")
-                    
-                    if self.discord_user:
-                        print(f"[+] Loaded session: {self.username}")
+                    loaded_user = data.get("discord_user")
+                    verified_user = self._verify_discord_identity_from_token(loaded_user, timeout_s=4.0)
+
+                    if verified_user:
+                        loaded_id = str((loaded_user or {}).get("id") or "").strip()
+                        verified_id = str(verified_user.get("id") or "").strip()
+                        if loaded_id and verified_id and loaded_id != verified_id:
+                            print(f"[!] Session identity mismatch (file={loaded_id}, token={verified_id}). Using token identity.")
+
+                        self.discord_user = verified_user
+                        self.username = str(verified_user.get("username") or "Guest")
+                        print(f"[+] Loaded verified session: {self.username}")
                         if hasattr(self, "_sync_network_identity"):
                             self._sync_network_identity()
-                        # Load avatar and refresh token in background
+                        # Persist canonical payload (prevents stale/spoofed local values surviving restart).
+                        self._save_user_session()
+                        # Avatar only; token already verified above.
                         threading.Thread(target=self._load_discord_avatar, daemon=True).start()
-                        threading.Thread(target=self._refresh_discord_token, daemon=True).start()
+                    else:
+                        print("[!] Saved session rejected (invalid or unverified Discord token).")
+                        self.discord_user = None
+                        self.username = "Guest"
+                        try:
+                            session_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
         except Exception as e:
             print(f"[!] Session load error: {e}")
 
@@ -95,14 +138,22 @@ class AuthMixin:
             return
             
         try:
-            token = self.discord_user["access_token"]
-            r = requests.get("https://discord.com/api/users/@me", 
-                             headers={"Authorization": f"Bearer {token}"}, timeout=5)
-            if r.status_code == 200:
-                print("[+] Discord session validated")
-            else:
-                print("[-] Discord session expired or invalid")
-                # We don't force logout yet, but could if needed
+            verified_user = self._verify_discord_identity_from_token(self.discord_user, timeout_s=5.0)
+            if not verified_user:
+                print("[-] Discord session expired or invalid; logging out.")
+                self.logout_discord()
+                return
+
+            old_id = str((self.discord_user or {}).get("id") or "").strip()
+            new_id = str(verified_user.get("id") or "").strip()
+            self.discord_user = verified_user
+            self.username = str(verified_user.get("username") or self.username or "Guest")
+            if old_id and new_id and old_id != new_id:
+                print(f"[!] Session token owner changed ({old_id} -> {new_id}). Identity updated.")
+            print("[+] Discord session validated")
+            if hasattr(self, "_sync_network_identity"):
+                self._sync_network_identity()
+            self._save_user_session()
         except Exception as e:
             print(f"[!] Token refresh error: {e}")
 
@@ -183,13 +234,13 @@ class AuthMixin:
 
     def _get_fallback_avatar(self, size=(40, 40)):
         """Load the shadow fallback and round it."""
-        path = "src/pics/shadow.jpg"
-        if not os.path.exists(path):
+        path = resolve_resource_path("src/pics/shadow.jpg")
+        if not path.exists():
             # Procedural fallback if file missing
             surf = pygame.Surface(size, pygame.SRCALPHA)
             pygame.draw.circle(surf, (60, 60, 70), (size[0]//2, size[1]//2), size[0]//2)
             return surf
-        return self._create_rounded_avatar(path, size)
+        return self._create_rounded_avatar(str(path), size)
 
     def _load_discord_avatar(self):
         """Load Discord avatar from URL and round it."""

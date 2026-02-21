@@ -1,13 +1,17 @@
 from src.jutsu_academy.main_pygame_shared import *
 import subprocess
 import sys
+from src.utils.paths import resolve_resource_path
 
 
 class AssetsMixin:
+    def _resolve_asset_path(self, path_like):
+        return resolve_resource_path(path_like)
+
     def _load_ui_image(self, path, size=None):
-        p = Path(path)
+        p = self._resolve_asset_path(path)
         if not p.exists():
-            p = Path("src/pics/placeholder.png")
+            p = self._resolve_asset_path("src/pics/placeholder.png")
         try:
             img = pygame.image.load(str(p)).convert_alpha()
             if size:
@@ -18,7 +22,7 @@ class AssetsMixin:
 
     def _load_card_texture_image(self, path):
         """Load card texture image; fallback to OpenCV decode when pygame decoder fails."""
-        p = Path(path)
+        p = self._resolve_asset_path(path)
         if not p.exists():
             return None
         try:
@@ -82,7 +86,7 @@ class AssetsMixin:
         }
         texture_dir = Path("src/pics/textured_buttons")
         for jutsu_name, filename in texture_map.items():
-            texture_path = texture_dir / filename
+            texture_path = self._resolve_asset_path(texture_dir / filename)
             texture = self._load_card_texture_image(texture_path)
             if texture is not None:
                 self.jutsu_card_textures[jutsu_name] = texture
@@ -192,7 +196,7 @@ class AssetsMixin:
 
     def _load_sounds(self):
         """Load sound effects."""
-        sounds_dir = Path("src/sounds")
+        sounds_dir = self._resolve_asset_path("src/sounds")
         
         for name in ["each", "complete", "hover", "click", "reward", "level"]:
             for ext in [".mp3", ".wav"]:
@@ -208,9 +212,10 @@ class AssetsMixin:
         # Load jutsu-specific sounds
         for name, data in self.jutsu_list.items():
             sound_path = data.get("sound_path")
-            if sound_path and Path(sound_path).exists():
+            resolved_sound = self._resolve_asset_path(sound_path) if sound_path else None
+            if resolved_sound and resolved_sound.exists():
                 try:
-                    self.sounds[name] = pygame.mixer.Sound(sound_path)
+                    self.sounds[name] = pygame.mixer.Sound(str(resolved_sound))
                     if str(name).lower() == "chidori":
                         self.sounds[name].set_volume(0.3)
                     print(f"[+] Jutsu sound loaded: {name}")
@@ -220,10 +225,10 @@ class AssetsMixin:
     def _try_play_music(self):
         """Try to play background music."""
         music_paths = [
-            Path("src/sounds/music2.mp3"),
-            Path("src/sounds/music1.mp3"),
-            Path("src/sounds/bgm.mp3"),
-            Path("src/sounds/background.mp3"),
+            self._resolve_asset_path("src/sounds/music2.mp3"),
+            self._resolve_asset_path("src/sounds/music1.mp3"),
+            self._resolve_asset_path("src/sounds/bgm.mp3"),
+            self._resolve_asset_path("src/sounds/background.mp3"),
         ]
         
         for path in music_paths:
@@ -240,7 +245,7 @@ class AssetsMixin:
 
     def _load_icons(self):
         """Load hand sign icons."""
-        pics_dir = Path("src/pics")
+        pics_dir = self._resolve_asset_path("src/pics")
         class_names = get_class_names()
         sequence_signs = set()
         for jutsu_data in getattr(self, "jutsu_list", {}).values():
@@ -262,8 +267,8 @@ class AssetsMixin:
     def _load_logo(self):
         """Load logo image with proper aspect ratio."""
         logo_paths = [
-            Path("src/pics/logo.png"),
-            Path("src/pics/logo2.png"),
+            self._resolve_asset_path("src/pics/logo.png"),
+            self._resolve_asset_path("src/pics/logo2.png"),
         ]
         for path in logo_paths:
             if path.exists():
@@ -285,8 +290,8 @@ class AssetsMixin:
     def _load_background(self):
         """Load background image with proper aspect ratio (cover)."""
         bg_paths = [
-            Path("src/socials/vl2.png"),
-            Path("src/pics/bg.png"),
+            self._resolve_asset_path("src/socials/vl2.png"),
+            self._resolve_asset_path("src/pics/bg.png"),
         ]
         for path in bg_paths:
             if path.exists():
@@ -319,7 +324,7 @@ class AssetsMixin:
 
     def _load_social_icons(self):
         """Load social media icons."""
-        socials_dir = Path("src/socials")
+        socials_dir = self._resolve_asset_path("src/socials")
         icon_names = ["ig", "yt", "discord"]
         
         for name in icon_names:
@@ -335,7 +340,7 @@ class AssetsMixin:
 
     def _load_mute_icons(self):
         """Load mute/unmute icons."""
-        pics_dir = Path("src/pics")
+        pics_dir = self._resolve_asset_path("src/pics")
         
         mute_path = pics_dir / "mute.png"
         unmute_path = pics_dir / "unmute.png"
@@ -356,7 +361,7 @@ class AssetsMixin:
 
     def _load_arrow_icons(self):
         """Load arrow icons for navigation."""
-        arrow_path = Path("src/pics/left-arrow.png")
+        arrow_path = self._resolve_asset_path("src/pics/left-arrow.png")
         if arrow_path.exists():
             try:
                 img = pygame.image.load(str(arrow_path))
@@ -371,8 +376,9 @@ class AssetsMixin:
         """Load video paths for jutsu effects."""
         for name, data in self.jutsu_list.items():
             video_path = data.get("video_path")
-            if video_path and Path(video_path).exists():
-                self.jutsu_videos[name] = video_path
+            resolved_video = self._resolve_asset_path(video_path) if video_path else None
+            if resolved_video and resolved_video.exists():
+                self.jutsu_videos[name] = str(resolved_video)
                 print(f"[+] Jutsu video found: {name}")
 
     def toggle_mute(self):

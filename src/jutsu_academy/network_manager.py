@@ -9,9 +9,59 @@ import threading
 import hashlib
 import datetime
 import requests
+import sys
 from email.utils import parsedate_to_datetime
 
 # Load env variables simple parser
+def _candidate_env_files():
+    candidates = []
+
+    # Current working dir first (allows explicit local override).
+    cwd = Path.cwd()
+    candidates.extend([
+        cwd / ".env",
+        cwd / ".env.local",
+        cwd / "web" / ".env.local",
+    ])
+
+    # Source-tree roots (dev mode).
+    root_dir = Path(__file__).parent.parent.parent
+    candidates.extend([
+        root_dir / ".env",
+        root_dir / ".env.local",
+        root_dir / "web" / ".env.local",
+    ])
+
+    # Frozen app roots (PyInstaller).
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        meipass = Path(getattr(sys, "_MEIPASS", exe_dir))
+        frozen_roots = [
+            exe_dir,                 # onedir app folder
+            exe_dir.parent,          # .app/Contents/MacOS parent fallback
+            exe_dir / "_internal",   # pyinstaller data root
+            meipass,                 # temp/extraction root
+            meipass.parent,
+        ]
+        for root in frozen_roots:
+            candidates.extend([
+                root / ".env",
+                root / ".env.local",
+                root / "web" / ".env.local",
+            ])
+
+    # De-duplicate preserving order
+    deduped = []
+    seen = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
 def get_env():
     env = {}
     
@@ -20,14 +70,7 @@ def get_env():
         env[k] = v
         
     # 2. Check for .env files in common locations
-    root_dir = Path(__file__).parent.parent.parent
-    possible_paths = [
-        root_dir / ".env",
-        root_dir / "web" / ".env.local",
-        root_dir / ".env.local"
-    ]
-    
-    for env_path in possible_paths:
+    for env_path in _candidate_env_files():
         if env_path.exists():
             try:
                 with open(env_path, "r") as f:

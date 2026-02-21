@@ -485,7 +485,9 @@ class GameplayMixin:
             raw_sign = "idle"
             raw_conf = 0.0
 
-        allow_detection = lighting_ok and num_hands > 0
+        # Keep ranked/challenge strict on lighting, but allow Free Play to keep
+        # detecting signs even when lighting quality is not ideal.
+        allow_detection = num_hands > 0 and (lighting_ok or self.game_mode != "challenge")
         if self.settings.get("restricted_signs", False):
             allow_detection = allow_detection and num_hands >= 2
 
@@ -715,16 +717,75 @@ class GameplayMixin:
 
     def detect_hands(self, frame):
         """Detect hand landmarks for skeleton visualization and tracking."""
-        if not self.hand_landmarker:
+        if not self.hand_landmarker and not self.hand_landmarker_image and not self.legacy_hands:
             return
             
         try:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            
-            # Using current clock time for timestamp (MS)
-            timestamp = int(time.time() * 1000)
-            result = self.hand_landmarker.detect_for_video(mp_image, timestamp)
+
+            def _detect_with_mode(mode_name):
+                if mode_name == "tasks_video":
+                    if self.hand_landmarker is None:
+                        raise RuntimeError("tasks_video_unavailable")
+                    timestamp = int(time.time() * 1000)
+                    if timestamp <= self.last_mp_timestamp:
+                        timestamp = self.last_mp_timestamp + 1
+                    self.last_mp_timestamp = timestamp
+                    return self.hand_landmarker.detect_for_video(mp_image, timestamp)
+
+                if mode_name == "tasks_image":
+                    if self.hand_landmarker_image is None:
+                        raise RuntimeError("tasks_image_unavailable")
+                    return self.hand_landmarker_image.detect(mp_image)
+
+                if mode_name == "legacy_solutions":
+                    if self.legacy_hands is None:
+                        raise RuntimeError("legacy_unavailable")
+                    legacy_result = self.legacy_hands.process(rgb)
+                    hand_landmarks = legacy_result.multi_hand_landmarks or []
+                    handedness = []
+                    for handed in (legacy_result.multi_handedness or []):
+                        label = ""
+                        try:
+                            if hasattr(handed, "classification") and handed.classification:
+                                label = str(getattr(handed.classification[0], "label", "") or "")
+                            elif handed and hasattr(handed[0], "label"):
+                                label = str(getattr(handed[0], "label", "") or "")
+                        except Exception:
+                            label = ""
+                        handedness.append([type("LegacyCategory", (), {"category_name": label})()])
+                    wrapped = type("LegacyResult", (), {})()
+                    wrapped.hand_landmarks = hand_landmarks
+                    wrapped.handedness = handedness
+                    return wrapped
+
+                raise RuntimeError(f"unknown_mode:{mode_name}")
+
+            preferred = str(getattr(self, "hand_detector_backend", "none") or "none")
+            fallback_order = {
+                "tasks_video": ["tasks_video", "tasks_image", "legacy_solutions"],
+                "tasks_image": ["tasks_image", "tasks_video", "legacy_solutions"],
+                "legacy_solutions": ["legacy_solutions", "tasks_video", "tasks_image"],
+                "none": ["tasks_video", "tasks_image", "legacy_solutions"],
+            }
+            modes = fallback_order.get(preferred, ["tasks_video", "tasks_image", "legacy_solutions"])
+            errors = []
+            result = None
+            for mode in modes:
+                try:
+                    result = _detect_with_mode(mode)
+                    self.hand_detector_backend = mode
+                    break
+                except Exception as mode_err:
+                    errors.append(f"{mode}:{mode_err}")
+
+            if result is None:
+                if errors:
+                    self.hand_detector_error = " | ".join(errors[-3:])
+                self.last_mp_result = None
+                return
+
             self.last_mp_result = result
             self.last_palm_spans = []
             
@@ -873,6 +934,8 @@ class GameplayMixin:
                 self.smooth_hand_effect_scale = None
                 self.hand_effect_scale = 1.0
         except Exception as e:
+            self.last_mp_result = None
+            self.hand_detector_error = str(e)
             print(f"[!] detect_hands error: {e}")
 
     def detect_face(self, frame):

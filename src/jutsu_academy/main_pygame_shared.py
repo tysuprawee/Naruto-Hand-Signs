@@ -36,7 +36,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from ultralytics import YOLO
 import mediapipe as mp
 
-from src.utils.paths import get_class_names, get_latest_weights
+from src.utils.paths import (
+    get_class_names,
+    get_latest_weights,
+    resolve_resource_path,
+    get_env_candidate_paths,
+)
 from src.jutsu_registry import OFFICIAL_JUTSUS
 from src.mp_trainer import SignRecorder
 
@@ -60,7 +65,16 @@ except ImportError:
 # Try importing Discord auth and dotenv
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    _loaded_any_env = False
+    for _env_path in get_env_candidate_paths():
+        if _env_path.exists():
+            try:
+                load_dotenv(dotenv_path=str(_env_path), override=False)
+                _loaded_any_env = True
+            except Exception:
+                pass
+    if not _loaded_any_env:
+        load_dotenv()
 except ImportError:
     pass
 
@@ -697,8 +711,8 @@ class Dropdown:
             return
         self._icons_loaded = True
         try:
-            down_path = Path("src/pics/down.png")
-            up_path = Path("src/pics/up.png")
+            down_path = resolve_resource_path("src/pics/down.png")
+            up_path = resolve_resource_path("src/pics/up.png")
             if down_path.exists():
                 img = pygame.image.load(str(down_path))
                 self.icon_down = pygame.transform.smoothscale(img, (18, 18))

@@ -1,4 +1,5 @@
 from src.jutsu_academy.main_pygame_shared import *
+from src.utils.paths import resolve_resource_path
 from src.jutsu_academy.effects import EffectContext
 import hashlib
 
@@ -266,13 +267,14 @@ class PlayingMixin:
 
         jutsu_data = self.jutsu_list.get(jutsu_name, {})
         video_path = jutsu_data.get("video_path")
-        if video_path and Path(video_path).exists():
+        resolved_video = resolve_resource_path(video_path) if video_path else None
+        if resolved_video and resolved_video.exists():
             if self.video_cap:
                 self.video_cap.release()
                 self.video_cap = None
-            self.video_cap = cv2.VideoCapture(video_path)
+            self.video_cap = cv2.VideoCapture(str(resolved_video))
             self.current_video = jutsu_name
-            print(f"[+] Playing video: {video_path}")
+            print(f"[+] Playing video: {resolved_video}")
 
     def _render_challenge_lobby(self, cam_x, cam_y, cam_w, cam_h):
         """Draw dimmed lobby with 'Press SPACE to Start'."""
@@ -1001,7 +1003,10 @@ class PlayingMixin:
             self.screen.blit(pred_txt, (lx, ly))
 
         # Detection diagnostics (quality gate + voting + calibration state)
-        detector_name = "MEDIAPIPE" if self.settings.get("use_mediapipe_signs", False) else "YOLO"
+        using_mp = bool(self.settings.get("use_mediapipe_signs", False))
+        detector_name = "MEDIAPIPE" if using_mp else "YOLO"
+        mp_backend = str(getattr(self, "hand_detector_backend", "none") or "none").upper().replace("_", " ")
+        mp_error = str(getattr(self, "hand_detector_error", "") or "")
         light_color = COLORS["success"] if lighting_ok else COLORS["error"]
         light_text = self.lighting_status.replace("_", " ").upper()
         vote_text = f"VOTE {self.last_vote_hits}/{self.vote_window_size}"
@@ -1019,10 +1024,19 @@ class PlayingMixin:
 
         info_lines = [
             f"MODEL: {detector_name}",
+            f"HANDS: {int(getattr(self, 'last_detected_hands', 0) or 0)}",
+            f"STRICT 2H: {'ON' if self.settings.get('restricted_signs', False) else 'OFF'}",
             f"LIGHT: {light_text}",
             f"{vote_text} • {int(self.detected_confidence * 100)}%",
             calib_text,
         ]
+        if using_mp:
+            info_lines.insert(1, f"MP BACKEND: {mp_backend}")
+            info_lines.append(
+                f"RAW: {str(getattr(self, 'raw_detected_sign', 'idle')).upper()} {int(float(getattr(self, 'raw_detected_confidence', 0.0) or 0.0) * 100)}%"
+            )
+            if mp_error:
+                info_lines.append(f"MP ERR: {mp_error[:46]}")
         if self.calibration_message and time.time() <= self.calibration_message_until:
             info_lines.append(self.calibration_message.upper())
 
@@ -1094,6 +1108,8 @@ class PlayingMixin:
                     base_size = 520
                 else:
                     base_size = 560
+                scale_x = (new_w / max(1, frame_w))
+                scale_y = (new_h / max(1, frame_h))
 
                 # Track Hand
                 if effect_hand_pos:
@@ -1148,7 +1164,7 @@ class PlayingMixin:
                         clone_dx_screen = 0
                         clone_effect = self.effect_orchestrator.effects.get("clone")
                         if clone_effect is not None:
-                            clone_dx_screen = int(max(0, float(getattr(clone_effect, "current_dx_px", 0))) * scale)
+                            clone_dx_screen = int(max(0.0, float(getattr(clone_effect, "current_dx_px", 0.0))) * scale_x)
                             if clone_dx_screen <= 0:
                                 clone_dx_ratio = float(getattr(clone_effect, "clone_dx_ratio", 0.28))
                                 clone_dx_screen = int(max(0.0, clone_dx_ratio) * new_w)
@@ -1157,10 +1173,13 @@ class PlayingMixin:
                         offsets = [(-clone_dx_screen, 0), (0, 0), (clone_dx_screen, 0)]
                     else:
                         offsets = [(0, 0)]
+                    # Hand anchors are in camera-frame coordinates; project them to screen-space.
+                    hand_screen_x = cam_x + int(hx * scale_x)
+                    hand_screen_y = cam_y + int(hy * scale_y)
                     for ox, oy in offsets:
                         self.screen.blit(
                             vid_surface,
-                            (cam_x + hx - dw // 2 + ox, cam_y + hy - dh // 2 + oy),
+                            (hand_screen_x - dw // 2 + ox, hand_screen_y - dh // 2 + oy),
                             special_flags=pygame.BLEND_RGB_ADD,
                         )
             else:

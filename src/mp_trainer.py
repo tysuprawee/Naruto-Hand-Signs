@@ -7,6 +7,8 @@ import math
 import argparse
 import random
 import os
+import shutil
+import sys
 from pathlib import Path
 
 # MediaPipe Tasks API Imports (Fix for missing mediapipe.solutions)
@@ -14,10 +16,99 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 # Constants
-DATA_FILE = "src/mediapipe_signs_db.csv"
 LABELS = ["Idle", "Tiger", "Ram", "Snake", "Horse", "Rat", "Boar", "Dog", "Bird", "Monkey", "Ox", "Dragon", "Hare", "Clap"]
-MODEL_PATH = "models/hand_landmarker.task"
 DEFAULT_MAX_TRAIN_ROWS = 8000
+
+
+def _runtime_roots() -> list[Path]:
+    roots: list[Path] = []
+
+    # Current working directory (useful when running from repo root).
+    roots.append(Path.cwd())
+
+    # Source-relative roots for normal (non-frozen) execution.
+    src_dir = Path(__file__).resolve().parent
+    repo_root = src_dir.parent
+    roots.extend([repo_root, src_dir])
+
+    # Frozen app roots (PyInstaller onedir/app bundle layouts).
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        meipass = Path(getattr(sys, "_MEIPASS", exe_dir))
+        roots.extend([
+            exe_dir,
+            exe_dir / "_internal",
+            exe_dir.parent,
+            meipass,
+            meipass.parent,
+        ])
+
+    # De-duplicate while preserving order.
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(root)
+    return deduped
+
+
+def _find_existing_path(rel_path: Path) -> Path | None:
+    for root in _runtime_roots():
+        candidate = root / rel_path
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _resolve_data_file_path() -> Path:
+    # Optional explicit override.
+    override = str(os.getenv("MP_SIGNS_DB_PATH", "")).strip()
+    if override:
+        return Path(override).expanduser().resolve()
+
+    rel_csv = Path("src") / "mediapipe_signs_db.csv"
+    packaged_csv = _find_existing_path(rel_csv)
+
+    # In frozen builds, use a writable per-user copy and seed it from packaged data.
+    if getattr(sys, "frozen", False):
+        user_dir = Path.home() / ".jutsu_academy"
+        user_dir.mkdir(parents=True, exist_ok=True)
+        user_csv = user_dir / "mediapipe_signs_db.csv"
+
+        if (not user_csv.exists()) and packaged_csv and packaged_csv.is_file():
+            try:
+                shutil.copy2(packaged_csv, user_csv)
+            except Exception:
+                pass
+
+        if user_csv.exists():
+            return user_csv
+        if packaged_csv:
+            return packaged_csv
+        return user_csv
+
+    # Dev/runtime from source tree.
+    if packaged_csv:
+        return packaged_csv
+    return Path(__file__).resolve().parent / "mediapipe_signs_db.csv"
+
+
+def _resolve_model_path() -> Path:
+    override = str(os.getenv("MP_HAND_MODEL_PATH", "")).strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    rel_model = Path("models") / "hand_landmarker.task"
+    found = _find_existing_path(rel_model)
+    if found:
+        return found
+    return Path("models/hand_landmarker.task")
+
+
+DATA_FILE = _resolve_data_file_path()
+MODEL_PATH = _resolve_model_path()
 
 
 def open_camera(camera_index=0, width=640, height=480):
@@ -67,7 +158,8 @@ class SignRecorder:
         self.auto_record_start = 0
         
         # Ensure database exists
-        if not Path(DATA_FILE).exists():
+        DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if not DATA_FILE.exists():
             with open(DATA_FILE, 'w', newline='') as f:
                 writer = csv.writer(f)
                 # Header: label, then 42 sets of (x,y,z) coords (21 per hand * 2 hands)
@@ -83,7 +175,7 @@ class SignRecorder:
     def _load_and_train(self):
         """Train a KNN model in memory if CSV has data."""
         try:
-            if not Path(DATA_FILE).exists():
+            if not DATA_FILE.exists():
                 return
 
             max_rows = max(500, int(os.getenv("MP_TRAINER_MAX_ROWS", str(DEFAULT_MAX_TRAIN_ROWS))))
@@ -152,21 +244,40 @@ class SignRecorder:
             
         h1_data = [0.0] * 63 
         h2_data = [0.0] * 63
-        
-        for idx, hands_list in enumerate(handedness):
-            if idx >= len(hand_landmarks): break
-            
-            # Tasks API label is in category_name
-            label = hands_list[0].category_name # "Left" or "Right"
-            landmarks = hand_landmarks[idx] 
-            
+
+        # Some runtimes can return landmarks with partial/empty handedness metadata.
+        # Still map landmarks deterministically so prediction continues.
+        if not handedness:
+            for idx, landmarks in enumerate(hand_landmarks[:2]):
+                coords = self._normalize_hand(landmarks)
+                if idx == 0:
+                    h1_data = coords
+                else:
+                    h2_data = coords
+            return h1_data + h2_data
+
+        for idx, landmarks in enumerate(hand_landmarks):
+            if idx >= 2:
+                break
+
+            label = ""
+            if idx < len(handedness):
+                hands_list = handedness[idx] or []
+                if hands_list:
+                    label = str(getattr(hands_list[0], "category_name", "") or "")
+
             coords = self._normalize_hand(landmarks)
-                
+
             if label == "Left":
                 h1_data = coords
-            else:
+            elif label == "Right":
                 h2_data = coords
-                
+            else:
+                if h1_data == [0.0] * 63:
+                    h1_data = coords
+                else:
+                    h2_data = coords
+
         return h1_data + h2_data
 
     def _normalize_hand(self, landmarks):
@@ -299,7 +410,7 @@ def draw_hand_landmarks(image, hand_landmarks):
 
 def main(camera_index=0):
     # Setup Tasks API Detector
-    base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
+    base_options = python.BaseOptions(model_asset_path=str(MODEL_PATH))
     options = vision.HandLandmarkerOptions(
         base_options=base_options,
         num_hands=2,

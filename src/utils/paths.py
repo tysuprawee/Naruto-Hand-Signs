@@ -7,6 +7,7 @@ eliminating the need to hardcode paths in multiple files.
 
 from pathlib import Path
 from typing import Optional
+import sys
 
 
 def get_project_root() -> Path:
@@ -18,6 +19,82 @@ def get_project_root() -> Path:
     """
     # Navigate up from this file: utils/ -> src/ -> project_root/
     return Path(__file__).resolve().parent.parent.parent
+
+
+def get_runtime_roots() -> list[Path]:
+    """
+    Candidate roots for runtime resources in both dev and frozen builds.
+    """
+    roots: list[Path] = []
+    cwd = Path.cwd().resolve()
+    roots.append(cwd)
+
+    project_root = get_project_root().resolve()
+    roots.append(project_root)
+    roots.append(project_root / "_internal")
+
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        meipass = Path(getattr(sys, "_MEIPASS", exe_dir))
+        roots.extend([
+            exe_dir,
+            exe_dir / "_internal",
+            exe_dir.parent,
+            meipass,
+            meipass / "_internal",
+            meipass.parent,
+        ])
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(root)
+    return deduped
+
+
+def resolve_resource_path(path_like: str | Path) -> Path:
+    """
+    Resolve a resource path in dev/frozen runtime. Returns a best candidate
+    even if the file does not exist yet.
+    """
+    raw = Path(path_like)
+    if raw.is_absolute():
+        return raw
+
+    for root in get_runtime_roots():
+        candidate = root / raw
+        if candidate.exists():
+            return candidate
+
+    # Best fallback keeps behavior deterministic.
+    return get_project_root() / raw
+
+
+def get_env_candidate_paths() -> list[Path]:
+    """
+    Candidate .env file locations for runtime credential loading.
+    """
+    candidates: list[Path] = []
+    for root in get_runtime_roots():
+        candidates.extend([
+            root / ".env",
+            root / ".env.local",
+            root / "web" / ".env.local",
+        ])
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
 
 
 def get_src_dir() -> Path:

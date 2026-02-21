@@ -32,3 +32,6 @@ dist/
 build/
 *.spec
 JutsuAcademy.app/
+dist_portable/
+dist_portable_mac/
+dist_installer/

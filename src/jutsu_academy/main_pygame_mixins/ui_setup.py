@@ -208,42 +208,108 @@ class UISetupMixin:
         
         weights = get_latest_weights()
         if not weights:
-            print("[-] No YOLO weights found!")
-            return False
+            print("[!] No YOLO weights found (YOLO path is locked anyway). Continuing with MediaPipe only.")
         
         print("[*] YOLO mapping verified. Loading skipped (model locked).")
         self.model = None
         self.class_names = get_class_names()
         
-        # MediaPipe Face
-        from mediapipe.tasks import python
-        from mediapipe.tasks.python import vision
-        
-        face_path = Path("models/face_landmarker.task")
-        if face_path.exists():
+        self.hand_landmarker = None
+        self.hand_landmarker_image = None
+        self.legacy_hands = None
+        self.hand_detector_backend = "none"
+        self.hand_detector_error = ""
+
+        try:
+            from mediapipe.tasks import python
+            from mediapipe.tasks.python import vision
+        except Exception as e:
+            python = None
+            vision = None
+            self.hand_detector_error = f"tasks_import_failed: {e}"
+            print(f"[!] MediaPipe Tasks import failed: {e}")
+
+        if python is not None and vision is not None:
+            face_path = resolve_resource_path("models/face_landmarker.task")
+            if face_path.exists():
+                try:
+                    base_options = python.BaseOptions(model_asset_path=str(face_path))
+                    options = vision.FaceLandmarkerOptions(base_options=base_options, num_faces=1)
+                    self.face_landmarker = vision.FaceLandmarker.create_from_options(options)
+                    print(f"[+] Face detection loaded: {face_path}")
+                except Exception as e:
+                    print(f"[!] Face detection failed: {e}")
+            else:
+                print(f"[!] Face model not found: {face_path}")
+
+            hand_path = resolve_resource_path("models/hand_landmarker.task")
+            self.hand_model_path = str(hand_path)
+            self.hand_model_exists = bool(hand_path.exists())
+            if hand_path.exists():
+                errors = []
+                try:
+                    base_options = python.BaseOptions(model_asset_path=str(hand_path))
+                    options = vision.HandLandmarkerOptions(
+                        base_options=base_options,
+                        num_hands=2,
+                        running_mode=vision.RunningMode.VIDEO,
+                        min_hand_detection_confidence=0.25,
+                        min_hand_presence_confidence=0.25,
+                        min_tracking_confidence=0.25,
+                    )
+                    self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
+                    self.hand_detector_backend = "tasks_video"
+                    print(f"[+] Hand tracking loaded (VIDEO): {hand_path}")
+                except Exception as e:
+                    errors.append(f"tasks_video_failed: {e}")
+                    print(f"[!] Hand tracking VIDEO failed: {e}")
+
+                if self.hand_landmarker is None:
+                    try:
+                        base_options = python.BaseOptions(model_asset_path=str(hand_path))
+                        options = vision.HandLandmarkerOptions(
+                            base_options=base_options,
+                            num_hands=2,
+                            running_mode=vision.RunningMode.IMAGE,
+                            min_hand_detection_confidence=0.25,
+                            min_hand_presence_confidence=0.25,
+                            min_tracking_confidence=0.25,
+                        )
+                        self.hand_landmarker_image = vision.HandLandmarker.create_from_options(options)
+                        self.hand_detector_backend = "tasks_image"
+                        print(f"[+] Hand tracking loaded (IMAGE fallback): {hand_path}")
+                    except Exception as e:
+                        errors.append(f"tasks_image_failed: {e}")
+                        print(f"[!] Hand tracking IMAGE fallback failed: {e}")
+
+                if errors and self.hand_detector_backend == "none":
+                    self.hand_detector_error = " | ".join(errors)
+            else:
+                self.hand_model_exists = False
+                self.hand_detector_error = f"hand_model_missing: {hand_path}"
+                print(f"[!] Hand model not found: {hand_path}")
+
+        if self.hand_detector_backend == "none":
             try:
-                base_options = python.BaseOptions(model_asset_path=str(face_path))
-                options = vision.FaceLandmarkerOptions(base_options=base_options, num_faces=1)
-                self.face_landmarker = vision.FaceLandmarker.create_from_options(options)
-                print("[+] Face detection loaded")
-            except Exception as e:
-                print(f"[!] Face detection failed: {e}")
-        
-        # MediaPipe Hands
-        hand_path = Path("models/hand_landmarker.task")
-        if hand_path.exists():
-            try:
-                base_options = python.BaseOptions(model_asset_path=str(hand_path))
-                options = vision.HandLandmarkerOptions(
-                    base_options=base_options,
-                    num_hands=2,
-                    running_mode=vision.RunningMode.VIDEO
+                self.legacy_hands = mp.solutions.hands.Hands(
+                    static_image_mode=False,
+                    max_num_hands=2,
+                    min_detection_confidence=0.25,
+                    min_tracking_confidence=0.25,
                 )
-                self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
-                print("[+] Hand tracking loaded")
+                self.hand_detector_backend = "legacy_solutions"
+                print("[+] Hand tracking loaded (legacy solutions fallback)")
             except Exception as e:
-                print(f"[!] Hand tracking failed: {e}")
-        
+                if self.hand_detector_error:
+                    self.hand_detector_error = f"{self.hand_detector_error} | legacy_failed: {e}"
+                else:
+                    self.hand_detector_error = f"legacy_failed: {e}"
+                print(f"[!] Legacy hand tracking failed: {e}")
+
+        if self.hand_detector_backend == "none":
+            print("[-] Hand tracker unavailable; sign detection will be disabled.")
+            print(f"[!] Hand detector error: {self.hand_detector_error}")
+            return False
         return True
 
     def _start_camera(self):
