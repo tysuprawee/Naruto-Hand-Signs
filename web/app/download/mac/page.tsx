@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -16,12 +17,15 @@ import {
   Zap,
   Eye,
   Gamepad2,
+  X,
 } from "lucide-react";
 
 const DOWNLOAD_URL =
   "https://github.com/tysuprawee/Naruto-Hand-Signs/releases/download/v1.0.0/v1.0.0-JutsuAcademy-Portable-mac-AppleSilicon.zip";
 
 export default function MacDownloadPage() {
+  const [showDiscordModal, setShowDiscordModal] = useState(false);
+
   return (
     <div className="min-h-screen bg-ninja-bg text-ninja-text font-sans selection:bg-ninja-accent selection:text-white">
       {/* Subtle background glow */}
@@ -93,7 +97,7 @@ export default function MacDownloadPage() {
             <a
               href={DOWNLOAD_URL}
               id="download-mac-button"
-              onClick={() => window.open("https://discord.gg/s6ZJUVG5U7", "_blank")}
+              onClick={() => setTimeout(() => setShowDiscordModal(true), 500)}
               className="group relative h-16 px-12 bg-gradient-to-r from-zinc-700 to-zinc-600 hover:from-zinc-600 hover:to-zinc-500 text-white text-xl font-black rounded-2xl flex items-center gap-4 transition-all shadow-[0_0_30px_rgba(255,255,255,0.06)] hover:shadow-[0_0_50px_rgba(255,255,255,0.12)] hover:-translate-y-1 border border-zinc-500/30"
             >
               <Download className="w-6 h-6 group-hover:animate-bounce" />
@@ -315,7 +319,7 @@ export default function MacDownloadPage() {
 
           <a
             href={DOWNLOAD_URL}
-            onClick={() => window.open("https://discord.gg/s6ZJUVG5U7", "_blank")}
+            onClick={() => setTimeout(() => setShowDiscordModal(true), 500)}
             className="group inline-flex h-14 px-10 bg-gradient-to-r from-zinc-700 to-zinc-600 hover:from-zinc-600 hover:to-zinc-500 text-white text-lg font-black rounded-xl items-center gap-3 transition-all shadow-[0_0_30px_rgba(255,255,255,0.06)] hover:shadow-[0_0_50px_rgba(255,255,255,0.12)] hover:-translate-y-1 border border-zinc-500/30"
           >
             <Download className="w-5 h-5" />
@@ -334,6 +338,46 @@ export default function MacDownloadPage() {
           <p>&copy; 2026 Jutsu Academy. Built with Google MediaPipe.</p>
         </div>
       </footer>
+      {/* Discord Modal Wrapper */}
+      {showDiscordModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-ninja-panel border border-ninja-accent/30 rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.8)] max-w-md w-full p-6 relative animate-in zoom-in-95 duration-200">
+            <button
+              onClick={() => setShowDiscordModal(false)}
+              className="absolute top-4 right-4 text-zinc-500 hover:text-white transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-xl font-black text-white mb-2 uppercase tracking-wide flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-ninja-accent animate-pulse"></span>
+              Download Started!
+            </h3>
+            <p className="text-zinc-300 leading-relaxed mb-6">
+              Thanks for downloading Jutsu Academy! While you wait, join our Ninja network on Discord to connect with developers, get updates, and share your ninja way.
+            </p>
+            <div className="flex flex-col gap-3">
+              <a
+                href="https://discord.gg/s6ZJUVG5U7"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setShowDiscordModal(false)}
+                className="w-full flex justify-center items-center gap-2 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:-translate-y-0.5"
+              >
+                <svg className="w-5 h-5 fill-current" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.11,77.11,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22c.63-15.02-2.39-32.91-18.9-72.15ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z" />
+                </svg>
+                Join Discord Server
+              </a>
+              <button
+                onClick={() => setShowDiscordModal(false)}
+                className="w-full py-3 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 font-medium rounded-xl transition-colors border border-zinc-700/50"
+              >
+                Maybe Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
