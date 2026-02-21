@@ -153,12 +153,9 @@ export default function Home() {
               </Link>
 
               <div className="flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    trackClick("download_beta");
-                    openModal("Beta Access", "The beta version of the game will be released on the official launch date.");
-                  }}
+                <Link
+                  href="https://github.com/tysuprawee/Naruto-Hand-Signs/releases/download/v1.0.0-Windows/v1.0.0-JutsuAcademy-Portable-Win64.zip"
+                  onClick={() => trackClick("download_windows")}
                   className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all cursor-pointer select-none"
                 >
                   {/* Windows/Microsoft Logo */}
@@ -166,7 +163,7 @@ export default function Home() {
                     <path d="M0 12.402l35.687-4.86.016 34.423-35.67.216zm35.707 34.005l-.012 34.697-35.695-4.913V46.602zM39.98 6.01L87.314 0v41.527l-47.334.373zM87.314 46.223V88L39.98 81.385V46.613z" />
                   </svg>
                   Windows
-                </button>
+                </Link>
 
                 <Link
                   href="/download/mac"
