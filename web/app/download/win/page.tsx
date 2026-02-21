@@ -93,6 +93,7 @@ export default function WindowsDownloadPage() {
                         <a
                             href={DOWNLOAD_URL}
                             id="download-win-button"
+                            onClick={() => window.open("https://discord.gg/s6ZJUVG5U7", "_blank")}
                             className="group relative h-16 px-12 bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 text-white text-xl font-black rounded-2xl flex items-center gap-4 transition-all shadow-[0_0_30px_rgba(59,130,246,0.2)] hover:shadow-[0_0_50px_rgba(59,130,246,0.3)] hover:-translate-y-1 border border-blue-500/30"
                         >
                             <Download className="w-6 h-6 group-hover:animate-bounce" />
@@ -323,6 +324,7 @@ export default function WindowsDownloadPage() {
 
                     <a
                         href={DOWNLOAD_URL}
+                        onClick={() => window.open("https://discord.gg/s6ZJUVG5U7", "_blank")}
                         className="group inline-flex h-14 px-10 bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 text-white text-lg font-black rounded-xl items-center gap-3 transition-all shadow-[0_0_30px_rgba(59,130,246,0.2)] hover:shadow-[0_0_50px_rgba(59,130,246,0.3)] hover:-translate-y-1 border border-blue-500/30"
                     >
                         <Download className="w-5 h-5" />

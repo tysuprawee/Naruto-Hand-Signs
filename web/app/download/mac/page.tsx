@@ -93,6 +93,7 @@ export default function MacDownloadPage() {
             <a
               href={DOWNLOAD_URL}
               id="download-mac-button"
+              onClick={() => window.open("https://discord.gg/s6ZJUVG5U7", "_blank")}
               className="group relative h-16 px-12 bg-gradient-to-r from-zinc-700 to-zinc-600 hover:from-zinc-600 hover:to-zinc-500 text-white text-xl font-black rounded-2xl flex items-center gap-4 transition-all shadow-[0_0_30px_rgba(255,255,255,0.06)] hover:shadow-[0_0_50px_rgba(255,255,255,0.12)] hover:-translate-y-1 border border-zinc-500/30"
             >
               <Download className="w-6 h-6 group-hover:animate-bounce" />
@@ -314,6 +315,7 @@ export default function MacDownloadPage() {
 
           <a
             href={DOWNLOAD_URL}
+            onClick={() => window.open("https://discord.gg/s6ZJUVG5U7", "_blank")}
             className="group inline-flex h-14 px-10 bg-gradient-to-r from-zinc-700 to-zinc-600 hover:from-zinc-600 hover:to-zinc-500 text-white text-lg font-black rounded-xl items-center gap-3 transition-all shadow-[0_0_30px_rgba(255,255,255,0.06)] hover:shadow-[0_0_50px_rgba(255,255,255,0.12)] hover:-translate-y-1 border border-zinc-500/30"
           >
             <Download className="w-5 h-5" />
