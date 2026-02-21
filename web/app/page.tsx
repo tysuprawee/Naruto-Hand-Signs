@@ -57,10 +57,10 @@ export default function Home() {
           <nav className="hidden md:flex gap-8 text-sm font-medium text-zinc-200/90">
             <Link href="#showcase" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Features</Link>
             <Link href="#dev" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Dev</Link>
-            <Link href="/play" className="flex items-center gap-2 text-orange-300 font-bold hover:text-orange-200 transition-colors">
+            {/* <Link href="/play" className="flex items-center gap-2 text-orange-300 font-bold hover:text-orange-200 transition-colors">
               <Sword className="w-4 h-4" />
               Play
-            </Link>
+            </Link> */}
             <Link href="/challenge" className="flex items-center gap-2 text-green-400 font-bold hover:text-green-300 transition-colors">
               <Hand className="w-4 h-4" />
               Sign Tester
@@ -128,13 +128,14 @@ export default function Home() {
             </p>
 
             <div className="flex flex-wrap items-center gap-4 pt-4">
-              <Link
+              {/* Play Button Removed for now */}
+              {/* <Link
                 href="/play"
                 className="group h-14 px-8 bg-ninja-accent hover:bg-ninja-accent-glow text-white text-lg font-bold rounded-lg flex items-center gap-3 transition-all shadow-[0_0_20px_rgba(255,120,50,0.3)] hover:shadow-[0_0_30px_rgba(255,120,50,0.5)] hover:-translate-y-1"
               >
                 PLAY NOW
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </Link>
+              </Link> */}
 
               <Link
                 href="/challenge"
