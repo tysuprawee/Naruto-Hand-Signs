@@ -39,6 +39,23 @@ function Assert-NoServiceRoleKey([string]$envFilePath) {
     }
 }
 
+function Assert-ReleaseEnvReady([string]$repoRoot, [bool]$allowDefaultEnv) {
+    $releaseEnv = Join-Path $repoRoot ".env.release"
+    $defaultEnv = Join-Path $repoRoot ".env"
+
+    if (Test-Path $releaseEnv) {
+        Assert-NoServiceRoleKey -envFilePath $releaseEnv
+        return
+    }
+
+    if ((Test-Path $defaultEnv) -and $allowDefaultEnv) {
+        Assert-NoServiceRoleKey -envFilePath $defaultEnv
+        return
+    }
+
+    throw "No .env.release found. Create .env.release (from .env.release.example) before building portable release artifacts."
+}
+
 function Copy-ReleaseEnv([string]$repoRoot, [string]$targetDir, [bool]$allowDefaultEnv) {
     $releaseEnv = Join-Path $repoRoot ".env.release"
     $defaultEnv = Join-Path $repoRoot ".env"
@@ -56,11 +73,12 @@ function Copy-ReleaseEnv([string]$repoRoot, [string]$targetDir, [bool]$allowDefa
         return
     }
 
-    Write-Warning "No environment file copied to portable package. Add .env.release for release builds."
+    throw "No .env.release found. Create .env.release (from .env.release.example) before building portable release artifacts."
 }
 
 $repoRoot = Get-RepoRoot
 Set-Location $repoRoot
+Assert-ReleaseEnvReady -repoRoot $repoRoot -allowDefaultEnv $AllowDefaultEnv.IsPresent
 
 $appVersion = Get-AppVersion -repoRoot $repoRoot
 $distDir = Join-Path $repoRoot ("dist\" + $AppName)

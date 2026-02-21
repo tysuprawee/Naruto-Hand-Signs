@@ -4,6 +4,8 @@ import requests
 import threading
 import logging
 import secrets
+import hashlib
+import base64
 from flask import Flask, request
 from werkzeug.serving import make_server
 
@@ -12,15 +14,16 @@ log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
 class DiscordLogin:
-    def __init__(self, client_id, client_secret, redirect_uri="http://localhost:5050/callback"):
+    def __init__(self, client_id, client_secret=None, redirect_uri="http://localhost:5050/callback"):
         self.client_id = client_id
-        self.client_secret = client_secret
+        # Client secret is no longer needed with PKCE, but keeping param for backwards compatibility
         self.redirect_uri = redirect_uri
         self.user_info = None
         self.app = Flask(__name__)
         self.server = None
         self.thread = None
         self.auth_event = threading.Event()
+        self.code_verifier = None
         
         # Define routes
         self.app.add_url_rule('/callback', 'callback', self.callback_handler)
@@ -482,10 +485,18 @@ class DiscordLogin:
 
 
     def get_authorize_url(self):
-        """Generate and return the OAuth authorization URL with random state."""
+        """Generate and return the OAuth authorization URL with random state and PKCE."""
         state = secrets.token_urlsafe(16)  # Random state to prevent caching
+        
+        # Generate PKCE verifier and challenge
+        self.code_verifier = secrets.token_urlsafe(64)
+        code_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(self.code_verifier.encode('ascii')).digest()
+        ).decode('ascii').rstrip('=')
+
         return (f"https://discord.com/api/oauth2/authorize?client_id={self.client_id}"
-                f"&redirect_uri={self.redirect_uri}&response_type=code&scope=identify&state={state}")
+                f"&redirect_uri={self.redirect_uri}&response_type=code&scope=identify"
+                f"&state={state}&code_challenge={code_challenge}&code_challenge_method=S256")
 
     def login(self, timeout=120):
         """Starts the local server and waits for auth callback.
@@ -536,10 +547,10 @@ class DiscordLogin:
     def exchange_code(self, code):
         data = {
             'client_id': self.client_id,
-            'client_secret': self.client_secret,
             'grant_type': 'authorization_code',
             'code': code,
-            'redirect_uri': self.redirect_uri
+            'redirect_uri': self.redirect_uri,
+            'code_verifier': self.code_verifier
         }
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         

@@ -525,7 +525,10 @@ class GameplayMixin:
         pygame.display.flip()
         
         if not self._load_ml_models():
-            self.state = GameState.MENU
+            print("[-] Failed to load ML models. Cannot start game.")
+            self.error_title = "Hand Tracker Error"
+            self.error_message = f"Failed to load hand tracker.\n{getattr(self, 'hand_detector_error', 'Unknown error')}"
+            self.state = GameState.ERROR_MODAL
             return
         
         # Start camera

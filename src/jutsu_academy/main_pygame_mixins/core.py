@@ -697,12 +697,28 @@ class CoreMixin:
         self.connection_monitor_grace_until = time.time() + 25.0
         self.connection_last_ok_at = 0.0
         self.connection_fail_count = 0
-        threading.Thread(target=self._monitor_connection_loop, daemon=True).start()
-        if not self._has_backend_connection(timeout_s=1.5):
-            print("[!] Startup connectivity preflight failed.")
+        self.connection_lost_title = "Connection Lost"
+        self.connection_lost_lines = ["Network connection interrupted.", "Session has been terminated."]
+
+        missing_backend_config = bool(
+            (not str(getattr(self.network_manager, "url", "") or "").strip())
+            or (not str(getattr(self.network_manager, "key", "") or "").strip())
+        )
+        if missing_backend_config:
+            print("[!] Startup blocked: missing Supabase credentials in packaged environment.")
+            self.connection_lost_title = "Configuration Missing"
+            self.connection_lost_lines = [
+                "Missing Supabase config (.env).",
+                "Rebuild installer with .env.release.",
+            ]
             self._handle_connection_lost(force_logout=True)
         else:
-            self.connection_last_ok_at = time.time()
+            threading.Thread(target=self._monitor_connection_loop, daemon=True).start()
+            if not self._has_backend_connection(timeout_s=1.5):
+                print("[!] Startup connectivity preflight failed.")
+                self._handle_connection_lost(force_logout=True)
+            else:
+                self.connection_last_ok_at = time.time()
 
         if self.username != "Guest" and self.network_manager.client:
             try:

@@ -50,7 +50,7 @@ Output:
 Use `.env.release` for shipping:
 
 - If `.env.release` exists, build scripts copy it as package `.env`.
-- If not, build continues without copying env.
+- If `.env.release` is missing, release build scripts now fail fast.
 - Use `-AllowDefaultEnv` only for local testing (it copies `.env`).
 - Recommended: put only safe/public values in `.env.release` (never service-role keys).
 - Starter template: copy `/Users/bugatti/Documents/Naruto/.env.release.example` to `.env.release`.

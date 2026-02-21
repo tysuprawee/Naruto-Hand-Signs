@@ -18,6 +18,7 @@ pip-log.txt
 .env
 .env.local
 .env.release
+.config.dat
 user_session.json
 
 # Per-user calibration artifacts (local only)

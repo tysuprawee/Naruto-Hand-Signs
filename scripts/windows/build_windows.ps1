@@ -44,28 +44,65 @@ function Assert-NoServiceRoleKey([string]$envFilePath) {
     }
 }
 
-function Copy-ReleaseEnv([string]$repoRoot, [string]$targetDir, [bool]$allowDefaultEnv) {
+function Assert-ReleaseEnvReady([string]$repoRoot, [bool]$allowDefaultEnv) {
     $releaseEnv = Join-Path $repoRoot ".env.release"
     $defaultEnv = Join-Path $repoRoot ".env"
+
     if (Test-Path $releaseEnv) {
         Assert-NoServiceRoleKey -envFilePath $releaseEnv
-        Copy-Item $releaseEnv (Join-Path $targetDir ".env") -Force
-        Write-Host "Copied .env.release -> $targetDir\\.env"
         return
     }
 
     if ((Test-Path $defaultEnv) -and $allowDefaultEnv) {
         Assert-NoServiceRoleKey -envFilePath $defaultEnv
-        Copy-Item $defaultEnv (Join-Path $targetDir ".env") -Force
-        Write-Warning "Copied .env to build output because -AllowDefaultEnv was set. Use for local testing only."
         return
     }
 
-    Write-Warning "No environment file copied. Add .env.release for release builds."
+    throw "No .env.release found. Create .env.release (from .env.release.example) before building release artifacts."
 }
+
+function Copy-ReleaseEnv([string]$repoRoot, [string]$targetDir, [bool]$allowDefaultEnv, [string]$pythonExe) {
+    $releaseEnv = Join-Path $repoRoot ".env.release"
+    $defaultEnv = Join-Path $repoRoot ".env"
+    $obfuscator = Join-Path $repoRoot "src\jutsu_academy\config_obfuscator.py"
+    $configDat = Join-Path $targetDir ".config.dat"
+
+    # Determine which env file to use
+    $envFile = $null
+    if (Test-Path $releaseEnv) {
+        Assert-NoServiceRoleKey -envFilePath $releaseEnv
+        $envFile = $releaseEnv
+    } elseif ((Test-Path $defaultEnv) -and $allowDefaultEnv) {
+        Assert-NoServiceRoleKey -envFilePath $defaultEnv
+        $envFile = $defaultEnv
+        Write-Warning "Using .env (not .env.release) because -AllowDefaultEnv was set."
+    } else {
+        throw "No .env.release found. Create .env.release (from .env.release.example) before building release artifacts."
+    }
+
+    # Encode to obfuscated .config.dat (hides credentials from casual snooping)
+    if (Test-Path $obfuscator) {
+        Write-Host "Encoding config to obfuscated .config.dat..."
+        & $pythonExe $obfuscator encode $envFile $configDat
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Encoded $envFile -> $configDat (credentials hidden)"
+            $plainEnv = Join-Path $targetDir ".env"
+            if (Test-Path $plainEnv) { Remove-Item $plainEnv -Force }
+            return
+        }
+        Write-Warning "Obfuscation failed, falling back to plain .env copy."
+    }
+
+    # Fallback: plain copy (dev/testing only)
+    Copy-Item $envFile (Join-Path $targetDir ".env") -Force
+    Write-Host "Copied $envFile -> $targetDir\.env (plain text fallback)"
+}
+
+
 
 $repoRoot = Get-RepoRoot
 Set-Location $repoRoot
+Assert-ReleaseEnvReady -repoRoot $repoRoot -allowDefaultEnv $AllowDefaultEnv.IsPresent
 
 if (-not (Test-Path "src\jutsu_academy\main_pygame.py")) {
     throw "Entry point missing: src\jutsu_academy\main_pygame.py"
@@ -106,6 +143,7 @@ Write-Host "Running PyInstaller..."
     --add-data "models;models" `
     --add-data "yolo_config;yolo_config" `
     --add-data "yolov8n.pt;." `
+    --collect-all mediapipe `
     src/jutsu_academy/main_pygame.py
 
 $distDir = Join-Path $repoRoot ("dist\" + $AppName)
@@ -113,7 +151,7 @@ if (-not (Test-Path $distDir)) {
     throw "Build output missing: $distDir"
 }
 
-Copy-ReleaseEnv -repoRoot $repoRoot -targetDir $distDir -allowDefaultEnv $AllowDefaultEnv.IsPresent
+Copy-ReleaseEnv -repoRoot $repoRoot -targetDir $distDir -allowDefaultEnv $AllowDefaultEnv.IsPresent -pythonExe $pythonExe
 
 Write-Host ""
 Write-Host "Build completed:"

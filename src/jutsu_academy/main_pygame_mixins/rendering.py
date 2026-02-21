@@ -933,12 +933,15 @@ class RenderingMixin:
         pygame.draw.rect(self.screen, COLORS["error"], modal_rect, 2, border_radius=16)
         
         # Icon/Title
-        title = self.fonts["title_sm"].render("Connection Lost", True, COLORS["error"])
+        title_text = str(getattr(self, "connection_lost_title", "Connection Lost") or "Connection Lost")
+        title = self.fonts["title_sm"].render(title_text, True, COLORS["error"])
         title_rect = title.get_rect(center=(modal_x + modal_w//2, modal_y + 50))
         self.screen.blit(title, title_rect)
         
         # Message
-        msg_lines = ["Network connection interrupted.", "Session has been terminated."]
+        msg_lines = getattr(self, "connection_lost_lines", None)
+        if not isinstance(msg_lines, (list, tuple)) or (not msg_lines):
+            msg_lines = ["Network connection interrupted.", "Session has been terminated."]
         start_msg_y = modal_y + 100
         for i, line in enumerate(msg_lines):
             line_surf = self.fonts["body_sm"].render(line, True, COLORS["text"])

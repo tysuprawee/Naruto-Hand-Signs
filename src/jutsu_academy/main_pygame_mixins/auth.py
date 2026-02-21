@@ -332,7 +332,7 @@ class AuthMixin:
             print("[AUTH] Already logged in")
             return
         
-        if not DISCORD_CLIENT_ID or not DISCORD_CLIENT_SECRET:
+        if not DISCORD_CLIENT_ID:
             print("[AUTH] Missing Discord credentials in env")
             return
 
@@ -392,7 +392,7 @@ class AuthMixin:
         try:
             from src.jutsu_academy.discord_auth import DiscordLogin
             # Create and store instance
-            auth = DiscordLogin(DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET)
+            auth = DiscordLogin(DISCORD_CLIENT_ID)
             self.auth_instance = auth
 
             # Expose the URL

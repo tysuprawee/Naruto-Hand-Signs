@@ -68,8 +68,24 @@ def get_env():
     # 1. Try Loading from os.environ first (if loaded by dotenv elsewhere)
     for k, v in os.environ.items():
         env[k] = v
+
+    # 2. Try obfuscated .config.dat (preferred for release builds)
+    try:
+        from src.jutsu_academy.config_obfuscator import get_obfuscated_config_paths, load_obfuscated_config
+        for config_path in get_obfuscated_config_paths():
+            if config_path.exists():
+                try:
+                    config = load_obfuscated_config(str(config_path))
+                    if config:
+                        for k, v in config.items():
+                            if k not in env:
+                                env[k] = v
+                except Exception:
+                    pass
+    except ImportError:
+        pass
         
-    # 2. Check for .env files in common locations
+    # 3. Check for plain .env files in common locations (dev/fallback)
     for env_path in _candidate_env_files():
         if env_path.exists():
             try:
