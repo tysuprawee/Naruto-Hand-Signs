@@ -161,11 +161,11 @@ function getDiscordUsername(session: Session | null): string {
   const metadata = session?.user?.user_metadata;
   const preferred = String(
     metadata?.preferred_username
-      || metadata?.user_name
-      || metadata?.username
-      || metadata?.full_name
-      || metadata?.name
-      || "",
+    || metadata?.user_name
+    || metadata?.username
+    || metadata?.full_name
+    || metadata?.name
+    || "",
   ).trim();
   if (preferred) return preferred;
 
@@ -188,7 +188,7 @@ function toggleFullscreen(enabled: boolean): void {
   if (enabled) {
     if (document.fullscreenElement) return;
     if (root.requestFullscreen) {
-      void root.requestFullscreen().catch(() => {});
+      void root.requestFullscreen().catch(() => { });
       return;
     }
     if (root.webkitRequestFullscreen) {
@@ -199,7 +199,7 @@ function toggleFullscreen(enabled: boolean): void {
 
   if (!document.fullscreenElement) return;
   if (doc.exitFullscreen) {
-    void doc.exitFullscreen().catch(() => {});
+    void doc.exitFullscreen().catch(() => { });
     return;
   }
   if (doc.webkitExitFullscreen) {
@@ -595,21 +595,21 @@ export default function PlayPage() {
             )}
 
             {view === "tutorial" && (
-              <div className="mx-auto max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-6 md:p-8 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
-                <p className="text-xs font-black tracking-[0.2em] text-ninja-dim">
+              <div className="mx-auto max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-5 md:p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
+                <p className="text-[10px] md:text-xs font-black tracking-[0.2em] text-ninja-dim">
                   STEP {tutorialStep + 1} / {TUTORIAL_STEPS.length}
                 </p>
-                <h2 className="mt-2 text-3xl font-black tracking-tight text-white">{tutorial.title}</h2>
+                <h2 className="mt-1 text-2xl md:text-3xl font-black tracking-tight text-white">{tutorial.title}</h2>
 
-                <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-[320px,1fr]">
-                  <div className="overflow-hidden rounded-2xl border border-ninja-border bg-ninja-bg/60">
-                    <img src={tutorial.iconPath} alt={tutorial.title} className="h-full w-full object-cover" />
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-[280px,1fr]">
+                  <div className="overflow-hidden rounded-2xl border border-ninja-border bg-ninja-bg/60 flex items-center justify-center max-h-40 md:max-h-56">
+                    <img src={tutorial.iconPath} alt={tutorial.title} className="max-h-full w-full object-cover" />
                   </div>
 
-                  <div className="rounded-2xl border border-ninja-border bg-ninja-bg/40 p-5">
-                    <ul className="space-y-3 text-sm text-zinc-200">
+                  <div className="rounded-2xl border border-ninja-border bg-ninja-bg/40 p-4 flex flex-col justify-center">
+                    <ul className="space-y-2.5 text-sm text-zinc-200">
                       {tutorial.lines.map((line) => (
-                        <li key={line} className="leading-relaxed">
+                        <li key={line} className="leading-relaxed border-l-2 border-ninja-accent/30 pl-3">
                           {line}
                         </li>
                       ))}
@@ -617,7 +617,7 @@ export default function PlayPage() {
                   </div>
                 </div>
 
-                <div className="mt-6 flex flex-wrap gap-3">
+                <div className="mt-5 flex flex-wrap gap-2.5">
                   <button
                     type="button"
                     onClick={() => setTutorialStep((prev) => Math.max(0, prev - 1))}
@@ -666,13 +666,12 @@ export default function PlayPage() {
                   {ABOUT_SECTIONS.map((section) => (
                     <section key={section.title} className="rounded-xl border border-ninja-border bg-ninja-bg/35 p-4">
                       <h3
-                        className={`text-base font-black uppercase tracking-wide ${
-                          section.tone === "success"
+                        className={`text-base font-black uppercase tracking-wide ${section.tone === "success"
                             ? "text-green-300"
                             : section.tone === "error"
                               ? "text-red-300"
                               : "text-ninja-accent"
-                        }`}
+                          }`}
                       >
                         {section.title}
                       </h3>
