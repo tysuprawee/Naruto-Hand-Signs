@@ -2,7 +2,7 @@
 
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -17,7 +17,7 @@ import {
 
 import { supabase } from "@/utils/supabase";
 
-type PlayView = "menu" | "settings" | "tutorial" | "about";
+type PlayView = "menu" | "settings" | "tutorial" | "about" | "mode_select";
 
 interface TutorialStep {
   iconPath: string;
@@ -221,8 +221,18 @@ export default function PlayPage() {
   const [tutorialStep, setTutorialStep] = useState(0);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
 
+  const audioRef = useRef<HTMLAudioElement>(null);
+
   const [savedSettings, setSavedSettings] = useState<MenuSettingsState>(() => readStoredSettings());
   const [draftSettings, setDraftSettings] = useState<MenuSettingsState>(() => readStoredSettings());
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = savedSettings.musicVol;
+      // We attempt to play it continuously based on standard browser policies. It may need user interaction first.
+      audioRef.current.play().catch(() => { });
+    }
+  }, [savedSettings.musicVol]);
 
   const username = useMemo(() => getDiscordUsername(session), [session]);
   const avatarUrl = useMemo(() => {
@@ -324,6 +334,9 @@ export default function PlayPage() {
       />
       <div className="fixed inset-0 z-0 pointer-events-none bg-gradient-to-b from-black/55 via-black/70 to-black/85" />
 
+      {/* Background Music */}
+      <audio ref={audioRef} src="/sounds/music2.mp3" loop />
+
       <header className="relative z-20 border-b border-ninja-border bg-ninja-bg/70 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
           <Link href="/" className="flex items-center gap-3 hover:opacity-85 transition-opacity">
@@ -415,12 +428,13 @@ export default function PlayPage() {
                 </div>
 
                 <div className="mt-8 space-y-3">
-                  <Link
-                    href="/challenge"
-                    className="flex h-14 w-full items-center justify-center rounded-xl bg-ninja-accent text-base font-black tracking-wide text-white transition hover:bg-ninja-accent-glow"
+                  <button
+                    type="button"
+                    onClick={() => setView("mode_select")}
+                    className="flex h-14 w-full items-center justify-center rounded-xl bg-ninja-accent text-base font-black tracking-wide text-white transition hover:bg-ninja-accent-glow cursor-pointer"
                   >
                     ENTER ACADEMY
-                  </Link>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -667,10 +681,10 @@ export default function PlayPage() {
                     <section key={section.title} className="rounded-xl border border-ninja-border bg-ninja-bg/35 p-4">
                       <h3
                         className={`text-base font-black uppercase tracking-wide ${section.tone === "success"
-                            ? "text-green-300"
-                            : section.tone === "error"
-                              ? "text-red-300"
-                              : "text-ninja-accent"
+                          ? "text-green-300"
+                          : section.tone === "error"
+                            ? "text-red-300"
+                            : "text-ninja-accent"
                           }`}
                       >
                         {section.title}
@@ -684,6 +698,64 @@ export default function PlayPage() {
                       </ul>
                     </section>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {view === "mode_select" && (
+              <div className="mx-auto max-w-2xl rounded-3xl border border-ninja-border bg-ninja-panel/85 p-8 md:p-10 shadow-[0_18px_55px_rgba(0,0,0,0.5)] animate-in fade-in zoom-in-95 duration-200">
+                <div className="text-center mb-8">
+                  <h1 className="text-3xl md:text-4xl font-black tracking-tight text-white">SELECT YOUR PATH</h1>
+                  <p className="mt-2 text-sm font-bold tracking-[0.2em] text-ninja-accent">CHOOSE YOUR TRAINING</p>
+                </div>
+
+                <div className="space-y-3">
+                  <Link
+                    href="/challenge"
+                    className="flex h-14 w-full items-center justify-center rounded-xl bg-gradient-to-r from-zinc-700 to-zinc-600 hover:from-zinc-600 hover:to-zinc-500 text-base font-black tracking-wide text-white transition shadow-lg border border-zinc-500/30"
+                  >
+                    FREE OBSTACLE / PLAY
+                  </Link>
+                  <Link
+                    href="/challenge?mode=rank"
+                    className="flex h-14 w-full items-center justify-center rounded-xl bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 text-base font-black tracking-wide text-white transition shadow-lg border border-red-500/30"
+                  >
+                    RANK MODE
+                  </Link>
+                  <button
+                    type="button"
+                    disabled
+                    className="flex h-14 w-full items-center justify-center rounded-xl bg-blue-900/40 border border-blue-500/20 text-base font-black tracking-wide text-blue-300 opacity-60 cursor-not-allowed"
+                  >
+                    JUTSU LIBRARY (LOCKED)
+                  </button>
+                  <button
+                    type="button"
+                    disabled
+                    className="flex h-14 w-full items-center justify-center rounded-xl bg-zinc-800 border border-zinc-700 text-base font-black tracking-wide text-zinc-500 cursor-not-allowed"
+                  >
+                    MULTIPLAYER (LOCKED)
+                  </button>
+                  <button
+                    type="button"
+                    disabled
+                    className="flex h-14 w-full items-center justify-center rounded-xl bg-emerald-900/40 border border-emerald-500/20 text-base font-black tracking-wide text-emerald-300 opacity-60 cursor-not-allowed"
+                  >
+                    QUEST BOARD (LOCKED)
+                  </button>
+                  <Link
+                    href="/leaderboard"
+                    className="flex h-14 w-full items-center justify-center rounded-xl bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-base font-black tracking-wide text-white transition shadow-lg border border-yellow-500/30"
+                  >
+                    LEADERBOARD
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setView("menu")}
+                    className="mt-6 flex h-14 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
+                  >
+                    BACK
+                  </button>
                 </div>
               </div>
             )}
