@@ -154,8 +154,8 @@ export default function Home() {
 
               <div className="flex items-center gap-4">
                 <Link
-                  href="https://github.com/tysuprawee/Naruto-Hand-Signs/releases/download/v1.0.0-Windows/v1.0.0-JutsuAcademy-Portable-Win64.zip"
-                  onClick={() => trackClick("download_windows")}
+                  href="/download/win"
+                  onClick={() => trackClick("download_win")}
                   className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all cursor-pointer select-none"
                 >
                   {/* Windows/Microsoft Logo */}
