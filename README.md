@@ -67,13 +67,13 @@ A multi-platform project combining **computer vision**, **machine learning**, an
 
 | # | Sign | Key | # | Sign | Key |
 |---|------|-----|---|------|-----|
-| 1 | 🐯 Tiger | `1` | 8 | � Rat | `8` |
-| 2 | 🐗 Boar | `2` | 9 | � Horse | `9` |
-| 3 | 🐍 Snake | `3` | 10 | � Monkey | `0` |
-| 4 | 🐏 Ram | `4` | 11 | � Ox | `-` |
-| 5 | 🐦 Bird | `5` | 12 | � Hare | `=` |
-| 6 | 🐲 Dragon | `6` | 13 | � Clap | `/` |
-| 7 | � Dog | `7` | | | |
+| 1 | 🐯 Tiger | `1` | 8 | 🐀 Rat | `8` |
+| 2 | 🐗 Boar | `2` | 9 | 🐴 Horse | `9` |
+| 3 | 🐍 Snake | `3` | 10 | 🐒 Monkey | `0` |
+| 4 | 🐏 Ram | `4` | 11 | 🐂 Ox | `-` |
+| 5 | 🐦 Bird | `5` | 12 | 🐇 Hare | `=` |
+| 6 | 🐲 Dragon | `6` | 13 | 👏 Clap | `/` |
+| 7 | 🐕 Dog | `7` | | | |
 
 ---
 
