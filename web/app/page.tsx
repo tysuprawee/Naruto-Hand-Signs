@@ -152,11 +152,11 @@ export default function Home() {
                 VIEW RANKS
               </Link>
 
-              <div className="flex items-center gap-4">
+              <div className="flex flex-wrap items-center gap-4">
                 <Link
                   href="/download/win"
                   onClick={() => trackClick("download_win")}
-                  className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all cursor-pointer select-none"
+                  className="h-14 px-4 sm:px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-base sm:text-lg font-bold rounded-lg flex items-center gap-2 sm:gap-3 hover:bg-zinc-800/80 hover:text-white transition-all cursor-pointer select-none whitespace-nowrap"
                 >
                   {/* Windows/Microsoft Logo */}
                   <svg className="w-5 h-5 fill-current" viewBox="0 0 88 88" xmlns="http://www.w3.org/2000/svg">
@@ -168,7 +168,7 @@ export default function Home() {
                 <Link
                   href="/download/mac"
                   onClick={() => trackClick("download_mac")}
-                  className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all"
+                  className="h-14 px-4 sm:px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-base sm:text-lg font-bold rounded-lg flex items-center gap-2 sm:gap-3 hover:bg-zinc-800/80 hover:text-white transition-all whitespace-nowrap"
                 >
                   {/* Apple Logo */}
                   <svg className="w-5 h-5 fill-current" viewBox="0 0 814 1000" xmlns="http://www.w3.org/2000/svg">
