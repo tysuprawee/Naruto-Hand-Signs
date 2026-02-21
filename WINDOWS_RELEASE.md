@@ -124,13 +124,97 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\build_portable.ps1 -A
 
 1. Launch `JutsuAcademy.exe` on a clean Windows machine.
 2. Camera preview works in Settings.
-3. Enter Challenge and submit one score successfully.
-4. Version gate works (`app_config` version mismatch blocks game).
-5. Maintenance gate works (`app_config` maintenance row blocks game).
-6. Sound/music playback works.
-7. Asset-heavy pages render correctly (library, quests, about).
-8. Supabase online/offline behavior does not crash the app.
-9. Portable launcher update works end-to-end:
+3. In Free Play, turn `DIAG: ON` and verify:
+   - `MODEL: MEDIAPIPE`
+   - `MP BACKEND: TASKS VIDEO` (or `TASKS IMAGE` / `LEGACY SOLUTIONS`)
+   - `HANDS:` increases above `0` when hands are visible
+   - `RAW:` changes from `IDLE` to sign names
+4. Enter Challenge and submit one score successfully.
+5. Version gate works (`app_config` version mismatch blocks game).
+6. Maintenance gate works (`app_config` maintenance row blocks game).
+7. Sound/music playback works.
+8. Asset-heavy pages render correctly (library, quests, about).
+9. Supabase online/offline behavior does not crash the app.
+10. Portable launcher update works end-to-end:
    - old local version,
    - new `app_config` version + zip URL + checksum,
    - launcher downloads and updates app before start.
+
+## 7) Hand Detection Troubleshooting (Windows)
+
+If webcam preview works but signs do not progress, follow this exact flow.
+
+### A) Always test from a fresh extraction
+
+1. Close every running `JutsuAcademy.exe`.
+2. Delete old extracted portable folder.
+3. Extract the latest zip to a brand-new folder.
+4. Launch from `Start-JutsuAcademy.bat`.
+
+### B) Verify runtime settings
+
+1. Go to Settings:
+   - `Show Hand Skeleton` = ON
+   - `Restricted Signs (Require 2 Hands)`:
+     - ON for challenge-like behavior
+     - OFF for easier Free Play testing
+2. Start Free Play and toggle `DIAG: ON`.
+
+### C) Read DIAG and decide quickly
+
+Use these DIAG fields:
+
+- `MP BACKEND`
+- `HANDS`
+- `RAW`
+- `STRICT 2H`
+- `MP ERR` (if present)
+
+Interpretation:
+
+- `MP BACKEND: NONE` or `MP ERR` contains `hand_model_missing`
+  - Packaging issue. The hand model is not in the build.
+- `HANDS: 0` always, but backend is loaded
+  - Camera stream is available but detector is not seeing hands (camera index, lighting, framing, or backend issue).
+- `HANDS: >0` but `RAW` stays `IDLE`
+  - Most often strict mode + one hand visible, or confidence/gating conditions.
+
+### D) Confirm packaged model files exist
+
+Run in PowerShell from repo root:
+
+```powershell
+Get-ChildItem -Recurse .\dist\JutsuAcademy\_internal\models | Select-Object FullName
+```
+
+Expected to include:
+
+- `hand_landmarker.task`
+- `face_landmarker.task`
+
+Also check MediaPipe runtime payload:
+
+```powershell
+Get-ChildItem -Recurse .\dist\JutsuAcademy\_internal | Where-Object { $_.FullName -match "mediapipe|tasks" } | Select-Object -First 40 FullName
+```
+
+### E) If still failing on one machine only
+
+1. In Settings, click `SCAN CAMERAS` and reselect camera.
+2. Close apps that may lock camera (Discord, OBS, browser tabs).
+3. Ensure both hands are fully in frame under stable light.
+4. Capture one screenshot with `DIAG: ON` showing:
+   - `MP BACKEND`
+   - `HANDS`
+   - `RAW`
+   - `MP ERR` (if present)
+
+### F) Backend behavior in current build
+
+Current runtime backend order is:
+
+1. `TASKS VIDEO`
+2. `TASKS IMAGE` fallback
+3. `LEGACY SOLUTIONS` fallback
+
+If one backend fails at runtime, the app tries the next one automatically.
