@@ -3,6 +3,18 @@ from src.utils.paths import resolve_resource_path
 
 
 class AuthMixin:
+    def _clear_invalid_saved_session(self, session_path, reason):
+        """Fail-closed helper for untrusted/tampered saved sessions."""
+        print(f"[!] Saved session rejected ({reason}).")
+        self.discord_user = None
+        self.username = "Guest"
+        if hasattr(self, "_sync_network_identity"):
+            self._sync_network_identity()
+        try:
+            session_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     def _verify_discord_identity_from_token(self, discord_user, timeout_s=5.0):
         """
         Validate Discord identity using the bearer token and return canonical user payload.
@@ -107,10 +119,30 @@ class AuthMixin:
                     verified_user = self._verify_discord_identity_from_token(loaded_user, timeout_s=4.0)
 
                     if verified_user:
-                        loaded_id = str((loaded_user or {}).get("id") or "").strip()
+                        loaded_id = str((data or {}).get("discord_id") or "").strip()
+                        if (not loaded_id) and isinstance(loaded_user, dict):
+                            loaded_id = str((loaded_user or {}).get("id") or "").strip()
+                        loaded_username = str((data or {}).get("username") or "").strip()
+                        if (not loaded_username) and isinstance(loaded_user, dict):
+                            loaded_username = str((loaded_user or {}).get("username") or "").strip()
+
                         verified_id = str(verified_user.get("id") or "").strip()
-                        if loaded_id and verified_id and loaded_id != verified_id:
-                            print(f"[!] Session identity mismatch (file={loaded_id}, token={verified_id}). Using token identity.")
+                        verified_username = str(verified_user.get("username") or "").strip()
+
+                        id_mismatch = bool(loaded_id and verified_id and loaded_id != verified_id)
+                        username_mismatch = bool(
+                            loaded_username
+                            and verified_username
+                            and loaded_username != verified_username
+                        )
+                        if id_mismatch or username_mismatch:
+                            detail = []
+                            if id_mismatch:
+                                detail.append("discord_id mismatch")
+                            if username_mismatch:
+                                detail.append("username mismatch")
+                            self._clear_invalid_saved_session(session_path, ", ".join(detail))
+                            return
 
                         self.discord_user = verified_user
                         self.username = str(verified_user.get("username") or "Guest")
@@ -122,13 +154,7 @@ class AuthMixin:
                         # Avatar only; token already verified above.
                         threading.Thread(target=self._load_discord_avatar, daemon=True).start()
                     else:
-                        print("[!] Saved session rejected (invalid or unverified Discord token).")
-                        self.discord_user = None
-                        self.username = "Guest"
-                        try:
-                            session_path.unlink(missing_ok=True)
-                        except Exception:
-                            pass
+                        self._clear_invalid_saved_session(session_path, "invalid or unverified Discord token")
         except Exception as e:
             print(f"[!] Session load error: {e}")
 
@@ -146,10 +172,13 @@ class AuthMixin:
 
             old_id = str((self.discord_user or {}).get("id") or "").strip()
             new_id = str(verified_user.get("id") or "").strip()
+            if old_id and new_id and old_id != new_id:
+                print(f"[-] Discord session rejected (token owner mismatch: {old_id} != {new_id}).")
+                self.logout_discord()
+                return
+
             self.discord_user = verified_user
             self.username = str(verified_user.get("username") or self.username or "Guest")
-            if old_id and new_id and old_id != new_id:
-                print(f"[!] Session token owner changed ({old_id} -> {new_id}). Identity updated.")
             print("[+] Discord session validated")
             if hasattr(self, "_sync_network_identity"):
                 self._sync_network_identity()
@@ -160,8 +189,14 @@ class AuthMixin:
     def _save_user_session(self):
         """Save user session to file."""
         try:
+            discord_id = ""
+            canonical_username = str(self.username or "Guest")
+            if isinstance(self.discord_user, dict):
+                discord_id = str(self.discord_user.get("id") or "").strip()
+                canonical_username = str(self.discord_user.get("username") or canonical_username or "Guest")
             data = {
-                "username": self.username,
+                "username": canonical_username,
+                "discord_id": discord_id,
                 "discord_user": self.discord_user
             }
             with open("user_session.json", "w") as f:

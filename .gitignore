@@ -1,33 +1,31 @@
-# Virtual Environment
+# ===========================
+# Python
+# ===========================
 venv/
 .venv/
+.venv-build/
 env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+pip-log.txt
 
-# Environment Variables (SECRETS - NEVER COMMIT)
+# ===========================
+# Environment / Secrets (NEVER COMMIT)
+# ===========================
 .env
 .env.local
 .env.release
-
-# Session files (contain OAuth tokens - NEVER COMMIT)
 user_session.json
 
 # Per-user calibration artifacts (local only)
 src/jutsu_academy/calibration/discord_*.json
 
-# Python cache
-__pycache__/
-*.py[cod]
-
-# OS Files
-.DS_Store
-
-# Large Model Files/Runs (Optional, uncomment if you want to exclude training results)
-# models/runs/
-
-# IDE
-.vscode/
-
-# PyInstaller / Build
+# ===========================
+# PyInstaller / Build Artifacts
+# ===========================
 dist/
 build/
 *.spec
@@ -35,3 +33,59 @@ JutsuAcademy.app/
 dist_portable/
 dist_portable_mac/
 dist_installer/
+
+# ===========================
+# Large Model / ML Files
+# ===========================
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.task
+*.h5
+*.pkl
+models/runs/
+
+# ===========================
+# Dataset (too large for git)
+# ===========================
+dataset/
+
+# ===========================
+# Web / Node.js
+# ===========================
+web/node_modules/
+web/.next/
+web/out/
+web/.vercel
+web/*.tsbuildinfo
+web/next-env.d.ts
+
+# Large web assets (wasm/csv served from public)
+web/public/*.wasm
+web/public/*.csv
+
+# ===========================
+# OS Files
+# ===========================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===========================
+# IDE / Editor
+# ===========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===========================
+# Misc
+# ===========================
+*.log
+npm-debug.log*
+yarn-debug.log*
+*.pem
+*.zip

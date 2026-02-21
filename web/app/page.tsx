@@ -152,35 +152,47 @@ export default function Home() {
                 VIEW RANKS
               </Link>
 
-              <button
-                type="button"
-                onClick={() => {
-                  trackClick("download_beta");
-                  openModal("Beta Access", "The beta version of the game will be released on the official launch date.");
-                }}
-                className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all cursor-pointer select-none"
-              >
-                {/* Windows/Microsoft Logo */}
-                <svg className="w-5 h-5 fill-current" viewBox="0 0 88 88" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M0 12.402l35.687-4.86.016 34.423-35.67.216zm35.707 34.005l-.012 34.697-35.695-4.913V46.602zM39.98 6.01L87.314 0v41.527l-47.334.373zM87.314 46.223V88L39.98 81.385V46.613z" />
-                </svg>
-                DOWNLOAD BETA
-              </button>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    trackClick("download_beta");
+                    openModal("Beta Access", "The beta version of the game will be released on the official launch date.");
+                  }}
+                  className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all cursor-pointer select-none"
+                >
+                  {/* Windows/Microsoft Logo */}
+                  <svg className="w-5 h-5 fill-current" viewBox="0 0 88 88" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M0 12.402l35.687-4.86.016 34.423-35.67.216zm35.707 34.005l-.012 34.697-35.695-4.913V46.602zM39.98 6.01L87.314 0v41.527l-47.334.373zM87.314 46.223V88L39.98 81.385V46.613z" />
+                  </svg>
+                  Windows
+                </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  trackClick("github_repo");
-                  openModal("Source Code", "The GitHub repository will be revealed on beta launch day.");
-                }}
-                title="Source code available later"
-                className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all cursor-pointer select-none"
+                <Link
+                  href="/download/mac"
+                  onClick={() => trackClick("download_mac")}
+                  className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all"
+                >
+                  {/* Apple Logo */}
+                  <svg className="w-5 h-5 fill-current" viewBox="0 0 814 1000" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81-105.6-207.4-105.6-328.1 0-192.8 125.5-295.1 248.3-295.1 65.4 0 119.9 42.8 160.8 42.8 39.2 0 100.4-45.3 174.6-45.3 28.2 0 129.4 2.5 196.5 96.1zM554.1 159.4c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.8 32.4-54.4 83.7-54.4 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.8-30.4 134.8-71.3z" />
+                  </svg>
+                  macOS (Apple Silicon)
+                </Link>
+              </div>
+
+              <a
+                href="https://github.com/tysuprawee/Naruto-Hand-Signs"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => trackClick("github_repo")}
+                className="h-14 px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-lg font-bold rounded-lg flex items-center gap-3 hover:bg-zinc-800/80 hover:text-white transition-all"
               >
                 <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                   <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
                 </svg>
                 GITHUB
-              </button>
+              </a>
 
               <div className="flex items-center gap-3">
                 <a href="https://www.youtube.com/@James_Uzumaki" target="_blank" onClick={() => trackClick("youtube_hero")} className="h-14 w-14 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 hover:text-red-500 hover:border-red-500/50 rounded-lg flex items-center justify-center transition-all opacity-85 hover:opacity-100">

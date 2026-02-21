@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
 param(
     [string]$AppName = "JutsuAcademy",
     [switch]$SkipBuild,
@@ -8,8 +5,17 @@ param(
     [switch]$AllowDefaultEnv
 )
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
 function Get-RepoRoot {
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $scriptDir = if ($PSScriptRoot) {
+        $PSScriptRoot
+    } elseif ($PSCommandPath) {
+        Split-Path -Parent $PSCommandPath
+    } else {
+        throw "Could not determine script directory."
+    }
     return (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 }
 

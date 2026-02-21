@@ -1,14 +1,20 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
 param(
     [string]$AppName = "JutsuAcademy",
     [string]$AppVersion = "",
     [string]$IsccPath = ""
 )
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
 function Get-RepoRoot {
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $scriptDir = if ($PSScriptRoot) {
+        $PSScriptRoot
+    } elseif ($PSCommandPath) {
+        Split-Path -Parent $PSCommandPath
+    } else {
+        throw "Could not determine script directory."
+    }
     return (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 }
 
@@ -30,9 +36,15 @@ function Resolve-Iscc([string]$explicitPath) {
     try {
         return (Get-Command iscc -ErrorAction Stop).Source
     } catch {
-        $fallback = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-        if (Test-Path $fallback) {
-            return $fallback
+        $fallbacks = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe",
+            (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+        )
+        foreach ($fallback in $fallbacks) {
+            if ($fallback -and (Test-Path $fallback)) {
+                return $fallback
+            }
         }
     }
 

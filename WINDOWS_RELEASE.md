@@ -139,8 +139,24 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\build_portable.ps1 -A
    - old local version,
    - new `app_config` version + zip URL + checksum,
    - launcher downloads and updates app before start.
+11. Local session spoofing is blocked:
+   - edit `user_session.json` identity fields (`username` / `discord_id`) with a real token still present,
+   - relaunch app,
+   - app rejects session (fail-closed) and forces guest/login state.
 
-## 7) Hand Detection Troubleshooting (Windows)
+## 7) Security Note: Local Session Spoofing
+
+The app must not trust local `user_session.json` identity fields on their own.
+
+Expected behavior:
+
+- Session load validates Discord access token via `GET https://discord.com/api/users/@me`.
+- Runtime identity is canonicalized from Discord response, not from local JSON.
+- If token is invalid or identity fields mismatch token owner, saved session is rejected (fail-closed).
+
+This prevents basic copy/paste impersonation by editing local session files.
+
+## 8) Hand Detection Troubleshooting (Windows)
 
 If webcam preview works but signs do not progress, follow this exact flow.
 
