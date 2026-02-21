@@ -50,7 +50,7 @@ Output:
 Use `.env.release` for shipping:
 
 - If `.env.release` exists, build scripts copy it as package `.env`.
-- If `.env.release` is missing, release build scripts now fail fast.
+- If not, build continues without copying env.
 - Use `-AllowDefaultEnv` only for local testing (it copies `.env`).
 - Recommended: put only safe/public values in `.env.release` (never service-role keys).
 - Starter template: copy `/Users/bugatti/Documents/Naruto/.env.release.example` to `.env.release`.
@@ -98,6 +98,18 @@ DISCORD_CLIENT_ID=<client_id_if_needed>
 
 Do not include `SUPABASE_SERVICE_ROLE_KEY` in any shipped file.
 
+## Security Note: Local Session Spoofing
+
+The app must not trust local `user_session.json` identity fields (`username`, `discord_id`) on their own.
+
+Current expected behavior:
+
+- Session load validates the Discord access token against Discord `GET /users/@me`.
+- Runtime identity is canonicalized from Discord response, not from local JSON.
+- If token is invalid/mismatched, session is rejected (fail-closed).
+
+This prevents basic copy/paste impersonation by editing local session files.
+
 ## 5) Optional Flags
 
 ```powershell
@@ -139,24 +151,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\build_portable.ps1 -A
    - old local version,
    - new `app_config` version + zip URL + checksum,
    - launcher downloads and updates app before start.
-11. Local session spoofing is blocked:
-   - edit `user_session.json` identity fields (`username` / `discord_id`) with a real token still present,
-   - relaunch app,
-   - app rejects session (fail-closed) and forces guest/login state.
 
-## 7) Security Note: Local Session Spoofing
-
-The app must not trust local `user_session.json` identity fields on their own.
-
-Expected behavior:
-
-- Session load validates Discord access token via `GET https://discord.com/api/users/@me`.
-- Runtime identity is canonicalized from Discord response, not from local JSON.
-- If token is invalid or identity fields mismatch token owner, saved session is rejected (fail-closed).
-
-This prevents basic copy/paste impersonation by editing local session files.
-
-## 8) Hand Detection Troubleshooting (Windows)
+## 7) Hand Detection Troubleshooting (Windows)
 
 If webcam preview works but signs do not progress, follow this exact flow.
 
