@@ -4,6 +4,7 @@ import CursorGuard from "./cursor-guard";
 import AnalyticsTracker from "./analytics-tracker";
 
 import { ModalProvider } from "./components/modal-provider";
+import { LanguageProvider } from "./components/language-provider";
 
 export const metadata: Metadata = {
   title: "Shinobi Academy | AI Jutsu Trainer",
@@ -19,11 +20,13 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
-        <ModalProvider>
-          <CursorGuard />
-          <AnalyticsTracker />
-          {children}
-        </ModalProvider>
+        <LanguageProvider>
+          <ModalProvider>
+            <CursorGuard />
+            <AnalyticsTracker />
+            {children}
+          </ModalProvider>
+        </LanguageProvider>
       </body>
     </html>
   );

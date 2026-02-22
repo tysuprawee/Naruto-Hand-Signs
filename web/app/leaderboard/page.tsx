@@ -30,6 +30,30 @@ interface ModeRow {
     mode: string;
 }
 
+function speedIdentityKey(row: Pick<LeaderboardEntry, "discord_id" | "username">): string {
+    const discordId = String(row.discord_id || "").trim();
+    if (discordId) return `d:${discordId}`;
+    const username = String(row.username || "").trim().toLowerCase();
+    if (username) return `u:${username}`;
+    return "";
+}
+
+function dedupeBestSpeedRows(rows: LeaderboardEntry[]): LeaderboardEntry[] {
+    const seen = new Set<string>();
+    const out: LeaderboardEntry[] = [];
+    for (const row of rows) {
+        const score = Number(row.score_time);
+        if (!Number.isFinite(score) || score <= 0) continue;
+        const identity = speedIdentityKey(row);
+        const fallback = String(row.id || "").trim();
+        const key = identity || (fallback ? `r:${fallback}` : "");
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(row);
+    }
+    return out;
+}
+
 function LeaderboardContent() {
     const DEV_DISCORD_ID = (process.env.NEXT_PUBLIC_DEV_DISCORD_ID || "").trim();
     const PAGE_SIZE = 10;
@@ -144,24 +168,38 @@ function LeaderboardContent() {
                     return;
                 }
 
-                const { data: leaderboardData, error: leaderboardError, count } = await supabase
-                    .from("leaderboard")
-                    .select("*", { count: "exact" })
-                    .eq("mode", mode)
-                    .order("score_time", { ascending: true })
-                    .range(from, to);
+                const allAttempts: LeaderboardEntry[] = [];
+                const batchSize = 500;
+                let cursor = 0;
 
-                if (leaderboardError) {
-                    console.error("Error fetching speed leaderboard:", leaderboardError);
-                    setEntries([]);
-                    setTotalCount(0);
-                    setLoading(false);
-                    return;
+                while (true) {
+                    const { data: batchData, error: batchError } = await supabase
+                        .from("leaderboard")
+                        .select("id,created_at,username,score_time,mode,discord_id,avatar_url")
+                        .eq("mode", mode)
+                        .order("score_time", { ascending: true })
+                        .order("id", { ascending: true })
+                        .range(cursor, cursor + batchSize - 1);
+
+                    if (batchError) {
+                        console.error("Error fetching speed leaderboard:", batchError);
+                        setEntries([]);
+                        setTotalCount(0);
+                        setLoading(false);
+                        return;
+                    }
+
+                    const rows = (batchData || []) as LeaderboardEntry[];
+                    if (rows.length === 0) break;
+                    allAttempts.push(...rows);
+                    if (rows.length < batchSize) break;
+                    cursor += batchSize;
                 }
 
-                setEntries((leaderboardData || []) as LeaderboardEntry[]);
+                const bestRows = dedupeBestSpeedRows(allAttempts);
+                setEntries(bestRows.slice(from, to + 1));
                 setProfiles([]);
-                setTotalCount(count || 0);
+                setTotalCount(bestRows.length);
             } else {
                 const { data: profileData, error: profileError, count } = await supabase
                     .from("profiles")

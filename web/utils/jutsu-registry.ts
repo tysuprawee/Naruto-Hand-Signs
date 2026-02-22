@@ -1,4 +1,4 @@
-export type JutsuEffect = "fire" | "lightning" | "clone" | "water" | "eye" | "rasengan";
+export type JutsuEffect = "fire" | "lightning" | "clone" | "water" | "eye" | "rasengan" | "reaper";
 
 export interface ComboPart {
     name: string;
@@ -51,6 +51,15 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         videoPath: null,
         effect: "clone",
         minLevel: 0,
+    },
+    "Reaper Death Seal": {
+        sequence: ["snake", "boar", "ram", "hare", "dog", "rat", "bird", "horse", "snake", "clap"],
+        displayText: "SHIKI FUJIN!",
+        soundPath: null,
+        videoPath: null,
+        effect: "reaper",
+        duration: 7.0,
+        minLevel: 10,
     },
     "Rasengan": {
         sequence: ["ram"],

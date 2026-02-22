@@ -5,20 +5,27 @@ import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
   Loader2,
   LogIn,
   LogOut,
+  Maximize,
   Settings,
   Sparkles,
+  WifiOff,
   X,
 } from "lucide-react";
 
 import { supabase } from "@/utils/supabase";
 import { OFFICIAL_JUTSUS } from "@/utils/jutsu-registry";
-import { DEFAULT_FILTERS, type CalibrationProfile } from "@/utils/detection-filters";
+import {
+  DEFAULT_FILTERS,
+  evaluateLighting,
+  type CalibrationProfile,
+} from "@/utils/detection-filters";
 import {
   createInitialProgression,
   getLevelFromXp,
@@ -32,17 +39,18 @@ import PlayArena, {
   type PlayArenaProofEvent,
   type PlayArenaResult,
 } from "@/app/play/play-arena";
+import { LANGUAGE_OPTIONS, useLanguage } from "@/app/components/language-provider";
+import type { LanguageCode } from "@/utils/i18n";
 
 type PlayView =
   | "menu"
   | "mode_select"
-  | "free_play"
-  | "rank_mode"
   | "calibration_gate"
   | "calibration_session"
   | "free_session"
   | "rank_session"
   | "jutsu_library"
+  | "leaderboard"
   | "multiplayer"
   | "quest_board"
   | "settings"
@@ -133,7 +141,30 @@ interface MasteryPanelState {
   newTier: "none" | "bronze" | "silver" | "gold";
 }
 
+interface LeaderboardSpeedRow {
+  id: string;
+  username: string;
+  score_time: number;
+  mode: string;
+  discord_id?: string | null;
+  avatar_url?: string | null;
+}
+
+interface LeaderboardLevelRow {
+  id: string;
+  username: string;
+  xp: number;
+  level: number;
+  rank?: string | null;
+  discord_id?: string | null;
+  avatar_url?: string | null;
+}
+
 const SETTINGS_STORAGE_KEY = "jutsu-play-menu-settings-v1";
+const MENU_MUTE_STORAGE_KEY = "jutsu-play-menu-mute-v1";
+const PENDING_RANK_QUEUE_PREFIX = "jutsu-play-pending-rank-submit-v1";
+const PENDING_RANK_QUEUE_MAX = 20;
+const PENDING_RANK_REPLAY_BATCH = 4;
 const WEB_APP_VERSION = "1.0.0";
 
 interface RuntimeGateState {
@@ -148,6 +179,34 @@ interface AnnouncementRow {
   createdAt: string;
 }
 
+interface ErrorModalState {
+  title: string;
+  message: string;
+}
+
+interface AlertModalState {
+  title: string;
+  message: string;
+  buttonText: string;
+}
+
+interface ConnectionLostState {
+  title: string;
+  lines: string[];
+}
+
+interface PendingRankSubmitRecord {
+  id: string;
+  fingerprint: string;
+  createdAt: string;
+  updatedAt: string;
+  attempts: number;
+  lastReason: string;
+  result: PlayArenaResult;
+}
+
+type LightingReadiness = "good" | "low_light" | "overexposed" | "low_contrast";
+
 const DEFAULT_SETTINGS: MenuSettingsState = {
   musicVol: 0.5,
   sfxVol: 0.7,
@@ -158,6 +217,12 @@ const DEFAULT_SETTINGS: MenuSettingsState = {
   fullscreen: false,
 };
 
+const RESOLUTION_OPTIONS: Array<{ width: number; height: number; label: string }> = [
+  { width: 640, height: 480, label: "640x480" },
+  { width: 1280, height: 720, label: "1280x720" },
+  { width: 1920, height: 1080, label: "1920x1080" },
+];
+
 const QUEST_DEFS: QuestDefinition[] = [
   { scope: "daily", id: "d_signs", title: "Land 25 correct signs", target: 25, reward: 120 },
   { scope: "daily", id: "d_jutsus", title: "Complete 5 jutsu runs", target: 5, reward: 180 },
@@ -166,6 +231,11 @@ const QUEST_DEFS: QuestDefinition[] = [
   { scope: "weekly", id: "w_challenges", title: "Finish 12 rank mode runs", target: 12, reward: 900 },
   { scope: "weekly", id: "w_xp", title: "Earn 4000 XP", target: 4000, reward: 1200 },
 ];
+
+const LEADERBOARD_PAGE_SIZE = 10;
+const LEADERBOARD_MODE_LIST = Object.entries(OFFICIAL_JUTSUS)
+  .sort((a, b) => a[1].minLevel - b[1].minLevel || a[0].localeCompare(b[0]))
+  .map(([name]) => name.toUpperCase());
 
 const JUTSU_TEXTURES: Record<string, string> = {
   "Shadow Clone": "/pics/textured_buttons/shadow_clone.jpg",
@@ -177,6 +247,7 @@ const JUTSU_TEXTURES: Record<string, string> = {
   Chidori: "/pics/textured_buttons/chidori.jpg",
   "Water Dragon": "/pics/textured_buttons/water_dragon.jpg",
   Sharingan: "/pics/textured_buttons/sharingan.jpg",
+  "Reaper Death Seal": "/pics/textured_buttons/reaper_death.jpg",
 };
 
 const MASTERY_ICON_BY_TIER: Record<"none" | "bronze" | "silver" | "gold", string> = {
@@ -308,6 +379,15 @@ function readStoredSettings(): MenuSettingsState {
   }
 }
 
+function readStoredMenuMute(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(MENU_MUTE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -414,7 +494,7 @@ function toggleFullscreen(enabled: boolean): void {
   if (enabled) {
     if (document.fullscreenElement) return;
     if (root.requestFullscreen) {
-      void root.requestFullscreen().catch(() => {});
+      void root.requestFullscreen().catch(() => { });
       return;
     }
     if (root.webkitRequestFullscreen) {
@@ -425,7 +505,7 @@ function toggleFullscreen(enabled: boolean): void {
 
   if (!document.fullscreenElement) return;
   if (doc.exitFullscreen) {
-    void doc.exitFullscreen().catch(() => {});
+    void doc.exitFullscreen().catch(() => { });
     return;
   }
   if (doc.webkitExitFullscreen) {
@@ -712,6 +792,15 @@ interface RankProofValidationResult {
   lastSignSec: number;
 }
 
+interface RankSecureSubmitAttemptResult {
+  ok: boolean;
+  retryable: boolean;
+  reason: string;
+  statusText: string;
+  detailText: string;
+  rankText: string;
+}
+
 function sanitizeProofEvents(rawEvents: unknown): PlayArenaProofEvent[] {
   if (!Array.isArray(rawEvents)) return [];
   const out: PlayArenaProofEvent[] = [];
@@ -759,6 +848,115 @@ function sanitizeProofEvents(rawEvents: unknown): PlayArenaProofEvent[] {
     if (out.length >= 260) break;
   }
   return out;
+}
+
+function toUtcIsoNoMs(now = new Date()): string {
+  return now.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function buildPendingRankQueueStorageKey(discordId: string): string {
+  return `${PENDING_RANK_QUEUE_PREFIX}:${String(discordId || "").trim()}`;
+}
+
+function makePendingRankRecordId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `rank_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function buildPendingRankFingerprint(result: PlayArenaResult): string {
+  const proof = result.proof as PlayArenaProof | undefined;
+  const runToken = String(proof?.runToken || "").trim();
+  if (runToken) return `token:${runToken}`;
+
+  const startedAt = String(proof?.clientStartedAtIso || "").trim();
+  const elapsed = Number(result.elapsedSeconds || 0);
+  const elapsedSafe = Number.isFinite(elapsed) ? elapsed : 0;
+  const expectedSigns = Math.max(0, Math.floor(Number(result.expectedSigns) || 0));
+  return `run:${String(result.jutsuName || "").trim().toUpperCase()}|${startedAt}|${elapsedSafe.toFixed(4)}|${expectedSigns}`;
+}
+
+function isTransientSubmitFailure(reasonRaw: unknown, detailRaw: unknown): boolean {
+  const text = `${String(reasonRaw || "")} ${String(detailRaw || "")}`.toLowerCase();
+  return /(offline|network|timeout|timed out|fetch failed|failed to fetch|connection|rpc_error)/i.test(text);
+}
+
+function isDuplicateSubmitFailure(reasonRaw: unknown, detailRaw: unknown): boolean {
+  const text = `${String(reasonRaw || "")} ${String(detailRaw || "")}`.toLowerCase();
+  return /(duplicate|already|replay|exists|token_used|already_submitted|already_recorded)/i.test(text);
+}
+
+function sanitizeQueuedRankResult(raw: unknown): PlayArenaResult | null {
+  if (!isRecord(raw)) return null;
+  if (String(raw.mode || "").trim() !== "rank") return null;
+
+  const jutsuName = String(raw.jutsuName || "").trim();
+  if (!jutsuName) return null;
+
+  const expectedSigns = Math.max(1, Math.floor(Number(raw.expectedSigns) || 0));
+  const signsLanded = Math.max(0, Math.floor(Number(raw.signsLanded) || 0));
+  const elapsedSeconds = Number(raw.elapsedSeconds);
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return null;
+
+  const proofRaw = isRecord(raw.proof) ? raw.proof : null;
+  if (!proofRaw) return null;
+  const events = sanitizeProofEvents(proofRaw.events);
+  if (events.length === 0) return null;
+
+  const cooldownMs = Number(proofRaw.cooldownMs);
+  const voteRequiredHits = Math.floor(Number(proofRaw.voteRequiredHits));
+  const voteMinConfidence = Number(proofRaw.voteMinConfidence);
+  if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) return null;
+  if (!Number.isFinite(voteRequiredHits) || voteRequiredHits <= 0) return null;
+  if (!Number.isFinite(voteMinConfidence) || voteMinConfidence <= 0) return null;
+
+  const proof: PlayArenaProof = {
+    runToken: String(proofRaw.runToken || ""),
+    tokenSource: String(proofRaw.tokenSource || "none"),
+    tokenIssueReason: String(proofRaw.tokenIssueReason || ""),
+    clientStartedAtIso: String(proofRaw.clientStartedAtIso || ""),
+    events,
+    eventOverflow: Boolean(proofRaw.eventOverflow),
+    cooldownMs,
+    voteRequiredHits,
+    voteMinConfidence,
+    restrictedSigns: Boolean(proofRaw.restrictedSigns),
+    cameraIdx: Math.max(0, Math.floor(Number(proofRaw.cameraIdx) || 0)),
+    resolutionIdx: Math.max(0, Math.floor(Number(proofRaw.resolutionIdx) || 0)),
+  };
+
+  return {
+    mode: "rank",
+    jutsuName,
+    signsLanded,
+    expectedSigns,
+    elapsedSeconds,
+    proof,
+  };
+}
+
+function sanitizePendingRankRecord(raw: unknown): PendingRankSubmitRecord | null {
+  if (!isRecord(raw)) return null;
+  const result = sanitizeQueuedRankResult(raw.result);
+  if (!result) return null;
+
+  const id = String(raw.id || "").trim() || makePendingRankRecordId();
+  const createdAt = String(raw.createdAt || "").trim() || toUtcIsoNoMs();
+  const updatedAt = String(raw.updatedAt || "").trim() || createdAt;
+  const attempts = Math.max(0, Math.floor(Number(raw.attempts) || 0));
+  const lastReason = String(raw.lastReason || "").trim().slice(0, 160);
+  const fingerprint = String(raw.fingerprint || "").trim() || buildPendingRankFingerprint(result);
+
+  return {
+    id,
+    fingerprint,
+    createdAt,
+    updatedAt,
+    attempts,
+    lastReason,
+    result,
+  };
 }
 
 function validateRankProofClient(result: PlayArenaResult): RankProofValidationResult {
@@ -971,14 +1169,65 @@ function toRpcError(prefix: string, payload: Record<string, unknown>): string {
   return `${prefix}: ${reason}`;
 }
 
+function formatLeaderboardModeLabel(rawMode: string): string {
+  return String(rawMode || "")
+    .toLowerCase()
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
+function getSpeedLeaderboardIdentityKey(row: Pick<LeaderboardSpeedRow, "discord_id" | "username">): string {
+  const discordId = String(row.discord_id || "").trim();
+  if (discordId) return `d:${discordId}`;
+  const username = String(row.username || "").trim().toLowerCase();
+  if (username) return `u:${username}`;
+  return "";
+}
+
+function dedupeSpeedLeaderboardRows(rows: LeaderboardSpeedRow[]): LeaderboardSpeedRow[] {
+  const seen = new Set<string>();
+  const out: LeaderboardSpeedRow[] = [];
+  for (const row of rows) {
+    const score = Number(row.score_time);
+    if (!Number.isFinite(score) || score <= 0) continue;
+    const identityKey = getSpeedLeaderboardIdentityKey(row);
+    const fallbackId = String(row.id || "").trim();
+    const key = identityKey || (fallbackId ? `r:${fallbackId}` : "");
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function getLeaderboardTitleForRank(rank: number): "HOKAGE" | "JONIN" | "CHUNIN" | "GENIN" {
+  if (rank === 1) return "HOKAGE";
+  if (rank <= 3) return "JONIN";
+  if (rank <= 10) return "CHUNIN";
+  return "GENIN";
+}
+
+function getLeaderboardTitleClass(rank: number): string {
+  if (rank === 1) return "text-amber-300";
+  if (rank <= 3) return "text-zinc-200";
+  if (rank <= 10) return "text-orange-300";
+  return "text-zinc-300";
+}
+
 function LockedPanel({
   title,
   description,
   onBack,
+  joinLabel = "JOIN DISCORD FOR UPDATES",
+  backLabel = "BACK TO SELECT PATH",
 }: {
   title: string;
   description: string;
   onBack: () => void;
+  joinLabel?: string;
+  backLabel?: string;
 }) {
   return (
     <div className="mx-auto w-full max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-7 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
@@ -991,7 +1240,7 @@ function LockedPanel({
         rel="noopener noreferrer"
         className="mt-6 inline-flex h-12 items-center justify-center rounded-xl border border-indigo-500/40 bg-indigo-500/15 px-6 text-sm font-black text-indigo-200 hover:bg-indigo-500/25"
       >
-        JOIN DISCORD FOR UPDATES
+        {joinLabel}
       </a>
 
       <button
@@ -999,13 +1248,14 @@ function LockedPanel({
         onClick={onBack}
         className="mt-6 flex h-12 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
       >
-        BACK TO SELECT PATH
+        {backLabel}
       </button>
     </div>
   );
 }
 
 export default function PlayPage() {
+  const { language, setLanguage, t } = useLanguage();
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(!supabase);
   const [authBusy, setAuthBusy] = useState(false);
@@ -1020,27 +1270,41 @@ export default function PlayPage() {
   const [selectedJutsu, setSelectedJutsu] = useState<string>(Object.keys(OFFICIAL_JUTSUS)[0] || "");
   const [tutorialStep, setTutorialStep] = useState(0);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [questNotice, setQuestNotice] = useState("");
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const [serverOffsetMs, setServerOffsetMs] = useState(0);
   const [serverClockSynced, setServerClockSynced] = useState(false);
   const [maintenanceGate, setMaintenanceGate] = useState<RuntimeGateState | null>(null);
   const [updateGate, setUpdateGate] = useState<RuntimeGateState | null>(null);
+  const [connectionLostState, setConnectionLostState] = useState<ConnectionLostState | null>(null);
+  const [errorModal, setErrorModal] = useState<ErrorModalState | null>(null);
+  const [alertModal, setAlertModal] = useState<AlertModalState | null>(null);
   const [announcements, setAnnouncements] = useState<AnnouncementRow[]>([]);
   const [announcementIndex, setAnnouncementIndex] = useState(0);
   const [showAnnouncements, setShowAnnouncements] = useState(false);
-  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [cameraOptions, setCameraOptions] = useState<Array<{ idx: number; label: string; deviceId: string }>>([]);
   const [cameraScanBusy, setCameraScanBusy] = useState(false);
   const [settingsPreviewEnabled, setSettingsPreviewEnabled] = useState(false);
   const [settingsPreviewError, setSettingsPreviewError] = useState("");
   const settingsPreviewRef = useRef<HTMLVideoElement | null>(null);
   const settingsPreviewStreamRef = useRef<MediaStream | null>(null);
+  const calibrationGatePreviewRef = useRef<HTMLVideoElement | null>(null);
+  const calibrationGatePreviewStreamRef = useRef<MediaStream | null>(null);
+  const calibrationGateSampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [calibrationGateCameraIdx, setCalibrationGateCameraIdx] = useState(0);
+  const [calibrationGateResolutionIdx, setCalibrationGateResolutionIdx] = useState(0);
+  const [calibrationGateReady, setCalibrationGateReady] = useState(false);
+  const [calibrationGateError, setCalibrationGateError] = useState("");
+  const [calibrationGateLighting, setCalibrationGateLighting] = useState<LightingReadiness>("good");
+  const [calibrationGateDetected, setCalibrationGateDetected] = useState("IDLE");
+  const [calibrationGateConfidence, setCalibrationGateConfidence] = useState(0);
+  const [calibrationGateSamples, setCalibrationGateSamples] = useState(0);
   const announcementDigestRef = useRef("");
-  const welcomeShownRef = useRef(false);
 
   const [savedSettings, setSavedSettings] = useState<MenuSettingsState>(() => readStoredSettings());
   const [draftSettings, setDraftSettings] = useState<MenuSettingsState>(() => readStoredSettings());
+  const [menuMusicMuted, setMenuMusicMuted] = useState(() => readStoredMenuMute());
   const [progression, setProgression] = useState<ProgressionState>(() => createInitialProgression());
   const [questState, setQuestState] = useState<QuestState>(() => createDefaultQuestState(new Date()));
   const [mastery, setMastery] = useState<MasteryMap>({});
@@ -1050,7 +1314,9 @@ export default function PlayPage() {
     tutorialVersion: "1.0",
   });
   const [calibrationProfile, setCalibrationProfile] = useState<CalibrationProfile>(() => createDefaultCalibrationProfile());
-  const [calibrationReturnView, setCalibrationReturnView] = useState<"free_play" | "rank_mode" | "settings">("free_play");
+  const [calibrationReturnView, setCalibrationReturnView] = useState<
+    "mode_select" | "settings" | "jutsu_library" | "free_session" | "rank_session"
+  >("mode_select");
   const [stateReady, setStateReady] = useState(false);
   const [stateBusy, setStateBusy] = useState(false);
   const [stateError, setStateError] = useState("");
@@ -1059,6 +1325,20 @@ export default function PlayPage() {
   const [identityLinked, setIdentityLinked] = useState(false);
   const [levelUpPanel, setLevelUpPanel] = useState<LevelUpPanelState | null>(null);
   const [masteryPanel, setMasteryPanel] = useState<MasteryPanelState | null>(null);
+  const [leaderboardModeIdx, setLeaderboardModeIdx] = useState(() => {
+    const idx = LEADERBOARD_MODE_LIST.indexOf("FIREBALL");
+    return idx >= 0 ? idx : 0;
+  });
+  const [leaderboardBoard, setLeaderboardBoard] = useState<"speed" | "level">("speed");
+  const [leaderboardPage, setLeaderboardPage] = useState(0);
+  const [leaderboardRows, setLeaderboardRows] = useState<LeaderboardSpeedRow[]>([]);
+  const [leaderboardLevelRows, setLeaderboardLevelRows] = useState<LeaderboardLevelRow[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [leaderboardError, setLeaderboardError] = useState("");
+  const [leaderboardTotalCount, setLeaderboardTotalCount] = useState(0);
+  const [leaderboardHasNext, setLeaderboardHasNext] = useState(false);
+  const menuMusicRef = useRef<HTMLAudioElement | null>(null);
+  const pendingRankReplayBusyRef = useRef(false);
 
   const identity = useMemo(() => resolveSessionIdentity(session), [session]);
   const username = useMemo(() => getDiscordDisplayName(session, identity), [session, identity]);
@@ -1098,7 +1378,6 @@ export default function PlayPage() {
   }, []);
 
   const selectedJutsuConfig = OFFICIAL_JUTSUS[selectedJutsu] || null;
-  const selectedJutsuUnlocked = Boolean(selectedJutsuConfig && progression.level >= selectedJutsuConfig.minLevel);
   const orderedJutsuNames = useMemo(() => (
     Object.entries(OFFICIAL_JUTSUS)
       .sort((a, b) => a[1].minLevel - b[1].minLevel || a[0].localeCompare(b[0]))
@@ -1109,6 +1388,24 @@ export default function PlayPage() {
     [orderedJutsuNames, progression.level],
   );
   const nextLevelXpTarget = getXpForLevel(Math.max(1, progression.level + 1));
+  const leaderboardMode = LEADERBOARD_MODE_LIST[
+    Math.max(0, Math.min(LEADERBOARD_MODE_LIST.length - 1, leaderboardModeIdx))
+  ] || "FIREBALL";
+  const leaderboardShowingSpeed = leaderboardBoard === "speed";
+  const leaderboardVisibleCount = leaderboardShowingSpeed ? leaderboardRows.length : leaderboardLevelRows.length;
+  const leaderboardTitleLine = leaderboardShowingSpeed
+    ? t("leaderboard.speedrunTitleLine", "SPEEDRUN LEADERBOARD")
+    : t("leaderboard.levelTitleLine", "LEVEL LEADERBOARD");
+  const leaderboardSubtitle = leaderboardShowingSpeed
+    ? `${t("leaderboard.fastestVerifiedClearsFor", "Fastest verified clears for")} ${formatLeaderboardModeLabel(leaderboardMode)}.`
+    : t("leaderboard.levelSubtitle", "Top shinobi ranked by LV and XP.");
+  const leaderboardPageCount = Math.max(1, Math.ceil(Math.max(0, leaderboardTotalCount) / LEADERBOARD_PAGE_SIZE));
+  const leaderboardCanPrev = leaderboardPage > 0;
+  const leaderboardCanNext = leaderboardPage < (leaderboardPageCount - 1);
+  const pendingRankQueueStorageKey = useMemo(() => {
+    const discordId = String(identity?.discordId || "").trim();
+    return discordId ? buildPendingRankQueueStorageKey(discordId) : "";
+  }, [identity?.discordId]);
 
   const applyCompetitivePayload = useCallback((payload: Record<string, unknown>) => {
     const profilePayload = isRecord(payload.profile) ? payload.profile : payload;
@@ -1133,14 +1430,123 @@ export default function PlayPage() {
     }
   }, []);
 
+  const playUiSfx = useCallback((src: string, scale = 1) => {
+    if (typeof window === "undefined") return;
+    try {
+      const audio = new Audio(src);
+      audio.volume = Math.max(0, Math.min(1, savedSettings.sfxVol * scale));
+      void audio.play().catch(() => { });
+    } catch {
+      // Ignore autoplay errors.
+    }
+  }, [savedSettings.sfxVol]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(MENU_MUTE_STORAGE_KEY, menuMusicMuted ? "1" : "0");
+    } catch {
+      // Ignore localStorage write failures.
+    }
+  }, [menuMusicMuted]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const audio = new Audio("/sounds/music2.mp3");
+    audio.loop = true;
+    audio.preload = "auto";
+    menuMusicRef.current = audio;
+    return () => {
+      audio.pause();
+      audio.src = "";
+      menuMusicRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = menuMusicRef.current;
+    if (!audio) return;
+    audio.volume = clampVolume(savedSettings.musicVol, DEFAULT_SETTINGS.musicVol);
+    audio.muted = menuMusicMuted || audio.volume <= 0.001;
+  }, [menuMusicMuted, savedSettings.musicVol]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const audio = menuMusicRef.current;
+    if (!audio) return;
+
+    const shouldPlayMenuMusic = Boolean(session) && !["free_session", "rank_session", "calibration_session"].includes(view);
+    if (!shouldPlayMenuMusic) {
+      audio.pause();
+      return;
+    }
+
+    const tryStart = () => {
+      void audio.play().catch(() => { });
+    };
+    tryStart();
+
+    const onGesture = () => {
+      tryStart();
+      window.removeEventListener("pointerdown", onGesture);
+      window.removeEventListener("keydown", onGesture);
+    };
+    window.addEventListener("pointerdown", onGesture);
+    window.addEventListener("keydown", onGesture);
+    return () => {
+      window.removeEventListener("pointerdown", onGesture);
+      window.removeEventListener("keydown", onGesture);
+    };
+  }, [session, view]);
+
+  const openErrorModal = useCallback((title: string, message: string) => {
+    setErrorModal({
+      title: String(title || "Error"),
+      message: String(message || "An unexpected error occurred."),
+    });
+  }, []);
+
+  const openAlertModal = useCallback((title: string, message: string, buttonText = "OK") => {
+    setAlertModal({
+      title: String(title || "Alert"),
+      message: String(message || ""),
+      buttonText: String(buttonText || "OK"),
+    });
+  }, []);
+
+  const triggerConnectionLost = useCallback((title?: string, lines?: string[]) => {
+    setConnectionLostState({
+      title: String(title || t("connection.title", "Connection Lost")),
+      lines: Array.isArray(lines) && lines.length > 0
+        ? lines.slice(0, 3).map((line) => String(line))
+        : [
+          t("connection.lineNetworkInterrupted", "Network connection interrupted."),
+          t("connection.lineSessionTerminated", "Session has been terminated."),
+        ],
+    });
+    setShowAnnouncements(false);
+  }, [t]);
+
   const callRpc = useCallback(async (rpcName: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    if (!supabase) return { ok: false, reason: "offline", rpc: rpcName };
+    if (!supabase) {
+      if (session) {
+        triggerConnectionLost(t("connection.configMissing", "Configuration Missing"), [
+          t("connection.supabaseUnavailable", "Supabase environment is unavailable."),
+          t("connection.lineSessionTerminated", "Session has been terminated."),
+        ]);
+      }
+      return { ok: false, reason: "offline", rpc: rpcName };
+    }
     const { data, error } = await supabase.rpc(rpcName, payload);
     if (error) {
+      const detail = String(error.message || "");
+      if (session && /(failed to fetch|network|offline|timed out|fetch failed)/i.test(detail)) {
+        triggerConnectionLost();
+      }
       return {
         ok: false,
         reason: "rpc_error",
-        detail: error.message,
+        detail,
         rpc: rpcName,
       };
     }
@@ -1151,18 +1557,243 @@ export default function PlayPage() {
       reason: "rpc_invalid_response",
       rpc: rpcName,
     };
+  }, [session, t, triggerConnectionLost]);
+
+  const readPendingRankQueue = useCallback((): PendingRankSubmitRecord[] => {
+    if (typeof window === "undefined" || !pendingRankQueueStorageKey) return [];
+    try {
+      const raw = window.localStorage.getItem(pendingRankQueueStorageKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      const rows = parsed
+        .map((entry) => sanitizePendingRankRecord(entry))
+        .filter((entry): entry is PendingRankSubmitRecord => Boolean(entry));
+      return rows.slice(-PENDING_RANK_QUEUE_MAX);
+    } catch {
+      return [];
+    }
+  }, [pendingRankQueueStorageKey]);
+
+  const writePendingRankQueue = useCallback((rows: PendingRankSubmitRecord[]) => {
+    if (typeof window === "undefined" || !pendingRankQueueStorageKey) return;
+    try {
+      if (!Array.isArray(rows) || rows.length === 0) {
+        window.localStorage.removeItem(pendingRankQueueStorageKey);
+        return;
+      }
+      const safeRows = rows
+        .map((entry) => sanitizePendingRankRecord(entry))
+        .filter((entry): entry is PendingRankSubmitRecord => Boolean(entry))
+        .slice(-PENDING_RANK_QUEUE_MAX);
+      if (safeRows.length === 0) {
+        window.localStorage.removeItem(pendingRankQueueStorageKey);
+        return;
+      }
+      window.localStorage.setItem(pendingRankQueueStorageKey, JSON.stringify(safeRows));
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [pendingRankQueueStorageKey]);
+
+  const enqueuePendingRankSubmit = useCallback((result: PlayArenaResult, reason: string): boolean => {
+    if (!pendingRankQueueStorageKey) return false;
+    const sanitizedResult = sanitizeQueuedRankResult(result);
+    if (!sanitizedResult) return false;
+
+    const queue = readPendingRankQueue();
+    const nowIso = toUtcIsoNoMs();
+    const fingerprint = buildPendingRankFingerprint(sanitizedResult);
+    const reasonText = String(reason || "transient_submit_failure").trim().slice(0, 160);
+    const idx = queue.findIndex((entry) => entry.fingerprint === fingerprint);
+    if (idx >= 0) {
+      queue[idx] = {
+        ...queue[idx],
+        updatedAt: nowIso,
+        lastReason: reasonText || queue[idx].lastReason,
+        result: sanitizedResult,
+      };
+      writePendingRankQueue(queue);
+      return true;
+    }
+
+    queue.push({
+      id: makePendingRankRecordId(),
+      fingerprint,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      attempts: 0,
+      lastReason: reasonText,
+      result: sanitizedResult,
+    });
+    writePendingRankQueue(queue);
+    return true;
+  }, [pendingRankQueueStorageKey, readPendingRankQueue, writePendingRankQueue]);
+
+  const cycleLeaderboardMode = useCallback((direction: -1 | 1) => {
+    if (LEADERBOARD_MODE_LIST.length <= 1) return;
+    setLeaderboardModeIdx((prev) => {
+      const safePrev = Math.max(0, Math.min(LEADERBOARD_MODE_LIST.length - 1, prev));
+      return (safePrev + direction + LEADERBOARD_MODE_LIST.length) % LEADERBOARD_MODE_LIST.length;
+    });
+    setLeaderboardPage(0);
   }, []);
 
-  const playUiSfx = useCallback((src: string, scale = 1) => {
-    if (typeof window === "undefined") return;
-    try {
-      const audio = new Audio(src);
-      audio.volume = Math.max(0, Math.min(1, savedSettings.sfxVol * scale));
-      void audio.play().catch(() => {});
-    } catch {
-      // Ignore autoplay errors.
+  useEffect(() => {
+    if (view !== "leaderboard") return;
+    const sb = supabase;
+    if (!sb) {
+      setLeaderboardRows([]);
+      setLeaderboardLevelRows([]);
+      setLeaderboardTotalCount(0);
+      setLeaderboardHasNext(false);
+      setLeaderboardError("Leaderboard unavailable: Supabase is not configured.");
+      return;
     }
-  }, [savedSettings.sfxVol]);
+
+    let cancelled = false;
+    const fetchLeaderboard = async () => {
+      setLeaderboardLoading(true);
+      setLeaderboardError("");
+      const from = leaderboardPage * LEADERBOARD_PAGE_SIZE;
+      const to = from + LEADERBOARD_PAGE_SIZE - 1;
+
+      if (leaderboardBoard === "speed") {
+        const allAttempts: LeaderboardSpeedRow[] = [];
+        const batchSize = 500;
+        let cursor = 0;
+
+        while (!cancelled) {
+          const { data, error } = await sb
+            .from("leaderboard")
+            .select("id,username,score_time,mode,avatar_url,discord_id")
+            .eq("mode", leaderboardMode)
+            .order("score_time", { ascending: true })
+            .order("id", { ascending: true })
+            .range(cursor, cursor + batchSize - 1);
+
+          if (cancelled) return;
+          if (error) {
+            setLeaderboardRows([]);
+            setLeaderboardLevelRows([]);
+            setLeaderboardTotalCount(0);
+            setLeaderboardHasNext(false);
+            setLeaderboardError(String(error.message || "Leaderboard query failed."));
+            setLeaderboardLoading(false);
+            return;
+          }
+
+          const batchRows = Array.isArray(data) ? (data as LeaderboardSpeedRow[]) : [];
+          if (batchRows.length === 0) break;
+          allAttempts.push(...batchRows);
+          if (batchRows.length < batchSize) break;
+          cursor += batchSize;
+        }
+
+        if (cancelled) return;
+        const dedupedRows = dedupeSpeedLeaderboardRows(allAttempts);
+        const total = dedupedRows.length;
+        const rows = dedupedRows.slice(from, to + 1);
+        setLeaderboardRows(rows);
+        setLeaderboardLevelRows([]);
+        setLeaderboardTotalCount(total);
+        setLeaderboardHasNext((to + 1) < total);
+        setLeaderboardLoading(false);
+        return;
+      }
+
+      const { data: profileData, error: profileError, count: profileCount } = await sb
+        .from("profiles")
+        .select("id,username,xp,level,rank,discord_id", { count: "exact" })
+        .order("level", { ascending: false })
+        .order("xp", { ascending: false })
+        .range(from, to);
+
+      if (cancelled) return;
+      if (profileError) {
+        setLeaderboardRows([]);
+        setLeaderboardLevelRows([]);
+        setLeaderboardTotalCount(0);
+        setLeaderboardHasNext(false);
+        setLeaderboardError(String(profileError.message || "Level leaderboard query failed."));
+        setLeaderboardLoading(false);
+        return;
+      }
+
+      const baseProfiles = Array.isArray(profileData) ? (profileData as LeaderboardLevelRow[]) : [];
+      const avatarByDiscordId = new Map<string, string>();
+      const avatarByUsername = new Map<string, string>();
+      const discordIdByUsername = new Map<string, string>();
+
+      if (baseProfiles.length > 0) {
+        const { data: avatarRows } = await sb
+          .from("leaderboard")
+          .select("username,discord_id,avatar_url,created_at")
+          .not("avatar_url", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(320);
+        if (!cancelled && Array.isArray(avatarRows)) {
+          for (const rowRaw of avatarRows as Array<Record<string, unknown>>) {
+            const avatar = String(rowRaw.avatar_url || "").trim();
+            const dId = String(rowRaw.discord_id || "").trim();
+            const uname = String(rowRaw.username || "").trim().toLowerCase();
+            if (dId && uname && !discordIdByUsername.has(uname)) {
+              discordIdByUsername.set(uname, dId);
+            }
+            if (!avatar) continue;
+            if (dId && !avatarByDiscordId.has(dId)) {
+              avatarByDiscordId.set(dId, avatar);
+            }
+            if (uname && !avatarByUsername.has(uname)) {
+              avatarByUsername.set(uname, avatar);
+            }
+          }
+        }
+      }
+
+      if (cancelled) return;
+      const rows = baseProfiles.map((profileRow) => {
+        const uname = String(profileRow.username || "").trim().toLowerCase();
+        const dId = String(profileRow.discord_id || "").trim();
+        const resolvedDiscordId = dId || (uname ? discordIdByUsername.get(uname) || "" : "");
+        const fallbackAvatar = (resolvedDiscordId ? avatarByDiscordId.get(resolvedDiscordId) : undefined)
+          || (uname ? avatarByUsername.get(uname) : undefined)
+          || null;
+        return {
+          ...profileRow,
+          discord_id: resolvedDiscordId || profileRow.discord_id || null,
+          avatar_url: fallbackAvatar,
+        };
+      });
+
+      const total = Number.isFinite(Number(profileCount))
+        ? Math.max(0, Number(profileCount))
+        : Math.max(0, (leaderboardPage * LEADERBOARD_PAGE_SIZE) + rows.length);
+      setLeaderboardLevelRows(rows);
+      setLeaderboardRows([]);
+      setLeaderboardTotalCount(total);
+      setLeaderboardHasNext(((leaderboardPage + 1) * LEADERBOARD_PAGE_SIZE) < total);
+      setLeaderboardLoading(false);
+    };
+
+    void fetchLeaderboard();
+    return () => {
+      cancelled = true;
+    };
+  }, [leaderboardBoard, leaderboardMode, leaderboardPage, view]);
+
+  useEffect(() => {
+    if (leaderboardLoading) return;
+    if (leaderboardPage <= 0) return;
+    if (leaderboardTotalCount <= 0) {
+      setLeaderboardPage(0);
+      return;
+    }
+    const lastPage = Math.max(0, Math.ceil(leaderboardTotalCount / LEADERBOARD_PAGE_SIZE) - 1);
+    if (leaderboardPage > lastPage) {
+      setLeaderboardPage(lastPage);
+    }
+  }, [leaderboardLoading, leaderboardPage, leaderboardTotalCount]);
 
   const handleCycleSelectedJutsu = useCallback((direction: -1 | 1) => {
     if (unlockedJutsuNames.length === 0) return;
@@ -1185,6 +1816,18 @@ export default function PlayPage() {
     }
   }, []);
 
+  const stopCalibrationGatePreview = useCallback(() => {
+    const stream = calibrationGatePreviewStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      calibrationGatePreviewStreamRef.current = null;
+    }
+    if (calibrationGatePreviewRef.current) {
+      calibrationGatePreviewRef.current.srcObject = null;
+    }
+    setCalibrationGateReady(false);
+  }, []);
+
   const scanCameras = useCallback(async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return;
     setCameraScanBusy(true);
@@ -1203,6 +1846,7 @@ export default function PlayPage() {
           ...prev,
           cameraIdx: Math.max(0, Math.min(prev.cameraIdx, cams.length - 1)),
         }));
+        setCalibrationGateCameraIdx((prev) => Math.max(0, Math.min(prev, cams.length - 1)));
       }
       setSettingsPreviewError("");
     } catch (err) {
@@ -1212,26 +1856,27 @@ export default function PlayPage() {
     }
   }, []);
 
+  const buildCameraConstraints = useCallback((cameraIdx: number, resolutionIdx: number): MediaTrackConstraints => {
+    const selected = cameraOptions[Math.max(0, Math.floor(cameraIdx))];
+    const res = RESOLUTION_OPTIONS[Math.max(0, Math.min(RESOLUTION_OPTIONS.length - 1, Math.floor(resolutionIdx)))]
+      || RESOLUTION_OPTIONS[0];
+    const constraints: MediaTrackConstraints = {
+      width: { ideal: res.width },
+      height: { ideal: res.height },
+      facingMode: "user",
+    };
+    if (selected?.deviceId) {
+      constraints.deviceId = { exact: selected.deviceId };
+    }
+    return constraints;
+  }, [cameraOptions]);
+
   const startSettingsPreview = useCallback(async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return;
     stopSettingsPreview();
     setSettingsPreviewError("");
     try {
-      const selected = cameraOptions[Math.max(0, Math.floor(draftSettings.cameraIdx))];
-      const resolutionMap: Array<{ width: number; height: number }> = [
-        { width: 640, height: 480 },
-        { width: 1280, height: 720 },
-        { width: 1920, height: 1080 },
-      ];
-      const res = resolutionMap[Math.max(0, Math.min(2, Math.floor(draftSettings.resolutionIdx)))] || resolutionMap[0];
-      const constraints: MediaTrackConstraints = {
-        width: { ideal: res.width },
-        height: { ideal: res.height },
-        facingMode: "user",
-      };
-      if (selected?.deviceId) {
-        constraints.deviceId = { exact: selected.deviceId };
-      }
+      const constraints = buildCameraConstraints(draftSettings.cameraIdx, draftSettings.resolutionIdx);
       const stream = await navigator.mediaDevices.getUserMedia({ video: constraints });
       settingsPreviewStreamRef.current = stream;
       if (settingsPreviewRef.current) {
@@ -1242,14 +1887,34 @@ export default function PlayPage() {
       stopSettingsPreview();
       setSettingsPreviewError(String((err as Error)?.message || "Unable to start camera preview."));
     }
-  }, [cameraOptions, draftSettings.cameraIdx, draftSettings.resolutionIdx, stopSettingsPreview]);
+  }, [buildCameraConstraints, draftSettings.cameraIdx, draftSettings.resolutionIdx, stopSettingsPreview]);
+
+  const startCalibrationGatePreview = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return;
+    stopCalibrationGatePreview();
+    setCalibrationGateError("");
+    setCalibrationGateSamples(0);
+    try {
+      const constraints = buildCameraConstraints(calibrationGateCameraIdx, calibrationGateResolutionIdx);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: constraints });
+      calibrationGatePreviewStreamRef.current = stream;
+      if (calibrationGatePreviewRef.current) {
+        calibrationGatePreviewRef.current.srcObject = stream;
+        await calibrationGatePreviewRef.current.play();
+      }
+      setCalibrationGateReady(true);
+    } catch (err) {
+      stopCalibrationGatePreview();
+      setCalibrationGateError(String((err as Error)?.message || "Camera unavailable. Check device and retry."));
+    }
+  }, [buildCameraConstraints, calibrationGateCameraIdx, calibrationGateResolutionIdx, stopCalibrationGatePreview]);
 
   const pollRuntimeConfig = useCallback(async () => {
     if (!supabase) return;
     try {
       const { data, error } = await supabase
         .from("app_config")
-        .select("id,type,message,version,is_active,priority,created_at,url,link")
+        .select("id,type,message,version,is_active,priority,created_at,url")
         .in("type", ["announcement", "version", "maintenance"])
         .eq("is_active", true)
         .order("priority", { ascending: false })
@@ -1266,7 +1931,7 @@ export default function PlayPage() {
         const latest = maintenanceRows[0] as Record<string, unknown>;
         const message = parseMaybeMessageList(latest.message)[0]
           || "Jutsu Academy is under maintenance. Please try again later.";
-        const url = String(latest.url || latest.link || "https://discord.gg/7xBQ22SnN2");
+        const url = String(latest.url || "https://discord.gg/7xBQ22SnN2");
         setMaintenanceGate({ message, url });
       } else {
         setMaintenanceGate(null);
@@ -1278,7 +1943,7 @@ export default function PlayPage() {
         const remoteVersion = String(latest.version || "").trim();
         if (remoteVersion && remoteVersion !== WEB_APP_VERSION) {
           const message = parseMaybeMessageList(latest.message)[0] || "A mandatory update is required.";
-          const url = String(latest.url || latest.link || "https://discord.gg/7xBQ22SnN2");
+          const url = String(latest.url || "https://discord.gg/7xBQ22SnN2");
           setUpdateGate({ message, url, remoteVersion });
         } else {
           setUpdateGate(null);
@@ -1429,7 +2094,7 @@ export default function PlayPage() {
         musicVol: Number(cloud.music_vol ?? cloud.musicVol),
         sfxVol: Number(cloud.sfx_vol ?? cloud.sfxVol),
         cameraIdx: Number(cloud.camera_idx ?? cloud.cameraIdx),
-        debugHands: Boolean(cloud.debug_hands ?? cloud.debugHands),
+        debugHands: Boolean(cloud.debug_hands ?? cloud.debugHands ?? true),
         resolutionIdx: Number(cloud.resolution_idx ?? cloud.resolutionIdx),
         fullscreen: Boolean(cloud.fullscreen),
       });
@@ -1468,6 +2133,7 @@ export default function PlayPage() {
       setSession(nextSession ?? null);
       setAuthReady(true);
       setAuthBusy(false);
+      pendingRankReplayBusyRef.current = false;
       if (nextSession) {
         setAuthError("");
         setStateReady(false);
@@ -1557,23 +2223,36 @@ export default function PlayPage() {
   }, [announcements.length]);
 
   useEffect(() => {
-    if (!session) {
-      welcomeShownRef.current = false;
-      setShowWelcomeModal(false);
-      return;
-    }
-    if (!stateReady || !identityLinked) return;
-    if (maintenanceGate || updateGate || showAnnouncements) return;
-    if (welcomeShownRef.current) return;
-    welcomeShownRef.current = true;
-    setShowWelcomeModal(true);
-  }, [identityLinked, maintenanceGate, session, showAnnouncements, stateReady, updateGate]);
-
-  useEffect(() => {
     if (!maintenanceGate && !updateGate) return;
     setShowAnnouncements(false);
-    setShowWelcomeModal(false);
   }, [maintenanceGate, updateGate]);
+
+  useEffect(() => {
+    if (!session) {
+      setShowLogoutConfirm(false);
+      return;
+    }
+    if (!visibleStateError || maintenanceGate || updateGate || connectionLostState) return;
+    setErrorModal((prev) => prev || {
+      title: "Error",
+      message: visibleStateError,
+    });
+  }, [connectionLostState, maintenanceGate, session, updateGate, visibleStateError]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleOffline = () => {
+      if (!session) return;
+      triggerConnectionLost();
+    };
+    window.addEventListener("offline", handleOffline);
+    return () => window.removeEventListener("offline", handleOffline);
+  }, [session, triggerConnectionLost]);
+
+  useEffect(() => {
+    if (!connectionLostState || !supabase) return;
+    void supabase.auth.signOut().catch(() => { });
+  }, [connectionLostState]);
 
   useEffect(() => {
     if (view !== "settings") {
@@ -1593,7 +2272,84 @@ export default function PlayPage() {
     void startSettingsPreview();
   }, [settingsPreviewEnabled, startSettingsPreview, stopSettingsPreview, view]);
 
-  useEffect(() => (() => stopSettingsPreview()), [stopSettingsPreview]);
+  useEffect(() => {
+    if (view !== "calibration_gate") {
+      stopCalibrationGatePreview();
+      setCalibrationGateError("");
+      return;
+    }
+
+    setCalibrationGateCameraIdx(savedSettings.cameraIdx);
+    setCalibrationGateResolutionIdx(savedSettings.resolutionIdx);
+    setCalibrationGateDetected("IDLE");
+    setCalibrationGateConfidence(0);
+    setCalibrationGateLighting("good");
+    setCalibrationGateSamples(0);
+    stopSettingsPreview();
+    void scanCameras();
+  }, [
+    savedSettings.cameraIdx,
+    savedSettings.resolutionIdx,
+    scanCameras,
+    stopCalibrationGatePreview,
+    stopSettingsPreview,
+    view,
+  ]);
+
+  useEffect(() => {
+    if (view !== "calibration_gate") return;
+    void startCalibrationGatePreview();
+  }, [calibrationGateCameraIdx, calibrationGateResolutionIdx, startCalibrationGatePreview, view]);
+
+  useEffect(() => {
+    if (view !== "calibration_gate" || !calibrationGateReady) return;
+    const video = calibrationGatePreviewRef.current;
+    if (!video) return;
+
+    let raf = 0;
+    let lastAt = 0;
+    let samples = 0;
+
+    const tick = (ts: number) => {
+      raf = requestAnimationFrame(tick);
+      if (!video || video.readyState < 2) return;
+      if (ts - lastAt < 240) return;
+      lastAt = ts;
+
+      if (!calibrationGateSampleCanvasRef.current) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 96;
+        canvas.height = 72;
+        calibrationGateSampleCanvasRef.current = canvas;
+      }
+      const canvas = calibrationGateSampleCanvasRef.current;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, 96, 72);
+      const imageData = ctx.getImageData(0, 0, 96, 72);
+      const stats = evaluateLighting(
+        imageData.data,
+        96,
+        72,
+        calibrationProfile,
+      );
+
+      setCalibrationGateLighting(stats.status as LightingReadiness);
+      setCalibrationGateDetected(stats.status === "good" ? "READY" : "IDLE");
+      setCalibrationGateConfidence(stats.status === "good" ? 0.72 : 0.22);
+
+      samples += 1;
+      setCalibrationGateSamples(Math.min(999, samples));
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [calibrationGateReady, calibrationProfile, view]);
+
+  useEffect(() => (() => {
+    stopSettingsPreview();
+    stopCalibrationGatePreview();
+  }), [stopCalibrationGatePreview, stopSettingsPreview]);
 
   const handleDiscordLogin = async () => {
     if (!supabase || typeof window === "undefined") return;
@@ -1648,13 +2404,39 @@ export default function PlayPage() {
   const handleQuit = async () => {
     if (!supabase) return;
     setAuthBusy(true);
+    setAuthError("");
     const { error } = await supabase.auth.signOut();
     if (error) {
       setAuthError(error.message);
+      openErrorModal("Quit Failed", error.message);
     }
     setShowQuitConfirm(false);
     setView("menu");
     setAuthBusy(false);
+  };
+
+  const handleLogout = async () => {
+    if (!supabase) return;
+    setAuthBusy(true);
+    setAuthError("");
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setAuthError(error.message);
+      openErrorModal("Sign Out Failed", error.message);
+    }
+    setShowLogoutConfirm(false);
+    setView("menu");
+    setAuthBusy(false);
+  };
+
+  const handleConnectionLostExit = async () => {
+    if (supabase) {
+      setAuthBusy(true);
+      await supabase.auth.signOut().catch(() => { });
+      setAuthBusy(false);
+    }
+    setConnectionLostState(null);
+    setView("menu");
   };
 
   const persistProfileMeta = useCallback(async (nextMastery: MasteryMap) => {
@@ -1714,7 +2496,9 @@ export default function PlayPage() {
       return { ok: false, xpAwarded: 0, previousLevel: progression.level, newLevel: progression.level, reason: "action_busy" };
     }
     if (!identity) {
-      setStateError("Discord identity is unavailable. Re-login and retry.");
+      const message = "Discord identity is unavailable. Re-login and retry.";
+      setStateError(message);
+      openErrorModal("Run Error", message);
       return { ok: false, xpAwarded: 0, previousLevel: progression.level, newLevel: progression.level, reason: "missing_identity" };
     }
 
@@ -1739,7 +2523,9 @@ export default function PlayPage() {
       });
 
       if (!Boolean(res.ok)) {
-        setStateError(toRpcError("Run award rejected", res));
+        const message = toRpcError("Run award rejected", res);
+        setStateError(message);
+        openErrorModal("Run Error", message);
         return { ok: false, xpAwarded: 0, previousLevel, newLevel: previousLevel, reason: String(res.reason || "award_rejected") };
       }
 
@@ -1774,6 +2560,7 @@ export default function PlayPage() {
     } catch (err) {
       const message = String((err as Error)?.message || err || "unknown_error");
       setStateError(`Run award rejected: ${message}`);
+      openErrorModal("Run Error", `Run award rejected: ${message}`);
       return { ok: false, xpAwarded: 0, previousLevel, newLevel: previousLevel, reason: message };
     } finally {
       setActionBusy(false);
@@ -1786,6 +2573,7 @@ export default function PlayPage() {
     progression.level,
     selectedJutsu,
     selectedJutsuConfig?.sequence.length,
+    openErrorModal,
   ]);
 
   const requestRankRunToken = useCallback(async (payload: {
@@ -1813,15 +2601,25 @@ export default function PlayPage() {
     };
   }, [callRpc, identity]);
 
-  const submitRankRunSecure = useCallback(async (result: PlayArenaResult): Promise<PlayArenaCompleteFeedback> => {
+  const attemptRankRunSecureSubmit = useCallback(async (result: PlayArenaResult): Promise<RankSecureSubmitAttemptResult> => {
     if (result.mode !== "rank") {
-      return { ok: true };
+      return {
+        ok: true,
+        retryable: false,
+        reason: "not_rank_mode",
+        statusText: "",
+        detailText: "",
+        rankText: "",
+      };
     }
     if (!identity) {
       return {
-        ok: true,
+        ok: false,
+        retryable: false,
+        reason: "missing_identity",
         statusText: "XP applied",
         detailText: "Secure submit skipped: missing identity",
+        rankText: "",
       };
     }
 
@@ -1829,9 +2627,12 @@ export default function PlayPage() {
     const proofCheck = validateRankProofClient(result);
     if (!proofCheck.ok) {
       return {
-        ok: true,
+        ok: false,
+        retryable: false,
+        reason: proofCheck.reason,
         statusText: "Secure submit skipped",
         detailText: `Local proof rejected (${proofCheck.reason})${proofCheck.detail ? `: ${proofCheck.detail}` : ""}`,
+        rankText: "",
       };
     }
 
@@ -1851,18 +2652,21 @@ export default function PlayPage() {
       const tokenRes = await requestRankRunToken({
         mode: "rank",
         jutsuName: result.jutsuName,
-        clientStartedAtIso: proof?.clientStartedAtIso || new Date().toISOString().replace(/\\.\\d{3}Z$/, "Z"),
+        clientStartedAtIso: proof?.clientStartedAtIso || toUtcIsoNoMs(),
       });
       runToken = String(tokenRes?.token || "");
       tokenSource = String(tokenRes?.source || tokenSource);
-    }
-
-    if (!runToken) {
-      return {
-        ok: true,
-        statusText: "Secure submit skipped",
-        detailText: `Run token unavailable (${String(proof?.tokenIssueReason || "token_issue_failed")})`,
-      };
+      if (!runToken) {
+        const tokenReason = String(tokenRes?.reason || proof?.tokenIssueReason || "token_issue_failed");
+        return {
+          ok: false,
+          retryable: isTransientSubmitFailure(tokenReason, ""),
+          reason: tokenReason,
+          statusText: "Secure submit skipped",
+          detailText: `Run token unavailable (${tokenReason})`,
+          rankText: "",
+        };
+      }
     }
 
     const submitRes = await callRpc("submit_challenge_run_secure_bound", {
@@ -1899,10 +2703,27 @@ export default function PlayPage() {
     });
 
     if (!Boolean(submitRes.ok)) {
+      const reason = String(submitRes.reason || "submit_failed");
+      const detail = String(submitRes.detail || "");
+      if (isDuplicateSubmitFailure(reason, detail)) {
+        return {
+          ok: true,
+          retryable: false,
+          reason: "duplicate",
+          statusText: "Secure rank run submitted",
+          detailText: "",
+          rankText: "",
+        };
+      }
       return {
-        ok: true,
+        ok: false,
+        retryable: isTransientSubmitFailure(reason, detail),
+        reason,
         statusText: "Rank run complete",
-        detailText: `Secure submit rejected: ${String(submitRes.reason || "submit_failed")}`,
+        detailText: detail
+          ? `Secure submit rejected: ${reason} (${detail})`
+          : `Secure submit rejected: ${reason}`,
+        rankText: "",
       };
     }
 
@@ -1929,10 +2750,98 @@ export default function PlayPage() {
 
     return {
       ok: true,
+      retryable: false,
+      reason: "ok",
       statusText: "Secure rank run submitted",
+      detailText: "",
       rankText,
     };
   }, [avatarUrl, callRpc, identity, requestRankRunToken, selectedJutsu]);
+
+  const submitRankRunSecure = useCallback(async (result: PlayArenaResult): Promise<PlayArenaCompleteFeedback> => {
+    const attempt = await attemptRankRunSecureSubmit(result);
+    if (attempt.ok) {
+      return {
+        ok: true,
+        statusText: attempt.statusText,
+        detailText: attempt.detailText,
+        rankText: attempt.rankText,
+      };
+    }
+    if (!attempt.retryable) {
+      return {
+        ok: true,
+        statusText: attempt.statusText || "Rank run complete",
+        detailText: attempt.detailText,
+      };
+    }
+
+    const queued = enqueuePendingRankSubmit(result, attempt.reason);
+    return {
+      ok: true,
+      statusText: queued ? "Rank submit queued" : (attempt.statusText || "Rank run complete"),
+      detailText: queued
+        ? "Connection issue detected. Run proof is queued and will retry automatically on your next login."
+        : attempt.detailText,
+      rankText: attempt.rankText,
+    };
+  }, [attemptRankRunSecureSubmit, enqueuePendingRankSubmit]);
+
+  const replayPendingRankSubmits = useCallback(async () => {
+    if (!session || !identity || !identityLinked || !stateReady) return;
+    if (pendingRankReplayBusyRef.current) return;
+
+    const queued = readPendingRankQueue();
+    if (queued.length === 0) return;
+
+    pendingRankReplayBusyRef.current = true;
+    try {
+      const nowIso = toUtcIsoNoMs();
+      let recovered = 0;
+      const remaining: PendingRankSubmitRecord[] = [];
+      const replayNow = queued.slice(0, PENDING_RANK_REPLAY_BATCH);
+      const replayLater = queued.slice(PENDING_RANK_REPLAY_BATCH);
+
+      for (const item of replayNow) {
+        const attempt = await attemptRankRunSecureSubmit(item.result);
+        if (attempt.ok) {
+          recovered += 1;
+          continue;
+        }
+        if (!attempt.retryable) {
+          continue;
+        }
+        remaining.push({
+          ...item,
+          attempts: Math.max(0, item.attempts) + 1,
+          updatedAt: nowIso,
+          lastReason: String(attempt.reason || "retry_pending").slice(0, 160),
+        });
+      }
+
+      writePendingRankQueue([...remaining, ...replayLater]);
+
+      if (recovered > 0) {
+        setQuestNotice(`Recovered ${recovered} pending rank submit${recovered === 1 ? "" : "s"}.`);
+      }
+    } finally {
+      pendingRankReplayBusyRef.current = false;
+    }
+  }, [attemptRankRunSecureSubmit, identity, identityLinked, readPendingRankQueue, session, stateReady, writePendingRankQueue]);
+
+  useEffect(() => {
+    if (!session || !identity || !identityLinked || !stateReady) return;
+    void replayPendingRankSubmits();
+  }, [identity, identityLinked, replayPendingRankSubmits, session, stateReady]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleOnline = () => {
+      void replayPendingRankSubmits();
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [replayPendingRankSubmits]);
 
   const handleArenaComplete = useCallback(async (result: PlayArenaResult): Promise<boolean | PlayArenaCompleteFeedback> => {
     const masteryResult = await recordMasteryCompletion(result.jutsuName, result.elapsedSeconds);
@@ -1988,12 +2897,15 @@ export default function PlayPage() {
     });
 
     if (!Boolean(res.ok)) {
-      setStateError(toRpcError("Calibration sync failed", res));
+      const message = toRpcError("Calibration sync failed", res);
+      setStateError(message);
+      openErrorModal("Calibration Error", message);
       return false;
     }
     setQuestNotice("Calibration profile synced.");
+    openAlertModal("Calibration", "Calibration synced.", "OK");
     return true;
-  }, [callRpc, identity]);
+  }, [callRpc, identity, openAlertModal, openErrorModal]);
 
   const markTutorialSeen = useCallback(async () => {
     const seenAt = tutorialMeta.tutorialSeenAt || new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -2025,7 +2937,9 @@ export default function PlayPage() {
   const claimQuest = async (def: QuestDefinition) => {
     if (actionBusy) return;
     if (!identity) {
-      setStateError("Discord identity is unavailable. Re-login and retry.");
+      const message = "Discord identity is unavailable. Re-login and retry.";
+      setStateError(message);
+      openErrorModal("Quest Reward", message);
       return;
     }
 
@@ -2059,11 +2973,16 @@ export default function PlayPage() {
         const rewardXp = Math.max(0, Math.floor(Number(res.reward_xp) || def.reward));
         const title = String(res.title || def.title);
         setQuestNotice(`Quest claimed: ${title} (+${rewardXp} XP).`);
+        openAlertModal("Quest Reward", `${title}\nReward claimed: +${rewardXp} XP`, "CLAIMED");
       } else {
-        setStateError(toRpcError("Quest claim failed", res));
+        const message = toRpcError("Quest claim failed", res);
+        setStateError(message);
+        openErrorModal("Quest Reward", message);
       }
     } catch (err) {
-      setStateError(`Quest claim failed: ${String((err as Error)?.message || err || "unknown_error")}`);
+      const message = `Quest claim failed: ${String((err as Error)?.message || err || "unknown_error")}`;
+      setStateError(message);
+      openErrorModal("Quest Reward", message);
     }
 
     setClaimBusyKey("");
@@ -2071,7 +2990,21 @@ export default function PlayPage() {
   };
 
   const tutorial = TUTORIAL_STEPS[tutorialStep];
-  const inMenu = view === "menu";
+  const calibrationGateProgressPct = calibrationReady
+    ? 100
+    : Math.max(0, Math.min(99, Math.round((calibrationGateSamples / 140) * 100)));
+  const calibrationGateLightingText = t(
+    `calibration.lightState.${calibrationGateLighting}`,
+    calibrationGateLighting.toUpperCase().replace("_", " "),
+  );
+  const calibrationGateLightingClass = calibrationGateLighting === "good"
+    ? "text-emerald-300"
+    : "text-amber-300";
+  const calibrationGateStatusLine = calibrationGateError
+    ? calibrationGateError
+    : calibrationGateReady
+      ? t("calibration.keepHandsVisible", "Keep both hands visible and move naturally.")
+      : t("calibration.pressScanIfNoFeed", "Press SCAN if no camera feed appears.");
   const masteryThresholds = masteryPanel ? getMasteryThresholds(masteryPanel.jutsuName) : null;
   const masteryTrackSpan = masteryThresholds
     ? Math.max(0.001, masteryThresholds.bronze - masteryThresholds.gold)
@@ -2100,11 +3033,11 @@ export default function PlayPage() {
     : null;
   const masteryNextTierHint = masteryPanel && masteryThresholds
     ? masteryPanel.newTier === "none"
-      ? { name: "BRONZE", target: masteryThresholds.bronze }
+      ? { name: t("mastery.bronze", "BRONZE"), target: masteryThresholds.bronze }
       : masteryPanel.newTier === "bronze"
-        ? { name: "SILVER", target: masteryThresholds.silver }
+        ? { name: t("mastery.silver", "SILVER"), target: masteryThresholds.silver }
         : masteryPanel.newTier === "silver"
-          ? { name: "GOLD", target: masteryThresholds.gold }
+          ? { name: t("mastery.gold", "GOLD"), target: masteryThresholds.gold }
           : null
     : null;
   const activeAnnouncement = announcements.length > 0
@@ -2125,21 +3058,37 @@ export default function PlayPage() {
       />
       <div className="fixed inset-0 z-0 pointer-events-none bg-gradient-to-b from-black/55 via-black/72 to-black/90" />
 
-      <header className="relative z-20 border-b border-ninja-border bg-ninja-bg/70 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-          <Link href="/" className="flex items-center gap-3 hover:opacity-85 transition-opacity">
-            <Image src="/logo2.png" alt="Jutsu Academy" width={40} height={40} className="h-10 w-10 object-contain" />
-            <span className="font-bold tracking-tight text-zinc-100">Jutsu Academy</span>
-          </Link>
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 rounded-lg border border-ninja-border bg-ninja-card/70 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-200 hover:border-ninja-accent/40 hover:text-white"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Base
-          </Link>
-        </div>
-      </header>
+      <button
+        type="button"
+        onClick={() => {
+          if (typeof document === "undefined") return;
+          toggleFullscreen(!document.fullscreenElement);
+        }}
+        className="fixed bottom-4 right-4 z-50 inline-flex h-12 w-12 items-center justify-center rounded-full border border-ninja-border bg-black/50 text-zinc-300 shadow-lg backdrop-blur hover:border-ninja-accent/40 hover:text-white"
+        aria-label="Toggle Fullscreen"
+      >
+        <Maximize className="h-5 w-5" />
+      </button>
+
+      {!session && (
+        <header className="relative z-20 border-b border-ninja-border bg-ninja-bg/70 backdrop-blur-md">
+          <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
+            <Link href="/" className="flex items-center gap-3 hover:opacity-85 transition-opacity">
+              <Image src="/logo2.png" alt="Jutsu Academy" width={40} height={40} className="h-10 w-10 object-contain" />
+              <span className="font-bold tracking-tight text-zinc-100">Jutsu Academy</span>
+            </Link>
+            <Link
+              href="/"
+              className="inline-flex items-center gap-2 rounded-lg border border-ninja-border bg-ninja-card/70 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-200 hover:border-ninja-accent/40 hover:text-white"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Base
+            </Link>
+          </div>
+        </header>
+      )}
+
+
 
       <main className="relative z-10 mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10">
         {!authReady && (
@@ -2178,46 +3127,6 @@ export default function PlayPage() {
 
         {session && (
           <>
-            <div className="mx-auto mb-6 flex w-full max-w-5xl items-center justify-between rounded-3xl border border-indigo-300/30 bg-gradient-to-r from-indigo-950/65 via-slate-900/70 to-indigo-950/65 px-4 py-3 backdrop-blur-sm md:px-6 md:py-4">
-              <div className="flex items-center gap-3">
-                {avatarUrl ? (
-                  <Image
-                    src={avatarUrl}
-                    alt={username}
-                    width={48}
-                    height={48}
-                    unoptimized
-                    className="h-12 w-12 rounded-xl border border-ninja-border object-cover"
-                  />
-                ) : (
-                  <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-ninja-border bg-ninja-panel text-base font-black text-ninja-accent">
-                    {username.slice(0, 1).toUpperCase()}
-                  </div>
-                )}
-                <div>
-                  <p className="text-sm font-bold text-white md:text-[1.05rem]">{username}</p>
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-300/80">
-                    {identityLinked ? "Discord Connected • Account Linked" : "Discord Connected • Link Pending"}
-                  </p>
-                </div>
-              </div>
-
-              <div className="hidden md:block text-right">
-                <p className="text-xs uppercase tracking-[0.12em] text-zinc-300/70">Rank</p>
-                <p className="text-sm font-black text-white">{progression.rank}</p>
-              </div>
-
-              {!inMenu && (
-                <button
-                  type="button"
-                  onClick={() => setView("menu")}
-                  className="rounded-xl border border-indigo-300/35 bg-indigo-950/35 px-4 py-2 text-xs font-black uppercase tracking-wide text-zinc-100 hover:border-indigo-300/60 hover:bg-indigo-900/40"
-                >
-                  Back To Menu
-                </button>
-              )}
-            </div>
-
             {!!questNotice && (
               <div className="mx-auto mb-4 w-full max-w-5xl rounded-xl border border-emerald-400/35 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">
                 {questNotice}
@@ -2238,27 +3147,120 @@ export default function PlayPage() {
             )}
 
             {view === "menu" && (
-              <div className="mx-auto max-w-2xl rounded-3xl border border-ninja-border bg-ninja-panel/88 p-8 md:p-10 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
-                <div className="text-center">
-                  <Image
-                    src="/logo2.png"
-                    alt="Jutsu Academy"
-                    width={144}
-                    height={144}
-                    className="mx-auto h-28 w-28 object-contain md:h-36 md:w-36"
-                  />
-                  <h1 className="mt-3 text-3xl font-black tracking-tight text-white md:text-4xl">JUTSU ACADEMY</h1>
-                  <p className="mt-2 text-sm font-bold tracking-[0.2em] text-ninja-accent">TRAIN • MASTER • RANK UP</p>
+              <div className="mx-auto max-w-2xl rounded-3xl border border-ninja-border bg-ninja-panel/88 p-6 md:p-8 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
+                <div className="flex items-start justify-between gap-4 mb-2 md:mb-0">
+                  {session ? (
+                    <div className="flex w-44 flex-col gap-2 rounded-xl border border-ninja-border bg-black/35 p-2 sm:w-56">
+                      <div className="flex items-center gap-2">
+                        <div className="h-[38px] w-[38px] shrink-0 overflow-hidden rounded-lg border border-ninja-border bg-ninja-card">
+                          {avatarUrl ? (
+                            <Image
+                              src={avatarUrl}
+                              alt={username}
+                              width={38}
+                              height={38}
+                              unoptimized
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center bg-ninja-card text-base font-black text-zinc-100">
+                              {username.slice(0, 1).toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1 leading-tight">
+                          <p className="truncate text-sm font-black text-white">{username}</p>
+                          <p className="truncate text-[10px] font-bold uppercase tracking-wider text-ninja-accent">
+                            {progression.rank}
+                          </p>
+                        </div>
+                      </div>
+                      {(() => {
+                        const prevLevelXp = getXpForLevel(progression.level);
+                        const nextLevelXpTargetLocal = getXpForLevel(Math.max(1, progression.level + 1));
+                        const progress = Math.max(0, progression.xp - prevLevelXp);
+                        const required = Math.max(1, nextLevelXpTargetLocal - prevLevelXp);
+                        const pct = Math.min(100, Math.max(0, (progress / required) * 100));
+                        return (
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[9px] font-bold uppercase tracking-wider text-zinc-400">
+                              <span>LV.{progression.level}</span>
+                              <span>{progression.xp} / {nextLevelXpTargetLocal} XP</span>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/60 border border-ninja-border/50">
+                              <div className="h-full rounded-full bg-emerald-400 transition-all duration-500" style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <div />
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <select
+                        value={language}
+                        onChange={(event) => setLanguage(event.target.value as LanguageCode)}
+                        className="h-10 cursor-pointer appearance-none rounded-lg border border-ninja-border bg-black/35 pl-3 pr-7 text-[11px] font-black tracking-widest text-zinc-100 outline-none transition hover:border-ninja-accent/45 hover:bg-black/55 focus:border-ninja-accent/70"
+                        title={t("menu.languageLabel", "Language")}
+                        aria-label={t("menu.languageLabel", "Language")}
+                      >
+                        {LANGUAGE_OPTIONS.map((option) => (
+                          <option key={option.code} value={option.code}>{option.label}</option>
+                        ))}
+                      </select>
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-zinc-400">
+                        <svg className="h-3 w-3 fill-current" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                          <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                        </svg>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setMenuMusicMuted((prev) => !prev)}
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-ninja-border bg-black/35 hover:border-ninja-accent/45 hover:bg-black/55"
+                      aria-label={menuMusicMuted ? t("menu.unmuteMenuMusic", "Unmute Menu Music") : t("menu.muteMenuMusic", "Mute Menu Music")}
+                      title={menuMusicMuted ? t("menu.unmuteMenuMusic", "Unmute Menu Music") : t("menu.muteMenuMusic", "Mute Menu Music")}
+                    >
+                      <Image
+                        src={menuMusicMuted ? "/pics/mute.png" : "/pics/unmute.png"}
+                        alt=""
+                        width={22}
+                        height={22}
+                        className="h-[22px] w-[22px] object-contain"
+                      />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="mt-8 space-y-3">
+                <div className="text-center mt-2 sm:mt-0">
+                  <div className="mx-auto flex h-40 w-40 items-center justify-center md:h-56 md:w-56">
+                    <Image
+                      src="/logo2.png"
+                      alt="Jutsu Academy"
+                      width={320}
+                      height={320}
+                      className="h-full w-full scale-[1.3] object-contain md:scale-[1.45]"
+                    />
+                  </div>
+                  <p className="mt-4 text-sm font-bold tracking-[0.2em] text-ninja-accent">{t("menu.trainMasterRankUp", "TRAIN • MASTER • RANK UP")}</p>
+                </div>
+
+                <div className="mx-auto mt-8 w-full max-w-[360px] space-y-3">
                   <button
                     type="button"
                     onClick={() => setView("mode_select")}
                     disabled={!stateReady || !identityLinked}
                     className="flex h-14 w-full items-center justify-center rounded-xl bg-ninja-accent text-base font-black tracking-wide text-white transition hover:bg-ninja-accent-glow disabled:cursor-not-allowed disabled:opacity-55"
                   >
-                    {!stateReady ? "SYNCING ACCOUNT..." : !identityLinked ? "ACCOUNT LINK REQUIRED" : "ENTER ACADEMY"}
+                    {!stateReady
+                      ? t("menu.syncingAccount", "SYNCING ACCOUNT...")
+                      : !identityLinked
+                        ? t("menu.accountLinkRequired", "ACCOUNT LINK REQUIRED")
+                        : t("menu.enterAcademy", "ENTER ACADEMY")}
                   </button>
                   <button
                     type="button"
@@ -2269,7 +3271,7 @@ export default function PlayPage() {
                     className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
                   >
                     <Settings className="h-5 w-5" />
-                    SETTINGS
+                    {t("menu.settings", "SETTINGS")}
                   </button>
                   <button
                     type="button"
@@ -2280,21 +3282,29 @@ export default function PlayPage() {
                     className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
                   >
                     <Sparkles className="h-5 w-5" />
-                    TUTORIAL
+                    {t("menu.tutorial", "TUTORIAL")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setView("about")}
                     className="flex h-14 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
                   >
-                    ABOUT
+                    {t("menu.about", "ABOUT")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowLogoutConfirm(true)}
+                    className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
+                  >
+                    <LogOut className="h-5 w-5" />
+                    {t("menu.signOut", "SIGN OUT")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowQuitConfirm(true)}
                     className="flex h-14 w-full items-center justify-center rounded-xl bg-red-700/80 text-base font-black tracking-wide text-white transition hover:bg-red-600"
                   >
-                    QUIT
+                    {t("menu.quit", "QUIT")}
                   </button>
                 </div>
               </div>
@@ -2303,25 +3313,41 @@ export default function PlayPage() {
             {view === "mode_select" && (
               <div className="mx-auto w-full max-w-5xl rounded-[30px] border border-indigo-300/25 bg-gradient-to-b from-indigo-950/40 to-slate-950/85 p-5 shadow-[0_22px_80px_rgba(0,0,0,0.6)] md:p-10">
                 <div className="text-center">
-                  <h1 className="text-4xl font-black tracking-tight text-white md:text-6xl">SELECT YOUR PATH</h1>
-                  <p className="mt-3 text-sm font-black tracking-[0.28em] text-ninja-accent md:text-lg">CHOOSE YOUR TRAINING</p>
+                  <h1 className="text-4xl font-black tracking-tight text-white md:text-6xl">{t("modeSelect.title", "SELECT YOUR PATH")}</h1>
+                  <p className="mt-3 text-sm font-black tracking-[0.28em] text-ninja-accent md:text-lg">{t("modeSelect.subtitle", "CHOOSE YOUR TRAINING")}</p>
                 </div>
 
-                <div className="mt-8 space-y-4">
+                <div className="mx-auto mt-8 w-full max-w-[420px] space-y-4">
                   <button
                     type="button"
-                    onClick={() => setView("free_play")}
+                    onClick={() => {
+                      setLibraryIntent("free");
+                      if (needsCalibrationGate) {
+                        setCalibrationReturnView("jutsu_library");
+                        setView("calibration_gate");
+                        return;
+                      }
+                      setView("jutsu_library");
+                    }}
                     className="flex h-14 w-full items-center justify-center rounded-2xl border border-zinc-400/40 bg-zinc-500/70 text-xl font-black tracking-wide text-zinc-100 transition hover:bg-zinc-400/80"
                   >
-                    FREE OBSTACLE / PLAY
+                    {t("modeSelect.freeObstaclePlay", "FREE OBSTACLE / PLAY")}
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setView("rank_mode")}
+                    onClick={() => {
+                      setLibraryIntent("rank");
+                      if (needsCalibrationGate) {
+                        setCalibrationReturnView("jutsu_library");
+                        setView("calibration_gate");
+                        return;
+                      }
+                      setView("jutsu_library");
+                    }}
                     className="flex h-14 w-full items-center justify-center rounded-2xl border border-red-300/35 bg-gradient-to-r from-orange-600 to-red-600 text-xl font-black tracking-wide text-white transition hover:from-orange-500 hover:to-red-500"
                   >
-                    RANK MODE
+                    {t("modeSelect.rankMode", "RANK MODE")}
                   </button>
 
                   <button
@@ -2332,7 +3358,7 @@ export default function PlayPage() {
                     }}
                     className="flex h-14 w-full items-center justify-center rounded-2xl border border-blue-400/25 bg-blue-950/45 text-xl font-black tracking-wide text-blue-300 transition hover:bg-blue-900/45"
                   >
-                    JUTSU LIBRARY
+                    {t("modeSelect.jutsuLibrary", "JUTSU LIBRARY")}
                   </button>
 
                   <button
@@ -2340,7 +3366,7 @@ export default function PlayPage() {
                     onClick={() => setView("multiplayer")}
                     className="flex h-14 w-full items-center justify-center rounded-2xl border border-zinc-500/35 bg-zinc-800/70 text-xl font-black tracking-wide text-zinc-400 transition hover:bg-zinc-700/70"
                   >
-                    MULTIPLAYER (LOCKED)
+                    {t("modeSelect.multiplayerLocked", "MULTIPLAYER (LOCKED)")}
                   </button>
 
                   <button
@@ -2348,166 +3374,154 @@ export default function PlayPage() {
                     onClick={() => setView("quest_board")}
                     className="flex h-14 w-full items-center justify-center rounded-2xl border border-emerald-500/25 bg-emerald-950/45 text-xl font-black tracking-wide text-emerald-300 transition hover:bg-emerald-900/45"
                   >
-                    QUEST BOARD
+                    {t("modeSelect.questBoard", "QUEST BOARD")}
                   </button>
 
-                  <Link
-                    href="/leaderboard"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLeaderboardPage(0);
+                      setView("leaderboard");
+                    }}
                     className="flex h-14 w-full items-center justify-center rounded-2xl border border-yellow-300/40 bg-gradient-to-r from-amber-600 to-yellow-600 text-xl font-black tracking-wide text-white transition hover:from-amber-500 hover:to-yellow-500"
                   >
-                    LEADERBOARD
-                  </Link>
+                    {t("modeSelect.leaderboard", "LEADERBOARD")}
+                  </button>
 
                   <button
                     type="button"
                     onClick={() => setView("menu")}
                     className="mt-6 flex h-14 w-full items-center justify-center rounded-2xl border border-ninja-border bg-ninja-card text-xl font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
                   >
-                    BACK
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {view === "free_play" && (
-              <div className="mx-auto w-full max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-7 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
-                <h2 className="text-3xl font-black tracking-tight text-white">FREE OBSTACLE / PLAY</h2>
-                <p className="mt-3 text-sm leading-relaxed text-ninja-dim">
-                  Play a full camera-based sign sequence run, then apply authoritative XP from completion.
-                </p>
-                <div className="mt-4 rounded-xl border border-ninja-border bg-black/25 px-4 py-3 text-sm text-zinc-200">
-                  Current Jutsu: <span className="font-black text-white">{selectedJutsu}</span>
-                  {selectedJutsuConfig && (
-                    <span className={`ml-2 text-xs font-black ${selectedJutsuUnlocked ? "text-emerald-300" : "text-red-300"}`}>
-                      {selectedJutsuUnlocked ? "UNLOCKED" : `LOCKED • LV.${selectedJutsuConfig.minLevel}`}
-                    </span>
-                  )}
-                </div>
-
-                <div className="mt-6 grid gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (needsCalibrationGate) {
-                        setCalibrationReturnView("free_play");
-                        setView("calibration_gate");
-                        return;
-                      }
-                      setView("free_session");
-                    }}
-                    disabled={!selectedJutsuUnlocked || !stateReady || !identityLinked}
-                    className="flex h-12 items-center justify-center rounded-xl bg-zinc-600 text-sm font-black tracking-wide text-white hover:bg-zinc-500 disabled:cursor-not-allowed disabled:opacity-55"
-                  >
-                    START IN-GAME FREE RUN
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLibraryIntent("free");
-                      setView("jutsu_library");
-                    }}
-                    className="flex h-12 items-center justify-center rounded-xl border border-blue-500/35 bg-blue-500/15 text-sm font-black tracking-wide text-blue-200 hover:bg-blue-500/25"
-                  >
-                    OPEN JUTSU LIBRARY
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setView("mode_select")}
-                    className="flex h-12 items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                  >
-                    BACK TO SELECT PATH
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {view === "rank_mode" && (
-              <div className="mx-auto w-full max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-7 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
-                <h2 className="text-3xl font-black tracking-tight text-white">RANK MODE</h2>
-                <p className="mt-3 text-sm leading-relaxed text-ninja-dim">
-                  Timed in-game run with the same sign detection stack used in challenge/practice and authoritative XP award.
-                </p>
-                <div className="mt-4 rounded-xl border border-ninja-border bg-black/25 px-4 py-3 text-sm text-zinc-200">
-                  Current Jutsu: <span className="font-black text-white">{selectedJutsu}</span>
-                  {selectedJutsuConfig && (
-                    <span className={`ml-2 text-xs font-black ${selectedJutsuUnlocked ? "text-emerald-300" : "text-red-300"}`}>
-                      {selectedJutsuUnlocked ? "UNLOCKED" : `LOCKED • LV.${selectedJutsuConfig.minLevel}`}
-                    </span>
-                  )}
-                </div>
-
-                <div className="mt-6 grid gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (needsCalibrationGate) {
-                        setCalibrationReturnView("rank_mode");
-                        setView("calibration_gate");
-                        return;
-                      }
-                      setView("rank_session");
-                    }}
-                    disabled={!selectedJutsuUnlocked || !stateReady || !identityLinked}
-                    className="flex h-12 items-center justify-center rounded-xl bg-gradient-to-r from-orange-600 to-red-600 text-sm font-black tracking-wide text-white hover:from-orange-500 hover:to-red-500 disabled:cursor-not-allowed disabled:opacity-55"
-                  >
-                    START IN-GAME RANK RUN
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLibraryIntent("rank");
-                      setView("jutsu_library");
-                    }}
-                    className="flex h-12 items-center justify-center rounded-xl border border-blue-500/35 bg-blue-500/15 text-sm font-black tracking-wide text-blue-200 hover:bg-blue-500/25"
-                  >
-                    OPEN JUTSU LIBRARY
-                  </button>
-                  <Link
-                    href="/leaderboard"
-                    className="flex h-12 items-center justify-center rounded-xl border border-yellow-300/40 bg-amber-700/70 text-sm font-black tracking-wide text-white hover:bg-amber-600/80"
-                  >
-                    OPEN LEADERBOARD
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => setView("mode_select")}
-                    className="flex h-12 items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                  >
-                    BACK TO SELECT PATH
+                    {t("modeSelect.back", "BACK")}
                   </button>
                 </div>
               </div>
             )}
 
             {view === "calibration_gate" && (
-              <div className="mx-auto w-full max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/92 p-7 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
-                <h2 className="text-3xl font-black tracking-tight text-white">CALIBRATION REQUIRED</h2>
-                <p className="mt-3 text-sm leading-relaxed text-ninja-dim">
-                  Your account does not have a saved calibration profile yet. Match pygame flow by calibrating once before free/rank runs.
+              <div className="mx-auto w-full max-w-5xl rounded-[22px] border border-ninja-border bg-ninja-panel/92 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)] md:p-7">
+                <h2 className="text-3xl font-black tracking-tight text-white">{t("calibration.requiredTitle", "CALIBRATION REQUIRED")}</h2>
+                <p className="mt-2 text-sm leading-relaxed text-ninja-dim">
+                  {t("calibration.requiredSubtitle", "Complete one calibration to unlock Free Play and Rank Mode.")}
                 </p>
 
-                <div className="mt-4 rounded-xl border border-ninja-border bg-black/25 px-4 py-3 text-sm text-zinc-200">
-                  {serverClockSynced ? "Server clock synced" : "Using local fallback clock"} • Calibration status:{" "}
-                  <span className={`font-black ${calibrationReady ? "text-emerald-300" : "text-amber-300"}`}>
-                    {calibrationReady ? "READY" : "MISSING"}
-                  </span>
+                <div className="mt-5 grid gap-4 lg:grid-cols-[540px,1fr]">
+                  <div className="relative overflow-hidden rounded-2xl border border-ninja-border bg-black aspect-[3/2]">
+                    <video
+                      ref={calibrationGatePreviewRef}
+                      muted
+                      playsInline
+                      autoPlay
+                      className="h-full w-full object-cover"
+                    />
+                    {!calibrationGateReady && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/65 px-6 text-center">
+                        <p className="text-base font-black tracking-wide text-red-200">{t("calibration.noCameraFeed", "NO CAMERA FEED")}</p>
+                        <p className="text-xs text-zinc-200">
+                          {calibrationGateError || t("calibration.cameraUnavailableFallback", "Camera unavailable for calibration.")}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-ninja-border bg-black/30 px-4 py-3 text-sm">
+                    <div className="space-y-2 text-[12px] font-mono text-zinc-200">
+                      <div>
+                        {t("calibration.lightLabel", "LIGHT")}: <span className={`font-black ${calibrationGateLightingClass}`}>{calibrationGateLightingText}</span>
+                      </div>
+                      <div>{t("calibration.modelLabel", "MODEL")}: MEDIAPIPE</div>
+                      <div>{t("calibration.detectedLabel", "DETECTED")}: {calibrationGateDetected}</div>
+                      <div>{t("calibration.confidenceLabel", "CONF")}: {Math.round(calibrationGateConfidence * 100)}%</div>
+                      <div>{t("calibration.samplesLabel", "SAMPLES")}: {calibrationGateSamples}</div>
+                      <div>{t("calibration.progressLabel", "PROGRESS")}: {calibrationReady ? t("calibration.ready", "READY") : `${calibrationGateProgressPct}%`}</div>
+                    </div>
+                    <div className="mt-3 rounded-lg border border-ninja-border bg-black/35 px-3 py-2 text-xs text-zinc-300">
+                      {calibrationGateStatusLine}
+                    </div>
+                    <div className="mt-2 rounded-lg border border-ninja-border bg-black/35 px-3 py-2 text-xs text-zinc-300">
+                      {serverClockSynced
+                        ? t("calibration.serverClockSynced", "Server clock synced")
+                        : t("calibration.localFallbackClock", "Using local fallback clock")} • {t("calibration.statusLabel", "Calibration status")}:{" "}
+                      <span className={`font-black ${calibrationReady ? "text-emerald-300" : "text-amber-300"}`}>
+                        {calibrationReady ? t("calibration.ready", "READY") : t("calibration.missing", "MISSING")}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="mt-6 grid gap-3">
+                <div className="mt-4 space-y-3">
+                  <div className="grid items-center gap-2 sm:grid-cols-[92px,1fr,100px]">
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-zinc-400">{t("calibration.cameraLabel", "Camera")}</p>
+                    <select
+                      value={calibrationGateCameraIdx}
+                      onChange={(event) => {
+                        const next = clampInt(event.target.value, 0, 32, calibrationGateCameraIdx);
+                        setCalibrationGateCameraIdx(next);
+                        setSavedSettings((prev) => ({ ...prev, cameraIdx: next }));
+                        setDraftSettings((prev) => ({ ...prev, cameraIdx: next }));
+                      }}
+                      className="h-10 rounded-lg border border-ninja-border bg-black/35 px-3 text-sm text-white"
+                    >
+                      {cameraOptions.length === 0 && (
+                        <option value={calibrationGateCameraIdx}>{t("calibration.cameraLabel", "Camera")} {calibrationGateCameraIdx}</option>
+                      )}
+                      {cameraOptions.map((cam) => (
+                        <option key={`cal-gate-${cam.idx}-${cam.deviceId}`} value={cam.idx}>
+                          {cam.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void scanCameras();
+                        void startCalibrationGatePreview();
+                      }}
+                      disabled={cameraScanBusy}
+                      className="h-10 rounded-lg border border-ninja-border bg-ninja-card text-xs font-black tracking-wide text-zinc-100 hover:border-ninja-accent/45 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {cameraScanBusy ? t("calibration.scanBusy", "SCAN...") : t("calibration.scan", "SCAN")}
+                    </button>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => setView("calibration_session")}
-                    className="flex h-12 items-center justify-center rounded-xl bg-ninja-accent text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow"
+                    onClick={() => {
+                      if (!calibrationGateReady) {
+                        void scanCameras();
+                        void startCalibrationGatePreview();
+                        return;
+                      }
+                      setView("calibration_session");
+                    }}
+                    className="flex h-[50px] w-full items-center justify-center rounded-xl bg-ninja-accent text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow"
                   >
-                    START CALIBRATION
+                    {calibrationGateReady
+                      ? t("calibration.startCalibration", "START CALIBRATION")
+                      : t("calibration.retryCamera", "RETRY CAMERA")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setView(calibrationReturnView)}
-                    className="flex h-12 items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                  >
-                    BACK
-                  </button>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCalibrationReturnView("settings");
+                        setDraftSettings(savedSettings);
+                        setView("settings");
+                      }}
+                      className="flex h-[42px] items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
+                    >
+                      {t("settings.title", "SETTINGS")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setView(calibrationReturnView)}
+                      className="flex h-[42px] items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
+                    >
+                      {t("common.back", "BACK")}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -2548,10 +3562,10 @@ export default function PlayPage() {
                 onPrevJutsu={() => handleCycleSelectedJutsu(-1)}
                 onNextJutsu={() => handleCycleSelectedJutsu(1)}
                 onQuickCalibrate={() => {
-                  setCalibrationReturnView("free_play");
+                  setCalibrationReturnView("free_session");
                   setView("calibration_session");
                 }}
-                onBack={() => setView("free_play")}
+                onBack={() => setView("jutsu_library")}
               />
             )}
 
@@ -2577,10 +3591,10 @@ export default function PlayPage() {
                 onPrevJutsu={() => handleCycleSelectedJutsu(-1)}
                 onNextJutsu={() => handleCycleSelectedJutsu(1)}
                 onQuickCalibrate={() => {
-                  setCalibrationReturnView("rank_mode");
+                  setCalibrationReturnView("rank_session");
                   setView("calibration_session");
                 }}
-                onBack={() => setView("rank_mode")}
+                onBack={() => setView("jutsu_library")}
               />
             )}
 
@@ -2624,14 +3638,31 @@ export default function PlayPage() {
                             <button
                               key={name}
                               type="button"
-                              onClick={() => setSelectedJutsu(name)}
-                              className={`relative overflow-hidden rounded-xl border text-left transition ${
-                                selected
-                                  ? "border-ninja-accent shadow-[0_0_18px_rgba(255,120,50,0.32)]"
-                                  : unlocked
-                                    ? "border-ninja-border hover:border-ninja-accent/50"
-                                    : "border-zinc-700"
-                              }`}
+                              onClick={() => {
+                                setSelectedJutsu(name);
+                                if (libraryIntent === "browse") return;
+                                if (!stateReady || !identityLinked || actionBusy) return;
+                                if (!unlocked) {
+                                  openAlertModal("Skill Locked", `${name} unlocks at LV.${config.minLevel}.`, "OK");
+                                  return;
+                                }
+                                if (needsCalibrationGate) {
+                                  setCalibrationReturnView("jutsu_library");
+                                  setView("calibration_gate");
+                                  return;
+                                }
+                                if (libraryIntent === "rank") {
+                                  setView("rank_session");
+                                  return;
+                                }
+                                setView("free_session");
+                              }}
+                              className={`relative overflow-hidden rounded-xl border text-left transition ${selected
+                                ? "border-ninja-accent shadow-[0_0_18px_rgba(255,120,50,0.32)]"
+                                : unlocked
+                                  ? "border-ninja-border hover:border-ninja-accent/50"
+                                  : "border-zinc-700"
+                                }`}
                             >
                               <div className="absolute inset-0">
                                 {texture ? (
@@ -2674,45 +3705,13 @@ export default function PlayPage() {
                   </div>
                 )}
 
-                <div className="mt-6 grid gap-3 md:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (libraryIntent === "rank") {
-                        if (needsCalibrationGate) {
-                          setCalibrationReturnView("rank_mode");
-                          setView("calibration_gate");
-                          return;
-                        }
-                        setView("rank_session");
-                        return;
-                      }
-                      if (libraryIntent === "free") {
-                        if (needsCalibrationGate) {
-                          setCalibrationReturnView("free_play");
-                          setView("calibration_gate");
-                          return;
-                        }
-                        setView("free_session");
-                      }
-                    }}
-                    disabled={libraryIntent === "browse" || !selectedJutsuUnlocked || actionBusy || !stateReady || !identityLinked}
-                    className="flex h-12 items-center justify-center rounded-xl bg-ninja-accent text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow disabled:cursor-not-allowed disabled:opacity-55"
-                  >
-                    {libraryIntent === "rank"
-                      ? "START RANK SESSION"
-                      : libraryIntent === "free"
-                        ? "START FREE SESSION"
-                        : "OPEN FROM FREE/RANK MODE"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setView("mode_select")}
-                    className="flex h-12 items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                  >
-                    BACK TO SELECT PATH
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setView("mode_select")}
+                  className="mt-6 flex h-12 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
+                >
+                  {t("common.backToSelectPath", "BACK TO SELECT PATH")}
+                </button>
               </div>
             )}
 
@@ -2814,67 +3813,344 @@ export default function PlayPage() {
                   </section>
                 </div>
 
-                <div className="mt-6 grid gap-3 md:grid-cols-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLibraryIntent("free");
-                      setView("jutsu_library");
-                    }}
-                    className="flex h-12 items-center justify-center rounded-xl border border-emerald-500/35 bg-emerald-500/15 text-sm font-black text-emerald-200 hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-55"
-                  >
-                    OPEN FREE SESSION
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLibraryIntent("rank");
-                      setView("jutsu_library");
-                    }}
-                    className="flex h-12 items-center justify-center rounded-xl border border-blue-500/35 bg-blue-500/15 text-sm font-black text-blue-200 hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-55"
-                  >
-                    OPEN RANK SESSION
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!identity) return;
-                      void syncAuthoritativeState(identity, false);
-                    }}
-                    disabled={stateBusy || !identity}
-                    className="flex h-12 items-center justify-center rounded-xl border border-orange-500/35 bg-orange-500/15 text-sm font-black text-orange-200 hover:bg-orange-500/25 disabled:cursor-not-allowed disabled:opacity-55"
-                  >
-                    {stateBusy ? "SYNCING..." : "SYNC STATE"}
-                  </button>
-                </div>
-
                 <button
                   type="button"
                   onClick={() => setView("mode_select")}
                   className="mt-6 flex h-12 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
                 >
-                  BACK TO SELECT PATH
+                  {t("common.backToSelectPath", "BACK TO SELECT PATH")}
                 </button>
+              </div>
+            )}
+
+            {view === "leaderboard" && (
+              <div className="relative mx-auto w-full max-w-5xl overflow-hidden rounded-3xl border border-indigo-200/20 bg-ninja-panel/95 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.6)] md:p-8">
+                <div className="pointer-events-none absolute inset-0">
+                  <div className="absolute -top-28 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-cyan-400/10 blur-3xl" />
+                  <div className="absolute -right-24 top-20 h-56 w-56 rounded-full bg-orange-500/12 blur-3xl" />
+                  <div className="absolute -left-20 bottom-10 h-48 w-48 rounded-full bg-indigo-400/12 blur-3xl" />
+                </div>
+
+                <div className="relative">
+                  <div className="text-center">
+                    <p className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-300/90">{leaderboardTitleLine}</p>
+                    <h2 className="mt-1 text-3xl font-black tracking-tight md:text-5xl">
+                      <span className="bg-gradient-to-b from-white via-zinc-100 to-zinc-400 bg-clip-text text-transparent">
+                        {t("leaderboard.hallOfFame", "HALL OF FAME")}
+                      </span>
+                    </h2>
+                    <p className="mt-2 text-sm text-zinc-300/90">{leaderboardSubtitle}</p>
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLeaderboardBoard("speed");
+                        setLeaderboardPage(0);
+                      }}
+                      className={`rounded-xl border px-4 py-2 text-xs font-black tracking-[0.14em] transition ${leaderboardShowingSpeed
+                        ? "border-orange-300/70 bg-orange-500/20 text-orange-100 shadow-[0_0_24px_rgba(251,146,60,0.35)]"
+                        : "border-ninja-border bg-ninja-card text-zinc-200 hover:border-orange-300/40"
+                        }`}
+                    >
+                      {t("leaderboard.speedrunTab", "SPEEDRUN")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLeaderboardBoard("level");
+                        setLeaderboardPage(0);
+                      }}
+                      className={`rounded-xl border px-4 py-2 text-xs font-black tracking-[0.14em] transition ${!leaderboardShowingSpeed
+                        ? "border-cyan-300/70 bg-cyan-500/18 text-cyan-100 shadow-[0_0_24px_rgba(56,189,248,0.35)]"
+                        : "border-ninja-border bg-ninja-card text-zinc-200 hover:border-cyan-300/40"
+                        }`}
+                    >
+                      {t("leaderboard.levelTab", "LEVEL")}
+                    </button>
+                  </div>
+
+                  {leaderboardShowingSpeed && (
+                    <div className="mx-auto mt-4 flex w-full max-w-[560px] items-center gap-2 md:gap-3">
+                      <button
+                        type="button"
+                        onClick={() => cycleLeaderboardMode(-1)}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-zinc-100 hover:border-ninja-accent/45"
+                        aria-label={t("leaderboard.previousMode", "Previous leaderboard mode")}
+                      >
+                        <ChevronLeft className="h-5 w-5" />
+                      </button>
+                      <div className="min-w-0 flex-1 rounded-xl border border-amber-300/45 bg-amber-500/12 px-3 py-2 text-center text-sm font-black tracking-[0.1em] text-amber-200 md:text-base">
+                        <span className="block truncate">{formatLeaderboardModeLabel(leaderboardMode)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => cycleLeaderboardMode(1)}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-zinc-100 hover:border-ninja-accent/45"
+                        aria-label={t("leaderboard.nextMode", "Next leaderboard mode")}
+                      >
+                        <ChevronRight className="h-5 w-5" />
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="mt-6 rounded-2xl border border-indigo-300/25 bg-[linear-gradient(180deg,rgba(15,23,42,0.55),rgba(10,14,28,0.8))] p-3 md:p-4">
+                    <div
+                      className={`hidden items-center gap-x-3 border-b border-indigo-200/20 px-3 pb-2 text-[11px] font-black uppercase tracking-[0.16em] text-zinc-400 md:grid ${leaderboardShowingSpeed
+                        ? "md:grid-cols-[90px_minmax(0,1fr)_160px_140px]"
+                        : "md:grid-cols-[90px_minmax(0,1fr)_120px_180px_160px]"
+                        }`}
+                    >
+                      <span>{t("leaderboard.colRank", "Rank")}</span>
+                      <span>{t("leaderboard.colShinobi", "Shinobi")}</span>
+                      {leaderboardShowingSpeed ? (
+                        <>
+                          <span className="text-right">{t("leaderboard.colTime", "Time")}</span>
+                          <span>{t("leaderboard.colTitle", "Title")}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-right">{t("leaderboard.colLv", "LV")}</span>
+                          <span className="text-right">{t("leaderboard.colXp", "XP")}</span>
+                          <span>{t("leaderboard.colTitle", "Title")}</span>
+                        </>
+                      )}
+                    </div>
+
+                    {leaderboardLoading ? (
+                      <div className="flex h-52 items-center justify-center gap-2 text-sm text-zinc-200">
+                        <Loader2 className="h-4 w-4 animate-spin text-ninja-accent" />
+                        {t("leaderboard.loading", "Summoning scrolls...")}
+                      </div>
+                    ) : leaderboardError ? (
+                      <div className="flex h-52 items-center justify-center px-3 text-center text-sm text-red-200">
+                        {leaderboardError}
+                      </div>
+                    ) : leaderboardVisibleCount === 0 ? (
+                      <div className="flex h-52 items-center justify-center px-3 text-center text-sm text-zinc-300">
+                        {leaderboardShowingSpeed
+                          ? `${t("leaderboard.noRecordsFor", "No")} ${formatLeaderboardModeLabel(leaderboardMode)} ${t("leaderboard.recordsFound", "records found.")}`
+                          : t("leaderboard.noLevelRecordsFound", "No level leaderboard records found yet.")}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="hidden space-y-2 pt-2 md:block">
+                          {leaderboardShowingSpeed
+                            ? leaderboardRows.map((row, idx) => {
+                              const rank = (leaderboardPage * LEADERBOARD_PAGE_SIZE) + idx + 1;
+                              const title = getLeaderboardTitleForRank(rank);
+                              const titleClass = getLeaderboardTitleClass(rank);
+                              const usernameText = String(row.username || "Shinobi");
+                              const rowFx = rank === 1
+                                ? "border-amber-300/45 bg-gradient-to-r from-amber-500/18 via-amber-300/8 to-transparent"
+                                : rank <= 3
+                                  ? "border-zinc-300/25 bg-gradient-to-r from-zinc-300/10 via-zinc-200/5 to-transparent"
+                                  : "border-indigo-200/10 bg-black/12";
+                              return (
+                                <div key={`${row.id}-${rank}`} className={`grid items-center gap-x-3 rounded-xl border px-3 py-2.5 md:grid-cols-[90px_minmax(0,1fr)_160px_140px] ${rowFx}`}>
+                                  <span className={`font-black ${titleClass}`}>#{rank}</span>
+                                  <div className="flex min-w-0 items-center gap-2.5">
+                                    {row.avatar_url ? (
+                                      <Image
+                                        src={row.avatar_url}
+                                        alt={usernameText}
+                                        width={30}
+                                        height={30}
+                                        unoptimized
+                                        className={`h-8 w-8 rounded-full object-cover ${rank <= 3 ? "ring-1 ring-white/35" : ""}`}
+                                      />
+                                    ) : (
+                                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-700 text-xs font-black text-zinc-100">
+                                        {usernameText.slice(0, 1).toUpperCase()}
+                                      </div>
+                                    )}
+                                    <span className="truncate text-zinc-100">{usernameText}</span>
+                                  </div>
+                                  <span className="text-right font-mono text-lg font-black text-emerald-300">{Number(row.score_time || 0).toFixed(2)}s</span>
+                                  <span className={`inline-flex w-fit rounded-md border px-2 py-1 text-xs font-black tracking-[0.08em] ${titleClass} border-current/40 bg-black/25`}>
+                                    {title}
+                                  </span>
+                                </div>
+                              );
+                            })
+                            : leaderboardLevelRows.map((row, idx) => {
+                              const rank = (leaderboardPage * LEADERBOARD_PAGE_SIZE) + idx + 1;
+                              const titleClass = getLeaderboardTitleClass(rank);
+                              const usernameText = String(row.username || "Shinobi");
+                              const rowTitle = String(row.rank || getLeaderboardTitleForRank(rank)).toUpperCase();
+                              const rowFx = rank === 1
+                                ? "border-cyan-300/45 bg-gradient-to-r from-cyan-500/16 via-cyan-300/8 to-transparent"
+                                : rank <= 3
+                                  ? "border-zinc-300/25 bg-gradient-to-r from-zinc-300/10 via-zinc-200/5 to-transparent"
+                                  : "border-indigo-200/10 bg-black/12";
+                              return (
+                                <div key={`${row.id}-${rank}`} className={`grid items-center gap-x-3 rounded-xl border px-3 py-2.5 md:grid-cols-[90px_minmax(0,1fr)_120px_180px_160px] ${rowFx}`}>
+                                  <span className={`font-black ${titleClass}`}>#{rank}</span>
+                                  <div className="flex min-w-0 items-center gap-2.5">
+                                    {row.avatar_url ? (
+                                      <Image
+                                        src={row.avatar_url}
+                                        alt={usernameText}
+                                        width={30}
+                                        height={30}
+                                        unoptimized
+                                        className={`h-8 w-8 rounded-full object-cover ${rank <= 3 ? "ring-1 ring-white/35" : ""}`}
+                                      />
+                                    ) : (
+                                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-700 text-xs font-black text-zinc-100">
+                                        {usernameText.slice(0, 1).toUpperCase()}
+                                      </div>
+                                    )}
+                                    <span className="truncate text-zinc-100">{usernameText}</span>
+                                  </div>
+                                  <span className="text-right font-mono font-black text-sky-200">LV.{Math.max(0, Math.floor(Number(row.level) || 0))}</span>
+                                  <span className="text-right font-mono text-xl font-black text-emerald-300">{Math.max(0, Math.floor(Number(row.xp) || 0)).toLocaleString()}</span>
+                                  <span className={`inline-flex w-fit rounded-md border px-2 py-1 text-xs font-black tracking-[0.08em] ${titleClass} border-current/40 bg-black/25`}>
+                                    {rowTitle}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                        </div>
+
+                        <div className="space-y-2 pt-2 md:hidden">
+                          {leaderboardShowingSpeed
+                            ? leaderboardRows.map((row, idx) => {
+                              const rank = (leaderboardPage * LEADERBOARD_PAGE_SIZE) + idx + 1;
+                              const title = getLeaderboardTitleForRank(rank);
+                              const titleClass = getLeaderboardTitleClass(rank);
+                              const usernameText = String(row.username || "Shinobi");
+                              return (
+                                <div key={`${row.id}-${rank}`} className="rounded-xl border border-indigo-200/20 bg-black/25 p-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className={`text-sm font-black ${titleClass}`}>#{rank}</span>
+                                    <span className={`text-[11px] font-black ${titleClass}`}>{title}</span>
+                                  </div>
+                                  <div className="mt-2 flex items-center gap-2.5">
+                                    {row.avatar_url ? (
+                                      <Image
+                                        src={row.avatar_url}
+                                        alt={usernameText}
+                                        width={30}
+                                        height={30}
+                                        unoptimized
+                                        className="h-8 w-8 rounded-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-700 text-xs font-black text-zinc-100">
+                                        {usernameText.slice(0, 1).toUpperCase()}
+                                      </div>
+                                    )}
+                                    <span className="truncate text-zinc-100">{usernameText}</span>
+                                  </div>
+                                  <div className="mt-3 flex items-end justify-between">
+                                    <span className="text-[10px] font-black tracking-[0.14em] text-zinc-400">{t("leaderboard.colTime", "Time").toUpperCase()}</span>
+                                    <span className="font-mono text-xl font-black text-emerald-300">{Number(row.score_time || 0).toFixed(2)}s</span>
+                                  </div>
+                                </div>
+                              );
+                            })
+                            : leaderboardLevelRows.map((row, idx) => {
+                              const rank = (leaderboardPage * LEADERBOARD_PAGE_SIZE) + idx + 1;
+                              const titleClass = getLeaderboardTitleClass(rank);
+                              const usernameText = String(row.username || "Shinobi");
+                              const rowTitle = String(row.rank || getLeaderboardTitleForRank(rank)).toUpperCase();
+                              return (
+                                <div key={`${row.id}-${rank}`} className="rounded-xl border border-indigo-200/20 bg-black/25 p-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className={`text-sm font-black ${titleClass}`}>#{rank}</span>
+                                    <span className={`text-[11px] font-black ${titleClass}`}>{rowTitle}</span>
+                                  </div>
+                                  <div className="mt-2 flex items-center gap-2.5">
+                                    {row.avatar_url ? (
+                                      <Image
+                                        src={row.avatar_url}
+                                        alt={usernameText}
+                                        width={30}
+                                        height={30}
+                                        unoptimized
+                                        className="h-8 w-8 rounded-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-700 text-xs font-black text-zinc-100">
+                                        {usernameText.slice(0, 1).toUpperCase()}
+                                      </div>
+                                    )}
+                                    <span className="truncate text-zinc-100">{usernameText}</span>
+                                  </div>
+                                  <div className="mt-3 grid grid-cols-2 gap-2">
+                                    <div className="rounded-lg border border-sky-300/25 bg-sky-500/10 px-2 py-1.5">
+                                      <p className="text-[10px] font-black tracking-[0.12em] text-sky-200/85">{t("leaderboard.colLv", "LV")}</p>
+                                      <p className="text-right font-mono font-black text-sky-100">LV.{Math.max(0, Math.floor(Number(row.level) || 0))}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-emerald-300/25 bg-emerald-500/10 px-2 py-1.5">
+                                      <p className="text-[10px] font-black tracking-[0.12em] text-emerald-200/85">{t("leaderboard.colXp", "XP")}</p>
+                                      <p className="text-right font-mono font-black text-emerald-200">{Math.max(0, Math.floor(Number(row.xp) || 0)).toLocaleString()}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                    <span className="text-xs font-mono text-zinc-300">
+                      {t("leaderboard.page", "PAGE")} {leaderboardPage + 1} / {leaderboardPageCount} • {leaderboardTotalCount} {t("leaderboard.entries", "ENTRIES")}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={leaderboardLoading || !leaderboardCanPrev}
+                        onClick={() => setLeaderboardPage((prev) => Math.max(0, prev - 1))}
+                        className="rounded-lg border border-ninja-border bg-ninja-card px-4 py-2 text-xs font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40 disabled:cursor-not-allowed disabled:opacity-55"
+                      >
+                        {t("common.prev", "PREV")}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={leaderboardLoading || !leaderboardCanNext || !leaderboardHasNext}
+                        onClick={() => setLeaderboardPage((prev) => prev + 1)}
+                        className="rounded-lg border border-ninja-border bg-ninja-card px-4 py-2 text-xs font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40 disabled:cursor-not-allowed disabled:opacity-55"
+                      >
+                        {t("common.next", "NEXT")}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setView("mode_select")}
+                    className="mt-6 flex h-12 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
+                  >
+                    {t("common.backToSelectPath", "BACK TO SELECT PATH")}
+                  </button>
+                </div>
               </div>
             )}
 
             {view === "multiplayer" && (
               <LockedPanel
-                title="MULTIPLAYER (LOCKED)"
-                description="Online multiplayer matchmaking and anti-cheat flow are not enabled in this web build yet."
+                title={t("modeSelect.multiplayerLocked", "MULTIPLAYER (LOCKED)")}
+                description={t("multiplayer.lockedDescription", "Online multiplayer matchmaking and anti-cheat flow are not enabled in this web build yet.")}
+                joinLabel={t("multiplayer.joinDiscordForUpdates", "JOIN DISCORD FOR UPDATES")}
+                backLabel={t("common.backToSelectPath", "BACK TO SELECT PATH")}
                 onBack={() => setView("mode_select")}
               />
             )}
 
             {view === "settings" && (
               <div className="mx-auto max-w-2xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-8 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
-                <h2 className="text-3xl font-black tracking-tight text-white">SETTINGS</h2>
-                <p className="mt-1 text-sm text-ninja-dim">Menu settings mirror the pygame controls.</p>
+                <h2 className="text-3xl font-black tracking-tight text-white">{t("settings.title", "SETTINGS")}</h2>
+                <p className="mt-1 text-sm text-ninja-dim">{t("settings.subtitle", "Menu settings mirror the pygame controls.")}</p>
 
                 <div className="mt-6 space-y-6">
                   <div>
                     <div className="mb-2 flex items-center justify-between text-sm text-zinc-100">
-                      <span>Music Volume</span>
+                      <span>{t("settings.musicVolume", "Music Volume")}</span>
                       <span className="font-mono text-ninja-accent">{Math.round(draftSettings.musicVol * 100)}%</span>
                     </div>
                     <input
@@ -2895,7 +4171,7 @@ export default function PlayPage() {
 
                   <div>
                     <div className="mb-2 flex items-center justify-between text-sm text-zinc-100">
-                      <span>SFX Volume</span>
+                      <span>{t("settings.sfxVolume", "SFX Volume")}</span>
                       <span className="font-mono text-ninja-accent">{Math.round(draftSettings.sfxVol * 100)}%</span>
                     </div>
                     <input
@@ -2916,20 +4192,20 @@ export default function PlayPage() {
 
                   <div className="rounded-lg border border-ninja-border bg-ninja-bg/30 p-4">
                     <div className="mb-3 flex items-center justify-between gap-3">
-                      <p className="text-xs uppercase tracking-[0.14em] text-zinc-400">Camera Setup</p>
+                      <p className="text-xs uppercase tracking-[0.14em] text-zinc-400">{t("settings.cameraSetup", "Camera Setup")}</p>
                       <button
                         type="button"
                         onClick={() => void scanCameras()}
                         disabled={cameraScanBusy}
                         className="rounded-md border border-sky-500/40 bg-sky-500/15 px-3 py-1 text-[11px] font-black tracking-wide text-sky-200 hover:bg-sky-500/25 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {cameraScanBusy ? "SCANNING..." : "SCAN CAMERAS"}
+                        {cameraScanBusy ? t("settings.scanning", "SCANNING...") : t("settings.scanCameras", "SCAN CAMERAS")}
                       </button>
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-[1.8fr,1fr]">
                       <label className="text-sm text-zinc-100">
-                        <span className="block text-xs uppercase tracking-[0.14em] text-zinc-400">Camera Device</span>
+                        <span className="block text-xs uppercase tracking-[0.14em] text-zinc-400">{t("settings.cameraDevice", "Camera Device")}</span>
                         <select
                           value={draftSettings.cameraIdx}
                           onChange={(event) => {
@@ -2939,7 +4215,7 @@ export default function PlayPage() {
                           className="mt-2 w-full rounded-md border border-ninja-border bg-black/30 px-2 py-1 text-sm text-white"
                         >
                           {cameraOptions.length === 0 && (
-                            <option value={draftSettings.cameraIdx}>Camera {draftSettings.cameraIdx}</option>
+                            <option value={draftSettings.cameraIdx}>{t("settings.cameraLabel", "Camera")} {draftSettings.cameraIdx}</option>
                           )}
                           {cameraOptions.map((cam) => (
                             <option key={`${cam.idx}-${cam.deviceId}`} value={cam.idx}>
@@ -2947,30 +4223,14 @@ export default function PlayPage() {
                             </option>
                           ))}
                           {!currentCameraOption && cameraOptions.length > 0 && (
-                            <option value={draftSettings.cameraIdx}>Camera {draftSettings.cameraIdx}</option>
+                            <option value={draftSettings.cameraIdx}>{t("settings.cameraLabel", "Camera")} {draftSettings.cameraIdx}</option>
                           )}
-                        </select>
-                      </label>
-
-                      <label className="text-sm text-zinc-100">
-                        <span className="block text-xs uppercase tracking-[0.14em] text-zinc-400">Resolution</span>
-                        <select
-                          value={draftSettings.resolutionIdx}
-                          onChange={(event) => {
-                            const next = clampInt(event.target.value, 0, 2, draftSettings.resolutionIdx);
-                            setDraftSettings((prev) => ({ ...prev, resolutionIdx: next }));
-                          }}
-                          className="mt-2 w-full rounded-md border border-ninja-border bg-black/30 px-2 py-1 text-sm text-white"
-                        >
-                          <option value={0}>640x480</option>
-                          <option value={1}>1280x720</option>
-                          <option value={2}>1920x1080</option>
                         </select>
                       </label>
                     </div>
 
                     <label className="mt-3 flex items-center justify-between rounded-lg border border-ninja-border bg-black/20 px-3 py-2 text-sm text-zinc-100">
-                      <span>Camera Preview</span>
+                      <span>{t("settings.cameraPreview", "Camera Preview")}</span>
                       <input
                         type="checkbox"
                         checked={settingsPreviewEnabled}
@@ -2999,7 +4259,7 @@ export default function PlayPage() {
                   </div>
 
                   <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
-                    <span>Show Hand Skeleton</span>
+                    <span>{t("settings.showHandSkeleton", "Show Hand Skeleton")}</span>
                     <input
                       type="checkbox"
                       checked={draftSettings.debugHands}
@@ -3012,12 +4272,12 @@ export default function PlayPage() {
                   </label>
 
                   <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-400">
-                    <span>Restricted Signs (Require 2 Hands) - Always On</span>
+                    <span>{t("settings.restrictedSignsAlwaysOn", "Restricted Signs (Require 2 Hands) - Always On")}</span>
                     <input type="checkbox" checked readOnly disabled className="h-4 w-4 accent-orange-500" />
                   </label>
 
                   <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
-                    <span>Fullscreen</span>
+                    <span>{t("settings.fullscreen", "Fullscreen")}</span>
                     <input
                       type="checkbox"
                       checked={draftSettings.fullscreen}
@@ -3039,14 +4299,14 @@ export default function PlayPage() {
                     }}
                     className="h-12 rounded-xl border border-amber-500/40 bg-amber-500/15 px-6 text-sm font-black tracking-wide text-amber-200 hover:bg-amber-500/25"
                   >
-                    RUN CALIBRATION
+                    {t("settings.runCalibration", "RUN CALIBRATION")}
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleSaveSettings()}
                     className="h-12 rounded-xl bg-ninja-accent px-6 text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow"
                   >
-                    SAVE & BACK
+                    {t("settings.saveAndBack", "SAVE & BACK")}
                   </button>
                   <button
                     type="button"
@@ -3056,7 +4316,7 @@ export default function PlayPage() {
                     }}
                     className="h-12 rounded-xl border border-ninja-border bg-ninja-card px-6 text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
                   >
-                    CANCEL
+                    {t("common.cancel", "CANCEL")}
                   </button>
                 </div>
               </div>
@@ -3065,18 +4325,18 @@ export default function PlayPage() {
             {view === "tutorial" && (
               <div className="mx-auto max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-6 md:p-8 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
                 <p className="text-xs font-black tracking-[0.2em] text-ninja-dim">
-                  STEP {tutorialStep + 1} / {TUTORIAL_STEPS.length}
+                  {t("tutorial.step", "STEP")} {tutorialStep + 1} / {TUTORIAL_STEPS.length}
                 </p>
                 <h2 className="mt-2 text-3xl font-black tracking-tight text-white">{tutorial.title}</h2>
 
-                <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-[320px,1fr]">
-                  <div className="overflow-hidden rounded-2xl border border-ninja-border bg-ninja-bg/60">
+                <div className="mt-5 grid grid-cols-1 items-start gap-5 md:grid-cols-[320px,1fr]">
+                  <div className="flex w-full items-center justify-center overflow-hidden rounded-2xl border border-ninja-border bg-black/40 p-2 md:h-[220px] aspect-[16/11]">
                     <Image
                       src={tutorial.iconPath}
                       alt={tutorial.title}
                       width={320}
                       height={220}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-contain"
                     />
                   </div>
 
@@ -3099,7 +4359,7 @@ export default function PlayPage() {
                     className="inline-flex h-11 items-center gap-2 rounded-xl border border-ninja-border bg-ninja-card px-5 text-sm font-black text-zinc-100 hover:border-ninja-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <ChevronLeft className="h-4 w-4" />
-                    BACK
+                    {t("common.back", "BACK")}
                   </button>
                   <button
                     type="button"
@@ -3110,7 +4370,7 @@ export default function PlayPage() {
                     }}
                     className="inline-flex h-11 items-center gap-2 rounded-xl border border-ninja-border bg-ninja-card px-5 text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
                   >
-                    SKIP
+                    {t("tutorial.skip", "SKIP")}
                     <X className="h-4 w-4" />
                   </button>
                   <button
@@ -3126,7 +4386,9 @@ export default function PlayPage() {
                     }}
                     className="inline-flex h-11 items-center gap-2 rounded-xl bg-ninja-accent px-5 text-sm font-black text-white hover:bg-ninja-accent-glow"
                   >
-                    {tutorialStep >= TUTORIAL_STEPS.length - 1 ? "FINISH" : "NEXT"}
+                    {tutorialStep >= TUTORIAL_STEPS.length - 1
+                      ? t("tutorial.finish", "FINISH")
+                      : t("common.next", "NEXT")}
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </div>
@@ -3142,13 +4404,12 @@ export default function PlayPage() {
                   {ABOUT_SECTIONS.map((section) => (
                     <section key={section.title} className="rounded-xl border border-ninja-border bg-ninja-bg/35 p-4">
                       <h3
-                        className={`text-base font-black uppercase tracking-wide ${
-                          section.tone === "success"
-                            ? "text-green-300"
-                            : section.tone === "error"
-                              ? "text-red-300"
-                              : "text-ninja-accent"
-                        }`}
+                        className={`text-base font-black uppercase tracking-wide ${section.tone === "success"
+                          ? "text-green-300"
+                          : section.tone === "error"
+                            ? "text-red-300"
+                            : "text-ninja-accent"
+                          }`}
                       >
                         {section.title}
                       </h3>
@@ -3168,7 +4429,7 @@ export default function PlayPage() {
         )}
       </main>
 
-      {showAnnouncements && activeAnnouncement && !showWelcomeModal && !maintenanceGate && !updateGate && (
+      {showAnnouncements && activeAnnouncement && !maintenanceGate && !updateGate && (
         <div className="fixed inset-0 z-[59] flex items-center justify-center p-4">
           <button
             type="button"
@@ -3178,7 +4439,7 @@ export default function PlayPage() {
           />
           <div className="relative w-full max-w-[620px] rounded-2xl border border-ninja-border bg-[#11141f]/96 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.65)]">
             <p className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">
-              Announcement {announcementIndex + 1} / {announcements.length}
+              {t("announcement.title", "Announcement")} {announcementIndex + 1} / {announcements.length}
             </p>
             <p className="mt-4 rounded-xl border border-ninja-border bg-black/30 px-4 py-4 text-sm leading-relaxed text-zinc-100">
               {activeAnnouncement.message}
@@ -3190,7 +4451,7 @@ export default function PlayPage() {
                 disabled={announcementIndex <= 0}
                 className="h-10 rounded-lg border border-ninja-border bg-ninja-card px-4 text-xs font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40 disabled:cursor-not-allowed disabled:opacity-45"
               >
-                PREV
+                {t("common.prev", "PREV")}
               </button>
               <button
                 type="button"
@@ -3203,54 +4464,9 @@ export default function PlayPage() {
                 }}
                 className="h-10 rounded-lg bg-ninja-accent px-4 text-xs font-black tracking-wide text-white hover:bg-ninja-accent-glow"
               >
-                {announcementIndex >= announcements.length - 1 ? "DONE" : "NEXT"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showWelcomeModal && session && !maintenanceGate && !updateGate && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button
-            type="button"
-            aria-label="Close welcome modal"
-            onClick={() => setShowWelcomeModal(false)}
-            className="absolute inset-0 bg-black/75"
-          />
-          <div className="relative w-full max-w-[560px] rounded-2xl border border-indigo-300/40 bg-gradient-to-b from-indigo-950/92 to-slate-950/96 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.68)]">
-            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-indigo-200/90">Welcome Back</p>
-            <p className="mt-2 text-3xl font-black tracking-tight text-white">{username}</p>
-            <p className="mt-2 text-sm text-zinc-200">
-              Discord-linked account is active. Progression and XP are synced through guarded RPC routes.
-            </p>
-            <div className="mt-4 grid gap-2 rounded-xl border border-indigo-300/25 bg-indigo-900/20 p-3 text-xs text-zinc-200 md:grid-cols-3">
-              <div>Level: <span className="font-black text-white">{progression.level}</span></div>
-              <div>Rank: <span className="font-black text-white">{progression.rank}</span></div>
-              <div>XP: <span className="font-black text-white">{progression.xp}</span></div>
-            </div>
-            <div className="mt-6 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowWelcomeModal(false)}
-                className="h-10 rounded-lg border border-ninja-border bg-ninja-card px-4 text-xs font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-              >
-                LATER
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowWelcomeModal(false);
-                  if (!tutorialMeta.tutorialSeen) {
-                    setTutorialStep(0);
-                    setView("tutorial");
-                    return;
-                  }
-                  setView("mode_select");
-                }}
-                className="h-10 rounded-lg bg-ninja-accent px-4 text-xs font-black tracking-wide text-white hover:bg-ninja-accent-glow"
-              >
-                ENTER ACADEMY
+                {announcementIndex >= announcements.length - 1
+                  ? t("common.done", "DONE")
+                  : t("common.next", "NEXT")}
               </button>
             </div>
           </div>
@@ -3260,8 +4476,8 @@ export default function PlayPage() {
       {maintenanceGate && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/88 px-4">
           <div className="w-full max-w-[620px] rounded-2xl border border-red-400/35 bg-[#140f14]/96 p-7 shadow-[0_30px_95px_rgba(0,0,0,0.72)]">
-            <p className="text-[11px] font-black uppercase tracking-[0.23em] text-red-300">Maintenance</p>
-            <h3 className="mt-2 text-3xl font-black tracking-tight text-white">Jutsu Academy Temporarily Offline</h3>
+            <p className="text-[11px] font-black uppercase tracking-[0.23em] text-red-300">{t("maintenance.label", "Maintenance")}</p>
+            <h3 className="mt-2 text-3xl font-black tracking-tight text-white">{t("maintenance.title", "Jutsu Academy Temporarily Offline")}</h3>
             <p className="mt-4 rounded-xl border border-red-400/35 bg-red-500/10 px-4 py-3 text-sm leading-relaxed text-red-100">
               {maintenanceGate.message}
             </p>
@@ -3272,14 +4488,14 @@ export default function PlayPage() {
                 rel="noopener noreferrer"
                 className="inline-flex h-10 items-center rounded-lg border border-red-300/45 bg-red-500/18 px-4 text-xs font-black tracking-wide text-red-100 hover:bg-red-500/30"
               >
-                STATUS / DISCORD
+                {t("maintenance.statusDiscord", "STATUS / DISCORD")}
               </a>
               <button
                 type="button"
                 onClick={() => void pollRuntimeConfig()}
                 className="h-10 rounded-lg bg-red-600 px-4 text-xs font-black tracking-wide text-white hover:bg-red-500"
               >
-                RETRY
+                {t("common.retry", "RETRY")}
               </button>
             </div>
           </div>
@@ -3289,13 +4505,13 @@ export default function PlayPage() {
       {!maintenanceGate && updateGate && (
         <div className="fixed inset-0 z-[69] flex items-center justify-center bg-black/86 px-4">
           <div className="w-full max-w-[620px] rounded-2xl border border-amber-300/40 bg-[#15120b]/96 p-7 shadow-[0_30px_95px_rgba(0,0,0,0.72)]">
-            <p className="text-[11px] font-black uppercase tracking-[0.23em] text-amber-300">Mandatory Update</p>
-            <h3 className="mt-2 text-3xl font-black tracking-tight text-white">Client Update Required</h3>
+            <p className="text-[11px] font-black uppercase tracking-[0.23em] text-amber-300">{t("update.label", "Mandatory Update")}</p>
+            <h3 className="mt-2 text-3xl font-black tracking-tight text-white">{t("update.title", "Client Update Required")}</h3>
             <p className="mt-4 rounded-xl border border-amber-300/35 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
               {updateGate.message}
             </p>
             <div className="mt-4 rounded-lg border border-ninja-border bg-black/25 px-3 py-2 text-xs text-zinc-200">
-              Current: {WEB_APP_VERSION} • Required: {updateGate.remoteVersion || "latest"}
+              {t("update.current", "Current")}: {WEB_APP_VERSION} • {t("update.required", "Required")}: {updateGate.remoteVersion || t("update.latest", "latest")}
             </div>
             <div className="mt-5 flex flex-wrap justify-end gap-2">
               <a
@@ -3304,14 +4520,14 @@ export default function PlayPage() {
                 rel="noopener noreferrer"
                 className="inline-flex h-10 items-center rounded-lg border border-amber-300/45 bg-amber-500/18 px-4 text-xs font-black tracking-wide text-amber-100 hover:bg-amber-500/30"
               >
-                GET UPDATE
+                {t("update.getUpdate", "GET UPDATE")}
               </a>
               <button
                 type="button"
                 onClick={() => window.location.reload()}
                 className="h-10 rounded-lg bg-amber-600 px-4 text-xs font-black tracking-wide text-white hover:bg-amber-500"
               >
-                RELOAD
+                {t("update.reload", "RELOAD")}
               </button>
             </div>
           </div>
@@ -3341,14 +4557,16 @@ export default function PlayPage() {
 
             <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 220, 80)" }}>
               {masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null
-                ? "MASTERY UNLOCKED"
-                : "NEW BEST"}
+                ? t("mastery.masteryUnlocked", "MASTERY UNLOCKED")
+                : t("mastery.newBest", "NEW BEST")}
             </p>
             <p className="mt-1 text-center text-xl font-black" style={{ color: "rgb(200, 180, 130)" }}>{masteryPanel.jutsuName}</p>
 
             <p className="mt-3 text-center text-5xl font-black" style={{ color: "rgb(255, 245, 200)" }}>{masteryPanel.newBest.toFixed(2)}s</p>
             <p className="mt-1 text-center text-xs uppercase tracking-[0.16em]" style={{ color: "rgb(160, 220, 160)" }}>
-              {masteryPanel.previousBest === null ? "FIRST RECORD" : "NEW BEST TIME"}
+              {masteryPanel.previousBest === null
+                ? t("mastery.firstRecord", "FIRST RECORD")
+                : t("mastery.newBestTime", "NEW BEST TIME")}
             </p>
 
             <div
@@ -3367,11 +4585,11 @@ export default function PlayPage() {
                 className="h-8 w-8 object-contain"
               />
               <p className="text-sm font-black uppercase tracking-wide">
-                {masteryPanel.newTier === "none" ? "UNRANKED" : masteryPanel.newTier}
+                {masteryPanel.newTier === "none" ? t("mastery.unranked", "UNRANKED") : masteryPanel.newTier}
               </p>
               {(masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null) && (
                 <span className="ml-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: "rgb(200, 255, 180)" }}>
-                  Unlocked!
+                  {t("mastery.unlocked", "Unlocked!")}
                 </span>
               )}
             </div>
@@ -3381,7 +4599,7 @@ export default function PlayPage() {
                 className="mt-2 text-center text-xs font-black"
                 style={{ color: masteryDelta < 0 ? "rgb(100, 230, 120)" : "rgb(230, 110, 80)" }}
               >
-                {masteryDelta < 0 ? "UP" : "DOWN"} {Math.abs(masteryDelta).toFixed(2)}s
+                {masteryDelta < 0 ? t("mastery.up", "UP") : t("mastery.down", "DOWN")} {Math.abs(masteryDelta).toFixed(2)}s
               </p>
             )}
 
@@ -3400,13 +4618,13 @@ export default function PlayPage() {
                   <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryGoldPct}%`, backgroundColor: "rgb(255, 200, 40)" }} />
                 </div>
                 <div className="mt-2 flex justify-between text-[10px] uppercase tracking-wide" style={{ color: "rgb(180, 160, 120)" }}>
-                  <span>Bronze {masteryThresholds.bronze.toFixed(1)}s</span>
-                  <span>Silver {masteryThresholds.silver.toFixed(1)}s</span>
-                  <span>Gold {masteryThresholds.gold.toFixed(1)}s</span>
+                  <span>{t("mastery.bronze", "BRONZE")} {masteryThresholds.bronze.toFixed(1)}s</span>
+                  <span>{t("mastery.silver", "SILVER")} {masteryThresholds.silver.toFixed(1)}s</span>
+                  <span>{t("mastery.gold", "GOLD")} {masteryThresholds.gold.toFixed(1)}s</span>
                 </div>
                 {masteryNextTierHint && (
                   <p className="mt-2 text-center text-[11px]" style={{ color: "rgb(180, 160, 110)" }}>
-                    Next: {masteryNextTierHint.name} ({masteryNextTierHint.target.toFixed(2)}s) - {(masteryPanel.newBest - masteryNextTierHint.target).toFixed(2)}s to go
+                    {t("common.next", "NEXT")}: {masteryNextTierHint.name} ({masteryNextTierHint.target.toFixed(2)}s) - {(masteryPanel.newBest - masteryNextTierHint.target).toFixed(2)}s {t("mastery.toGo", "to go")}
                   </p>
                 )}
               </div>
@@ -3421,7 +4639,7 @@ export default function PlayPage() {
                 borderColor: "rgb(255, 190, 60)",
               }}
             >
-              Continue
+              {t("common.continue", "Continue")}
             </button>
           </div>
         </div>
@@ -3461,7 +4679,7 @@ export default function PlayPage() {
               ))}
             </div>
 
-            <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 210, 60)" }}>LEVEL UP</p>
+            <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 210, 60)" }}>{t("levelUp.title", "LEVEL UP")}</p>
             {!!levelUpPanel.sourceLabel && (
               <p className="mt-1 text-center text-[11px] uppercase tracking-[0.18em]" style={{ color: "rgb(160, 150, 120)" }}>{levelUpPanel.sourceLabel}</p>
             )}
@@ -3486,7 +4704,7 @@ export default function PlayPage() {
             {levelUpPanel.unlocked.length > 0 && (
               <div className="mt-5">
                 <p className="text-center text-[11px] font-black uppercase tracking-[0.17em]" style={{ color: "rgb(140, 215, 155)" }}>
-                  New Jutsu Unlocked
+                  {t("levelUp.newJutsuUnlocked", "New Jutsu Unlocked")}
                 </p>
                 <div className="mt-3 space-y-2">
                   {levelUpPanel.unlocked.slice(0, 4).map((name) => (
@@ -3504,7 +4722,7 @@ export default function PlayPage() {
                   ))}
                   {levelUpPanel.unlocked.length > 4 && (
                     <p className="text-center text-[11px]" style={{ color: "rgb(140, 160, 140)" }}>
-                      +{levelUpPanel.unlocked.length - 4} more
+                      +{levelUpPanel.unlocked.length - 4} {t("levelUp.more", "more")}
                     </p>
                   )}
                 </div>
@@ -3520,8 +4738,131 @@ export default function PlayPage() {
                 borderColor: "rgb(255, 200, 60)",
               }}
             >
-              Awesome
+              {t("levelUp.awesome", "Awesome")}
             </button>
+          </div>
+        </div>
+      )}
+
+      {session && showLogoutConfirm && (
+        <div className="fixed inset-0 z-[51] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close logout dialog"
+            onClick={() => setShowLogoutConfirm(false)}
+            className="absolute inset-0 bg-black/75"
+          />
+          <div className="relative w-full max-w-[500px] rounded-2xl border border-ninja-border bg-ninja-panel p-6 shadow-[0_24px_70px_rgba(0,0,0,0.62)]">
+            <p className="text-center text-2xl font-black tracking-tight text-white">{t("logout.title", "Sign Out?")}</p>
+            <p className="mt-4 text-center text-sm text-zinc-300">{t("logout.subtitle", "Sign out and clear this Discord session?")}</p>
+            <p className="mt-1 text-center text-sm text-zinc-400">{t("logout.helper", "You can log back in anytime.")}</p>
+
+            {authError && (
+              <p className="mt-4 rounded-lg border border-red-400/35 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                {authError}
+              </p>
+            )}
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void handleLogout()}
+                disabled={authBusy}
+                className="flex h-12 items-center justify-center gap-2 rounded-xl bg-red-700 text-sm font-black text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+                {t("menu.signOut", "SIGN OUT")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLogoutConfirm(false)}
+                className="h-12 rounded-xl border border-ninja-border bg-ninja-card text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
+              >
+                {t("common.cancel", "CANCEL")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {errorModal && !connectionLostState && (
+        <div className="fixed inset-0 z-[52] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close error modal"
+            onClick={() => setErrorModal(null)}
+            className="absolute inset-0 bg-black/80"
+          />
+          <div className="relative w-full max-w-[550px] rounded-2xl border border-red-400/60 bg-ninja-panel p-6 shadow-[0_24px_70px_rgba(0,0,0,0.62)]">
+            <p className="text-center text-2xl font-black text-red-300">{errorModal.title}</p>
+            <p className="mt-5 whitespace-pre-line text-center text-sm leading-relaxed text-zinc-100">
+              {errorModal.message}
+            </p>
+            <div className="mt-6 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setErrorModal(null)}
+                className="flex h-11 min-w-[170px] items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card px-5 text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
+              >
+                <AlertTriangle className="h-4 w-4 text-red-300" />
+                {t("common.backToMenu", "Back to Menu")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {alertModal && !connectionLostState && (
+        <div className="fixed inset-0 z-[53] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close alert modal"
+            onClick={() => setAlertModal(null)}
+            className="absolute inset-0 bg-black/80"
+          />
+          <div className="relative w-full max-w-[620px] rounded-[20px] border border-orange-300/70 bg-[#121729]/95 p-6 shadow-[0_28px_80px_rgba(0,0,0,0.68)]">
+            <div className="pointer-events-none absolute inset-x-[8px] top-[8px] h-[64px] rounded-[14px] bg-orange-400/10" />
+            <p className="relative text-center text-2xl font-black text-orange-200">{alertModal.title}</p>
+            <p className="relative mt-6 whitespace-pre-line text-center text-sm leading-relaxed text-zinc-100">
+              {alertModal.message}
+            </p>
+            <div className="relative mt-7 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setAlertModal(null)}
+                className="flex h-12 min-w-[220px] items-center justify-center rounded-xl bg-ninja-accent px-6 text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow"
+              >
+                {alertModal.buttonText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {connectionLostState && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/85" />
+          <div className="relative w-full max-w-[500px] rounded-2xl border border-red-400/60 bg-ninja-panel p-6 shadow-[0_30px_90px_rgba(0,0,0,0.75)]">
+            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-red-400/45 bg-red-500/10">
+              <WifiOff className="h-5 w-5 text-red-300" />
+            </div>
+            <p className="mt-3 text-center text-2xl font-black text-red-300">{connectionLostState.title}</p>
+            <div className="mt-4 space-y-2 text-center text-sm text-zinc-100">
+              {connectionLostState.lines.map((line) => (
+                <p key={`conn-line-${line}`}>{line}</p>
+              ))}
+            </div>
+            <div className="mt-7 flex justify-center">
+              <button
+                type="button"
+                onClick={() => void handleConnectionLostExit()}
+                disabled={authBusy}
+                className="flex h-12 min-w-[180px] items-center justify-center gap-2 rounded-xl bg-red-700 px-6 text-sm font-black text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {t("connection.exitToLogin", "EXIT TO LOGIN")}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3536,9 +4877,9 @@ export default function PlayPage() {
           />
 
           <div className="relative w-full max-w-md rounded-2xl border border-ninja-border bg-ninja-panel p-6">
-            <h3 className="text-2xl font-black tracking-tight text-white">Leaving so soon?</h3>
+            <h3 className="text-2xl font-black tracking-tight text-white">{t("quit.title", "Leaving so soon?")}</h3>
             <p className="mt-2 text-sm text-ninja-dim">
-              QUIT in web signs out your Discord session and returns you to login.
+              {t("quit.subtitle", "QUIT in web signs out your Discord session and returns you to login.")}
             </p>
             {authError && (
               <p className="mt-3 rounded-lg border border-red-400/35 bg-red-500/10 px-3 py-2 text-xs text-red-200">
@@ -3553,14 +4894,14 @@ export default function PlayPage() {
                 className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-black text-white hover:bg-red-500 disabled:opacity-60"
               >
                 {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
-                YES, QUIT
+                {t("quit.confirm", "YES, QUIT")}
               </button>
               <button
                 type="button"
                 onClick={() => setShowQuitConfirm(false)}
                 className="h-11 flex-1 rounded-xl border border-ninja-border bg-ninja-card text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
               >
-                STAY
+                {t("quit.stay", "STAY")}
               </button>
             </div>
           </div>

@@ -25,6 +25,7 @@ import {
 
 type ArenaPhase = "loading" | "ready" | "countdown" | "active" | "casting" | "completed" | "error";
 type PlayMode = "free" | "rank" | "calibration";
+type CameraRuntimeFailure = "none" | "disconnected" | "blocked";
 
 interface Landmark {
   x: number;
@@ -45,7 +46,18 @@ interface HandsResultShape {
 }
 
 interface HandLandmarkerLike {
-  detectForVideo: (video: HTMLVideoElement, nowMs: number) => HandsResultShape;
+  detectForVideo?: (video: HTMLVideoElement, nowMs: number) => HandsResultShape;
+  detect?: (video: HTMLVideoElement) => HandsResultShape;
+  close?: () => void;
+}
+
+interface FaceResultShape {
+  faceLandmarks?: Landmark[][];
+}
+
+interface FaceLandmarkerLike {
+  detectForVideo?: (video: HTMLVideoElement, nowMs: number) => FaceResultShape;
+  detect?: (video: HTMLVideoElement) => FaceResultShape;
   close?: () => void;
 }
 
@@ -62,6 +74,12 @@ interface PhoenixBall {
   vx: number;
   vy: number;
   radius: number;
+}
+
+interface FaceMotionState {
+  anchor: { x: number; y: number } | null;
+  yaw: number;
+  pitch: number;
 }
 
 export interface PlayArenaProofEvent {
@@ -138,6 +156,7 @@ const SIGN_ACCEPT_COOLDOWN_MS = 500;
 const LIGHTING_INTERVAL_MS = 240;
 const TWO_HANDS_GUIDE_DELAY_MS = 2000;
 const EFFECT_DEFAULT_DURATION_MS = 2200;
+const CAMERA_STALL_TIMEOUT_MS = 1400;
 
 const CALIBRATION_DURATION_S = 12;
 const CALIBRATION_MIN_SAMPLES = 100;
@@ -320,6 +339,39 @@ function computeEffectAnchor(landmarks: Landmark[][]): EffectAnchor | null {
   };
 }
 
+function computeFaceMotion(landmarks: Landmark[]): FaceMotionState {
+  if (!Array.isArray(landmarks) || landmarks.length < 264) {
+    return { anchor: null, yaw: 0, pitch: 0 };
+  }
+
+  const leftEye = landmarks[33];
+  const rightEye = landmarks[263];
+  const nose = landmarks[1];
+  const mouthUpper = landmarks[13];
+  const mouthLower = landmarks[14];
+
+  if (!leftEye || !rightEye || !nose || !mouthUpper || !mouthLower) {
+    return { anchor: null, yaw: 0, pitch: 0 };
+  }
+
+  const eyeCenterX = (leftEye.x + rightEye.x) / 2;
+  const eyeCenterY = (leftEye.y + rightEye.y) / 2;
+  const mouthY = (mouthUpper.y + mouthLower.y) / 2;
+  const eyeDist = Math.max(0.06, Math.abs(rightEye.x - leftEye.x));
+
+  const yaw = clamp((eyeCenterX - nose.x) / eyeDist, -1, 1);
+  const pitch = clamp((((mouthY - eyeCenterY) / eyeDist) - 0.35) * 1.2, -1, 1);
+
+  return {
+    anchor: {
+      x: clamp(1 - ((mouthUpper.x + mouthLower.x) / 2), 0.04, 0.96),
+      y: clamp(mouthY, 0.1, 0.9),
+    },
+    yaw,
+    pitch,
+  };
+}
+
 function drawLandmarks(ctx: CanvasRenderingContext2D, landmarks: Landmark[], width: number, height: number): void {
   const connections = [
     [0, 1], [1, 2], [2, 3], [3, 4],
@@ -391,9 +443,9 @@ function SignTile({
   const src = candidates[Math.min(candidateIndex, candidates.length - 1)] || "/pics/placeholder.png";
 
   return (
-    <div className="flex min-w-[84px] flex-col items-center gap-2">
+    <div className="flex min-w-[72px] flex-col items-center gap-1.5 md:min-w-[84px] md:gap-2">
       <div
-        className={`rounded-xl border p-1.5 shadow-[0_8px_20px_rgba(0,0,0,0.35)] ${
+        className={`rounded-xl border p-1 md:p-1.5 shadow-[0_8px_20px_rgba(0,0,0,0.35)] ${
           state === "done"
             ? "border-emerald-400/55 bg-emerald-500/12"
             : state === "casting"
@@ -411,12 +463,12 @@ function SignTile({
           onError={() => {
             setCandidateIndex((prev) => Math.min(prev + 1, candidates.length - 1));
           }}
-          className={`h-[68px] w-[68px] rounded-lg object-cover ${
+          className={`h-[58px] w-[58px] rounded-lg object-cover md:h-[68px] md:w-[68px] ${
             state === "done" ? "opacity-45" : ""
           }`}
         />
       </div>
-      <p className="text-[10px] font-bold uppercase tracking-wide text-zinc-200">
+      <p className="text-[9px] font-bold uppercase tracking-wide text-zinc-200 md:text-[10px]">
         {index + 1}. {toDisplayLabel(sign)}
       </p>
     </div>
@@ -487,6 +539,8 @@ export default function PlayArena({
   const streamRef = useRef<MediaStream | null>(null);
   const knnRef = useRef<KNNClassifier | null>(null);
   const handsRef = useRef<HandLandmarkerLike | null>(null);
+  const faceRef = useRef<FaceLandmarkerLike | null>(null);
+  const handBackendRef = useRef<"tasks_video" | "tasks_image" | "none">("none");
   const renderRafRef = useRef(0);
   const detectRafRef = useRef(0);
   const lastDetectRef = useRef(0);
@@ -530,12 +584,23 @@ export default function PlayArena({
   const fpsFramesRef = useRef(0);
   const xpPopupTimerRef = useRef<number | null>(null);
   const runFinishedRef = useRef(false);
+  const cameraFailureRef = useRef<CameraRuntimeFailure>("none");
+  const cameraTrackCleanupRef = useRef<(() => void) | null>(null);
+  const videoStallSinceRef = useRef(0);
+  const lastVideoMediaTimeRef = useRef(-1);
   const calibrationDiagRestoreRef = useRef<boolean | null>(null);
   const comboCloneHoldRef = useRef(false);
   const comboChidoriTripleRef = useRef(false);
   const comboRasenganTripleRef = useRef(false);
   const effectAnchorRef = useRef<EffectAnchor | null>(null);
+  const faceAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const headYawRef = useRef(0);
+  const headPitchRef = useRef(0);
+  const pendingEffectTimersRef = useRef<number[]>([]);
+  const pendingSoundTimersRef = useRef<number[]>([]);
   const autoSubmitTriggeredRef = useRef(false);
+  const submitInFlightRef = useRef(false);
+  const submittedRef = useRef(false);
 
   const [phase, setPhase] = useState<ArenaPhase>("loading");
   const [loadingMessage, setLoadingMessage] = useState("Loading arena...");
@@ -563,12 +628,19 @@ export default function PlayArena({
   const [showDetectionPanel, setShowDetectionPanel] = useState(false);
   const [showModelInfo, setShowModelInfo] = useState(false);
   const [fps, setFps] = useState(0);
+  const [detectorBackend, setDetectorBackend] = useState("TASKS VIDEO");
+  const [detectorError, setDetectorError] = useState("");
   const [activeEffect, setActiveEffect] = useState("");
   const [showJutsuEffect, setShowJutsuEffect] = useState(false);
   const [effectAnchor, setEffectAnchor] = useState<EffectAnchor | null>(null);
+  const [faceAnchor, setFaceAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [headYaw, setHeadYaw] = useState(0);
+  const [headPitch, setHeadPitch] = useState(0);
   const [phoenixFireballs, setPhoenixFireballs] = useState<PhoenixBall[]>([]);
   const [comboTripleEffect, setComboTripleEffect] = useState<"none" | "chidori" | "rasengan">("none");
   const [xpPopupText, setXpPopupText] = useState("");
+  const [xpPopupNonce, setXpPopupNonce] = useState(0);
+  const [cameraFailure, setCameraFailure] = useState<CameraRuntimeFailure>("none");
 
   const playSfx = useCallback((src: string, volume = 1) => {
     try {
@@ -580,6 +652,44 @@ export default function PlayArena({
     }
   }, [sfxVolume]);
 
+  const queueSfx = useCallback((src: string, delayMs = 0, volume = 1) => {
+    const timer = window.setTimeout(() => {
+      playSfx(src, volume);
+      pendingSoundTimersRef.current = pendingSoundTimersRef.current.filter((id) => id !== timer);
+    }, Math.max(0, Math.floor(delayMs)));
+    pendingSoundTimersRef.current.push(timer);
+  }, [playSfx]);
+
+  const getJutsuSfxPath = useCallback((name: string, effectName: string): string => {
+    const cfg = OFFICIAL_JUTSUS[name];
+    const direct = String(cfg?.soundPath || "").trim();
+    if (direct) return direct;
+    if (normalizeLabel(effectName) === "clone") return "/sounds/each.mp3";
+    if (normalizeLabel(effectName) === "fire" && normalizeLabel(name).includes("phoenix")) {
+      return "/sounds/fireball.mp3";
+    }
+    return "";
+  }, []);
+
+  const triggerJutsuSignature = useCallback((
+    name: string,
+    effectName: string,
+    options?: { delayMs?: number; volume?: number },
+  ) => {
+    const path = getJutsuSfxPath(name, effectName);
+    if (!path) return;
+    const effectNorm = normalizeLabel(effectName);
+    const baseDelay = Math.max(0, Math.floor(options?.delayMs ?? (effectNorm === "reaper" ? 0 : 500)));
+    const volume = options?.volume ?? 1;
+    if (effectNorm === "fire" && normalizeLabel(name).includes("phoenix")) {
+      for (let i = 0; i < 5; i += 1) {
+        queueSfx(path, baseDelay + (i * 400), volume);
+      }
+      return;
+    }
+    queueSfx(path, baseDelay, volume);
+  }, [getJutsuSfxPath, queueSfx]);
+
   const pushComboCue = useCallback((message: string) => {
     setComboCue(message);
     if (comboCueTimerRef.current) {
@@ -589,6 +699,25 @@ export default function PlayArena({
       setComboCue("");
       comboCueTimerRef.current = null;
     }, 1200);
+  }, []);
+
+  const markCameraFailure = useCallback((kind: Exclude<CameraRuntimeFailure, "none">, detail = "") => {
+    if (cameraFailureRef.current === kind) return;
+    cameraFailureRef.current = kind;
+    setCameraFailure(kind);
+    if (detail) {
+      setDetectorError((prev) => {
+        const token = `cam_${kind}: ${detail}`;
+        if (prev.includes(token)) return prev;
+        return prev ? `${prev} | ${token}` : token;
+      });
+    }
+  }, []);
+
+  const clearCameraFailure = useCallback(() => {
+    if (cameraFailureRef.current === "none") return;
+    cameraFailureRef.current = "none";
+    setCameraFailure("none");
   }, []);
 
   const forceCalibrationDiagnostics = useCallback(() => {
@@ -623,6 +752,14 @@ export default function PlayArena({
       effectTimerRef.current = null;
     }, Math.max(600, durationMs));
   }, []);
+
+  const queueEffect = useCallback((effectName: string, delayMs: number, durationMs: number) => {
+    const timer = window.setTimeout(() => {
+      triggerJutsuEffect(effectName, durationMs);
+      pendingEffectTimersRef.current = pendingEffectTimersRef.current.filter((id) => id !== timer);
+    }, Math.max(0, Math.floor(delayMs)));
+    pendingEffectTimersRef.current.push(timer);
+  }, [triggerJutsuEffect]);
 
   const resetProofState = useCallback(() => {
     proofEventsRef.current = [];
@@ -717,6 +854,8 @@ export default function PlayArena({
     comboRasenganTripleRef.current = false;
     calibrationDiagRestoreRef.current = null;
     autoSubmitTriggeredRef.current = false;
+    submitInFlightRef.current = false;
+    submittedRef.current = false;
     setComboTripleEffect("none");
     setEffectAnchor(null);
     setPhoenixFireballs([]);
@@ -746,6 +885,14 @@ export default function PlayArena({
       window.clearTimeout(xpPopupTimerRef.current);
       xpPopupTimerRef.current = null;
     }
+    for (const timer of pendingEffectTimersRef.current) {
+      window.clearTimeout(timer);
+    }
+    pendingEffectTimersRef.current = [];
+    for (const timer of pendingSoundTimersRef.current) {
+      window.clearTimeout(timer);
+    }
+    pendingSoundTimersRef.current = [];
 
     resetProofState();
 
@@ -771,7 +918,13 @@ export default function PlayArena({
     setActiveEffect("");
     setPhoenixFireballs([]);
     setXpPopupText("");
-  }, [resetProofState]);
+    setFaceAnchor(null);
+    setHeadYaw(0);
+    setHeadPitch(0);
+    clearCameraFailure();
+    videoStallSinceRef.current = 0;
+    lastVideoMediaTimeRef.current = -1;
+  }, [clearCameraFailure, resetProofState]);
 
   const finalizeCalibrationRun = useCallback(async () => {
     if (!isCalibrationMode) return;
@@ -847,6 +1000,7 @@ export default function PlayArena({
     }
 
     const effectDurationMs = Math.max(650, Math.round((Number(jutsu?.duration) || 2.2) * 1000));
+    triggerJutsuSignature(jutsuName, finalEffect, { volume: 1 });
     triggerJutsuEffect(finalEffect, effectDurationMs);
 
     if (castResultTimerRef.current) {
@@ -869,7 +1023,18 @@ export default function PlayArena({
       }
       castResultTimerRef.current = null;
     }, effectDurationMs);
-  }, [appendProofEvent, isCalibrationMode, isRankMode, jutsu?.duration, jutsu?.effect, jutsuName, playSfx, resetRunState, triggerJutsuEffect]);
+  }, [
+    appendProofEvent,
+    isCalibrationMode,
+    isRankMode,
+    jutsu?.duration,
+    jutsu?.effect,
+    jutsuName,
+    playSfx,
+    resetRunState,
+    triggerJutsuEffect,
+    triggerJutsuSignature,
+  ]);
 
   const startActiveRun = useCallback(() => {
     resetRunState();
@@ -916,18 +1081,20 @@ export default function PlayArena({
 
   const handleSubmitResult = useCallback(async () => {
     if (isCalibrationMode || !onComplete) return;
-    const canSubmitDuringCasting = phase === "casting" && runFinishedRef.current;
-    if (submitting || busy || submitted || (phase !== "completed" && !canSubmitDuringCasting)) return;
+    const phaseNow = phaseRef.current;
+    const canSubmitDuringCasting = phaseNow === "casting" && runFinishedRef.current;
+    if (submitInFlightRef.current || submittedRef.current || busy || (phaseNow !== "completed" && !canSubmitDuringCasting)) return;
 
+    submitInFlightRef.current = true;
     setSubmitting(true);
     try {
       const runMode: "free" | "rank" = isRankMode ? "rank" : "free";
       const payload: PlayArenaResult = {
         mode: runMode,
         jutsuName,
-        signsLanded: Math.max(signsLanded, sequence.length),
+        signsLanded: Math.max(signsLandedRef.current, sequence.length),
         expectedSigns: sequence.length,
-        elapsedSeconds: elapsedMs / 1000,
+        elapsedSeconds: Math.max(0, elapsedRef.current / 1000),
       };
 
       if (isRankMode) {
@@ -968,6 +1135,7 @@ export default function PlayArena({
       }
 
       if (accepted) {
+        submittedRef.current = true;
         setSubmitted(true);
       }
 
@@ -975,6 +1143,7 @@ export default function PlayArena({
       setSubmitDetail(detailText);
       setRankInfo(rankText);
       if (xpAwarded > 0 && !isCalibrationMode) {
+        setXpPopupNonce((prev) => prev + 1);
         setXpPopupText(`+${xpAwarded} XP`);
         if (xpPopupTimerRef.current) {
           window.clearTimeout(xpPopupTimerRef.current);
@@ -985,24 +1154,20 @@ export default function PlayArena({
         }, 1900);
       }
     } finally {
+      submitInFlightRef.current = false;
       setSubmitting(false);
     }
   }, [
     activeCalibrationProfile,
     busy,
     cameraIdx,
-    elapsedMs,
     isCalibrationMode,
     isRankMode,
     jutsuName,
     onComplete,
-    phase,
     resolutionIdx,
     restrictedSigns,
     sequence.length,
-    signsLanded,
-    submitted,
-    submitting,
   ]);
 
   useEffect(() => {
@@ -1018,6 +1183,14 @@ export default function PlayArena({
   }, [signsLanded]);
 
   useEffect(() => {
+    submittedRef.current = submitted;
+  }, [submitted]);
+
+  useEffect(() => {
+    submitInFlightRef.current = submitting;
+  }, [submitting]);
+
+  useEffect(() => {
     showTwoHandsGuideRef.current = showTwoHandsGuide;
   }, [showTwoHandsGuide]);
 
@@ -1028,6 +1201,15 @@ export default function PlayArena({
   useEffect(() => {
     effectAnchorRef.current = effectAnchor;
   }, [effectAnchor]);
+
+  useEffect(() => {
+    faceAnchorRef.current = faceAnchor;
+  }, [faceAnchor]);
+
+  useEffect(() => {
+    headYawRef.current = headYaw;
+    headPitchRef.current = headPitch;
+  }, [headYaw, headPitch]);
 
   const handleResetRun = useCallback(() => {
     if (isRankMode) {
@@ -1046,7 +1228,7 @@ export default function PlayArena({
       });
       const canSubmitOnExit = runFinishedRef.current
         && (phaseRef.current === "casting" || phaseRef.current === "completed");
-      if (canSubmitOnExit && !submitted && !submitting) {
+      if (canSubmitOnExit && !submittedRef.current && !submitInFlightRef.current) {
         await handleSubmitResult();
       }
     }
@@ -1054,7 +1236,7 @@ export default function PlayArena({
       restoreCalibrationDiagnostics();
     }
     onBack();
-  }, [appendProofEvent, handleSubmitResult, isCalibrationMode, isRankMode, onBack, restoreCalibrationDiagnostics, submitted, submitting]);
+  }, [appendProofEvent, handleSubmitResult, isCalibrationMode, isRankMode, onBack, restoreCalibrationDiagnostics, submitted]);
 
   const canSwitchJutsuNow = useCallback((): boolean => {
     if (isCalibrationMode) return false;
@@ -1137,6 +1319,8 @@ export default function PlayArena({
       try {
         setPhase("loading");
         setLoadingMessage("Loading sign dataset...");
+        setDetectorBackend("INIT");
+        setDetectorError("");
 
         const csvResp = await fetch("/mediapipe_signs_db.csv", { cache: "force-cache" });
         if (!csvResp.ok) throw new Error(`Dataset fetch failed (${csvResp.status})`);
@@ -1147,23 +1331,81 @@ export default function PlayArena({
 
         setLoadingMessage("Loading hand tracker...");
         const vision = await import("@mediapipe/tasks-vision");
-        const { FilesetResolver, HandLandmarker } = vision;
+        const { FilesetResolver, HandLandmarker, FaceLandmarker } = vision as unknown as {
+          FilesetResolver: { forVisionTasks: (path: string) => Promise<unknown> };
+          HandLandmarker: {
+            createFromOptions: (resolver: unknown, options: Record<string, unknown>) => Promise<HandLandmarkerLike>;
+          };
+          FaceLandmarker?: {
+            createFromOptions: (resolver: unknown, options: Record<string, unknown>) => Promise<FaceLandmarkerLike>;
+          };
+        };
         const filesetResolver = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm",
         );
-        const handLandmarker = await HandLandmarker.createFromOptions(filesetResolver, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-            delegate: "GPU",
-          },
-          runningMode: "VIDEO",
-          numHands: 2,
-          minHandDetectionConfidence: 0.5,
-          minHandPresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-        });
+
+        const handErrors: string[] = [];
+        let handLandmarker: HandLandmarkerLike | null = null;
+        let backend: "tasks_video" | "tasks_image" | "none" = "none";
+        const handModelPath = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+        const candidates: Array<{ runningMode: "VIDEO" | "IMAGE"; delegate: "GPU" | "CPU"; backend: "tasks_video" | "tasks_image" }> = [
+          { runningMode: "VIDEO", delegate: "GPU", backend: "tasks_video" },
+          { runningMode: "VIDEO", delegate: "CPU", backend: "tasks_video" },
+          { runningMode: "IMAGE", delegate: "GPU", backend: "tasks_image" },
+          { runningMode: "IMAGE", delegate: "CPU", backend: "tasks_image" },
+        ];
+        for (const candidate of candidates) {
+          try {
+            handLandmarker = await HandLandmarker.createFromOptions(filesetResolver, {
+              baseOptions: {
+                modelAssetPath: handModelPath,
+                delegate: candidate.delegate,
+              },
+              runningMode: candidate.runningMode,
+              numHands: 2,
+              minHandDetectionConfidence: 0.25,
+              minHandPresenceConfidence: 0.25,
+              minTrackingConfidence: 0.25,
+            });
+            backend = candidate.backend;
+            break;
+          } catch (err) {
+            handErrors.push(`${candidate.runningMode.toLowerCase()}_${candidate.delegate.toLowerCase()}: ${String((err as Error)?.message || err)}`);
+          }
+        }
+        if (!handLandmarker) {
+          throw new Error(`hand_detector_unavailable: ${handErrors.join(" | ") || "no_backend"}`);
+        }
+
         handsRef.current = handLandmarker;
+        handBackendRef.current = backend;
+        setDetectorBackend(backend === "tasks_image" ? "TASKS IMAGE" : "TASKS VIDEO");
+        setDetectorError(handErrors.length > 0 ? handErrors.slice(0, 2).join(" | ") : "");
         if (cancelled) return;
+
+        if (FaceLandmarker?.createFromOptions) {
+          const faceModelPath = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+          const faceCandidates: Array<"GPU" | "CPU"> = ["GPU", "CPU"];
+          for (const delegate of faceCandidates) {
+            try {
+              faceRef.current = await FaceLandmarker.createFromOptions(filesetResolver, {
+                baseOptions: {
+                  modelAssetPath: faceModelPath,
+                  delegate,
+                },
+                runningMode: "VIDEO",
+                numFaces: 1,
+                minFaceDetectionConfidence: 0.35,
+                minFacePresenceConfidence: 0.35,
+                minTrackingConfidence: 0.35,
+              });
+              break;
+            } catch (err) {
+              const faceErr = `face_${delegate.toLowerCase()}: ${String((err as Error)?.message || err)}`;
+              setDetectorError((prev) => (prev ? `${prev} | ${faceErr}` : faceErr));
+            }
+          }
+        }
 
         setLoadingMessage("Starting camera...");
         const stream = await getStreamWithPreferences(cameraIdx, resolutionIdx);
@@ -1177,12 +1419,41 @@ export default function PlayArena({
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
         if (cancelled) return;
+        videoStallSinceRef.current = 0;
+        lastVideoMediaTimeRef.current = -1;
+        clearCameraFailure();
+
+        if (cameraTrackCleanupRef.current) {
+          cameraTrackCleanupRef.current();
+          cameraTrackCleanupRef.current = null;
+        }
+        const track = stream.getVideoTracks()[0] || null;
+        if (!track) {
+          markCameraFailure("disconnected", "camera_track_missing");
+        } else {
+          const onEnded = () => markCameraFailure("disconnected", "camera_track_ended");
+          const onMute = () => markCameraFailure("blocked", "camera_track_muted");
+          const onUnmute = () => {
+            videoStallSinceRef.current = 0;
+            clearCameraFailure();
+          };
+          track.addEventListener("ended", onEnded);
+          track.addEventListener("mute", onMute);
+          track.addEventListener("unmute", onUnmute);
+          cameraTrackCleanupRef.current = () => {
+            track.removeEventListener("ended", onEnded);
+            track.removeEventListener("mute", onMute);
+            track.removeEventListener("unmute", onUnmute);
+          };
+        }
 
         setErrorMessage("");
         setPhase("ready");
         phaseRef.current = "ready";
       } catch (err) {
         const message = String((err as Error)?.message || err || "Failed to initialize arena");
+        setDetectorBackend("NONE");
+        setDetectorError((prev) => prev || message);
         setErrorMessage(message);
         setPhase("error");
         phaseRef.current = "error";
@@ -1199,9 +1470,18 @@ export default function PlayArena({
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
+      if (cameraTrackCleanupRef.current) {
+        cameraTrackCleanupRef.current();
+        cameraTrackCleanupRef.current = null;
+      }
       if (handsRef.current && typeof handsRef.current.close === "function") {
         handsRef.current.close();
       }
+      handsRef.current = null;
+      if (faceRef.current && typeof faceRef.current.close === "function") {
+        faceRef.current.close();
+      }
+      faceRef.current = null;
       if (comboCueTimerRef.current) {
         window.clearTimeout(comboCueTimerRef.current);
         comboCueTimerRef.current = null;
@@ -1227,15 +1507,28 @@ export default function PlayArena({
         window.clearTimeout(xpPopupTimerRef.current);
         xpPopupTimerRef.current = null;
       }
+      for (const timer of pendingEffectTimersRef.current) {
+        window.clearTimeout(timer);
+      }
+      pendingEffectTimersRef.current = [];
+      for (const timer of pendingSoundTimersRef.current) {
+        window.clearTimeout(timer);
+      }
+      pendingSoundTimersRef.current = [];
       runFinishedRef.current = false;
       calibrationDiagRestoreRef.current = null;
       autoSubmitTriggeredRef.current = false;
+      submitInFlightRef.current = false;
+      submittedRef.current = false;
+      handBackendRef.current = "none";
+      cameraFailureRef.current = "none";
+      setCameraFailure("none");
       voteWindowRef.current = [];
       latestLandmarksRef.current = [];
       sampleCtxRef.current = null;
       sampleCanvasRef.current = null;
     };
-  }, [cameraIdx, resolutionIdx]);
+  }, [cameraIdx, clearCameraFailure, markCameraFailure, resolutionIdx]);
 
   useEffect(() => {
     if (phase === "ready" && (mode === "free" || mode === "calibration")) {
@@ -1304,7 +1597,39 @@ export default function PlayArena({
       renderRafRef.current = requestAnimationFrame(render);
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      if (!video || !canvas || video.readyState < 2) return;
+      if (!video || !canvas) return;
+
+      const nowMs = performance.now();
+      const stream = streamRef.current;
+      const track = stream?.getVideoTracks?.()[0] ?? null;
+      if (!stream || !track || track.readyState === "ended") {
+        markCameraFailure("disconnected", "camera_track_unavailable");
+        return;
+      }
+
+      if (video.readyState < 2) {
+        if (!videoStallSinceRef.current) {
+          videoStallSinceRef.current = nowMs;
+        }
+        if ((nowMs - videoStallSinceRef.current) >= CAMERA_STALL_TIMEOUT_MS) {
+          markCameraFailure("blocked", "video_not_ready");
+        }
+        return;
+      }
+
+      const mediaTime = Number(video.currentTime || 0);
+      if (mediaTime > (lastVideoMediaTimeRef.current + 0.0005)) {
+        lastVideoMediaTimeRef.current = mediaTime;
+        videoStallSinceRef.current = 0;
+        clearCameraFailure();
+      } else {
+        if (!videoStallSinceRef.current) {
+          videoStallSinceRef.current = nowMs;
+        }
+        if ((nowMs - videoStallSinceRef.current) >= CAMERA_STALL_TIMEOUT_MS) {
+          markCameraFailure(track.muted ? "blocked" : "disconnected", "video_frame_stalled");
+        }
+      }
 
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
@@ -1328,7 +1653,7 @@ export default function PlayArena({
 
     renderRafRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(renderRafRef.current);
-  }, [debugHands]);
+  }, [clearCameraFailure, debugHands, markCameraFailure]);
 
   useEffect(() => {
     const detect = (nowMs: number) => {
@@ -1340,6 +1665,21 @@ export default function PlayArena({
       const hands = handsRef.current;
       const knn = knnRef.current;
       if (!video || !hands || !knn || video.readyState < 2) return;
+      if (cameraFailureRef.current !== "none") {
+        latestLandmarksRef.current = [];
+        voteWindowRef.current = [];
+        setDetectedHands(0);
+        setRawDetectedLabel("No hands");
+        setRawDetectedConfidence(0);
+        setVoteHits(0);
+        setDetectedLabel("No hands");
+        setDetectedConfidence(0);
+        setEffectAnchor(null);
+        setFaceAnchor(null);
+        setHeadYaw(0);
+        setHeadPitch(0);
+        return;
+      }
 
       const phaseNow = phaseRef.current;
       const shouldTrackHands = phaseNow === "active" || phaseNow === "casting";
@@ -1358,12 +1698,63 @@ export default function PlayArena({
         setDetectedLabel("Idle");
         setDetectedConfidence(0);
         setEffectAnchor(null);
+        setFaceAnchor(null);
+        setHeadYaw(0);
+        setHeadPitch(0);
         return;
       }
 
-      const result = hands.detectForVideo(video, nowMs) as HandsResultShape;
+      let result: HandsResultShape = { landmarks: [], handedness: [] };
+      try {
+        if (handBackendRef.current === "tasks_image" && typeof hands.detect === "function") {
+          result = (hands.detect(video) as HandsResultShape) || result;
+        } else if (typeof hands.detectForVideo === "function") {
+          result = (hands.detectForVideo(video, nowMs) as HandsResultShape) || result;
+        } else if (typeof hands.detect === "function") {
+          result = (hands.detect(video) as HandsResultShape) || result;
+        }
+      } catch (err) {
+        const message = String((err as Error)?.message || err || "hand_detect_failed");
+        setDetectorError((prev) => {
+          const token = `detect: ${message}`;
+          if (prev.includes(token)) return prev;
+          return prev ? `${prev} | ${token}` : token;
+        });
+      }
+
       latestLandmarksRef.current = result.landmarks ?? [];
-      setEffectAnchor(computeEffectAnchor(result.landmarks ?? []));
+      const face = faceRef.current;
+      let faceMotion: FaceMotionState = { anchor: null, yaw: 0, pitch: 0 };
+      if (face) {
+        try {
+          let faceResult: FaceResultShape = { faceLandmarks: [] };
+          if (typeof face.detectForVideo === "function") {
+            faceResult = (face.detectForVideo(video, nowMs) as FaceResultShape) || faceResult;
+          } else if (typeof face.detect === "function") {
+            faceResult = (face.detect(video) as FaceResultShape) || faceResult;
+          }
+          const firstFace = faceResult.faceLandmarks?.[0];
+          if (Array.isArray(firstFace) && firstFace.length > 0) {
+            faceMotion = computeFaceMotion(firstFace);
+          }
+        } catch (err) {
+          const message = String((err as Error)?.message || err || "face_detect_failed");
+          setDetectorError((prev) => {
+            const token = `face: ${message}`;
+            if (prev.includes(token)) return prev;
+            return prev ? `${prev} | ${token}` : token;
+          });
+        }
+      }
+      setFaceAnchor(faceMotion.anchor);
+      setHeadYaw(faceMotion.yaw);
+      setHeadPitch(faceMotion.pitch);
+      const handAnchor = computeEffectAnchor(result.landmarks ?? []);
+      setEffectAnchor(handAnchor || (
+        faceMotion.anchor
+          ? { x: faceMotion.anchor.x, y: faceMotion.anchor.y, scale: 1 }
+          : null
+      ));
       const { features, numHands } = buildFeatures(result);
       setDetectedHands(numHands);
 
@@ -1544,7 +1935,14 @@ export default function PlayArena({
             const cue = `${String(part.name || "Combo").toUpperCase()} CHECKPOINT`;
             pushComboCue(cue);
             playSfx("/sounds/complete.mp3", 0.7);
-            triggerJutsuEffect(String(part.effect || "").toLowerCase(), 1700);
+            const partName = String(part.name || jutsuName);
+            const partEffectName = String(part.effect || "").toLowerCase();
+            triggerJutsuSignature(partName, partEffectName, { volume: 0.95 });
+            if (normalizeLabel(partEffectName) === "clone") {
+              queueEffect(partEffectName, 900, 1700);
+            } else {
+              triggerJutsuEffect(partEffectName, 1700);
+            }
             if (isRankMode) {
               appendProofEvent("combo_trigger", nowMs, {
                 step: nextStep,
@@ -1571,28 +1969,66 @@ export default function PlayArena({
     isCalibrationMode,
     isRankMode,
     jutsu?.comboParts,
+    jutsuName,
     playSfx,
     pushComboCue,
+    queueEffect,
     restrictedSigns,
     sequence,
+    triggerJutsuSignature,
     triggerJutsuEffect,
   ]);
 
   useEffect(() => {
     const shouldAutoSubmit = !isCalibrationMode
-      && !submitted
-      && !submitting
+      && !submittedRef.current
+      && !submitInFlightRef.current
       && (
         phase === "completed"
-        || (!isRankMode && phase === "casting")
+        || (phase === "casting" && runFinishedRef.current)
       );
     if (!shouldAutoSubmit || autoSubmitTriggeredRef.current) return;
     autoSubmitTriggeredRef.current = true;
     const timer = window.setTimeout(() => {
       void handleSubmitResult();
-    }, 280);
+    }, 120);
     return () => window.clearTimeout(timer);
-  }, [handleSubmitResult, isCalibrationMode, isRankMode, phase, submitted, submitting]);
+  }, [handleSubmitResult, isCalibrationMode, phase]);
+
+  useEffect(() => {
+    if (isCalibrationMode) return;
+
+    const flushSubmitOnExit = () => {
+      const phaseNow = phaseRef.current;
+      const canSubmit = runFinishedRef.current
+        && (phaseNow === "casting" || phaseNow === "completed");
+      if (!canSubmit || busy) return;
+      if (submittedRef.current || submitInFlightRef.current) return;
+      autoSubmitTriggeredRef.current = true;
+      void handleSubmitResult();
+    };
+
+    const onPageHide = () => {
+      flushSubmitOnExit();
+    };
+    const onBeforeUnload = () => {
+      flushSubmitOnExit();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        flushSubmitOnExit();
+      }
+    };
+
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [busy, handleSubmitResult, isCalibrationMode]);
 
   useEffect(() => {
     const effect = String(activeEffect || jutsu?.effect || "").toLowerCase();
@@ -1607,7 +2043,7 @@ export default function PlayArena({
       return;
     }
 
-    const anchor = effectAnchorRef.current;
+    const anchor = faceAnchorRef.current || effectAnchorRef.current;
     const cx = anchor?.x ?? 0.5;
     const cy = anchor?.y ?? 0.68;
     const count = 5;
@@ -1630,13 +2066,20 @@ export default function PlayArena({
       const prev = phoenixLastAtRef.current || ts;
       const dt = clamp((ts - prev) / 1000, 0.008, 0.035);
       phoenixLastAtRef.current = ts;
-      const windBias = ((effectAnchorRef.current?.x || 0.5) - 0.5) * 0.5;
+      const windBias = clamp(headYawRef.current, -1, 1) * 0.55;
+      const pitchLift = clamp(headPitchRef.current, -1, 1) * 0.35;
 
       balls = balls.map((ball) => {
         const jitterX = (Math.random() - 0.5) * 0.5;
         const jitterY = (Math.random() - 0.5) * 0.4;
         let vx = ball.vx + ((jitterX + windBias) * dt);
-        let vy = ball.vy + (jitterY * dt);
+        let vy = ball.vy + ((jitterY - pitchLift) * dt);
+        if (Math.random() < (2 * dt)) {
+          const impulse = 0.22 + (Math.random() * 0.34);
+          const theta = (Math.random() * Math.PI * 2) - Math.PI;
+          vx += Math.cos(theta) * impulse;
+          vy += Math.sin(theta) * impulse;
+        }
         const speed = Math.hypot(vx, vy);
         if (speed > 0.78) {
           const scale = 0.78 / Math.max(0.0001, speed);
@@ -1746,8 +2189,20 @@ export default function PlayArena({
   const diagCalibrationText = isCalibrationMode && phase === "active"
     ? `CALIBRATING ${calibrationProgressPct}%`
     : "PRESS C TO CALIBRATE";
+  const cameraStatusText = cameraFailure === "none" ? "OK" : cameraFailure.toUpperCase();
   const effectAnchorX = Math.round((effectAnchor?.x ?? 0.5) * 1000) / 10;
   const effectAnchorY = Math.round((effectAnchor?.y ?? 0.64) * 1000) / 10;
+  const fireAnchorX = Math.round(((faceAnchor?.x ?? effectAnchor?.x ?? 0.5) * 1000)) / 10;
+  const fireAnchorY = Math.round(((faceAnchor?.y ?? effectAnchor?.y ?? 0.64) * 1000)) / 10;
+  const fireAimYaw = clamp(headYaw, -1, 1);
+  const fireAimPitch = clamp(headPitch, -1, 1);
+  const fireOffsetX = Math.round(fireAimYaw * 90) / 10;
+  const fireOffsetY = Math.round(fireAimPitch * 65) / 10;
+  const fireBlastWidth = Math.max(140, Math.min(250, Math.round(170 + (Math.abs(fireAimYaw) * 64))));
+  const fireBlastHeight = Math.max(140, Math.min(250, Math.round(170 + (Math.abs(fireAimPitch) * 54))));
+  const detectorErrorShort = detectorError
+    ? `${detectorError.slice(0, 120)}${detectorError.length > 120 ? "..." : ""}`
+    : "none";
   const effectScale = effectAnchor?.scale ?? 1;
   const effectBaseSize = effectLabel === "lightning"
     ? 620
@@ -1785,47 +2240,47 @@ export default function PlayArena({
 
       <div className="space-y-4">
         <div className="relative">
-          <div className="absolute right-2 top-2 z-40 flex items-center gap-1.5 md:right-4 md:-top-[42px] md:top-auto">
+          <div className="absolute inset-x-2 top-2 z-40 flex flex-wrap items-center justify-end gap-1.5 md:inset-x-auto md:right-4 md:-top-[42px] md:top-auto md:flex-nowrap">
             <button
               type="button"
               onClick={() => setShowModelInfo(true)}
-              className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-full border border-sky-300/70 bg-[#12182d]/95 text-sky-200 hover:bg-[#1a2545]"
+              className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full border border-sky-300/70 bg-[#12182d]/95 text-sky-200 hover:bg-[#1a2545] md:h-[22px] md:w-[22px]"
             >
               <Info className="h-3 w-3" />
             </button>
             <button
               type="button"
               onClick={() => setShowModelInfo(true)}
-              className="inline-flex h-[30px] w-[182px] items-center justify-center rounded-[8px] border border-emerald-300/55 bg-[#1a1a23]/92 px-3 text-[11px] font-bold text-zinc-100 hover:bg-[#21212d]"
+              className="inline-flex h-[30px] min-w-[128px] items-center justify-center rounded-[8px] border border-emerald-300/55 bg-[#1a1a23]/92 px-3 text-[10px] font-bold text-zinc-100 hover:bg-[#21212d] sm:min-w-[158px] md:w-[182px] md:text-[11px]"
             >
               MODEL: MEDIAPIPE
             </button>
             <button
               type="button"
               onClick={() => setShowDetectionPanel((prev) => !prev)}
-              className="inline-flex h-[30px] w-[126px] items-center justify-center rounded-[8px] border border-zinc-500/55 bg-[#1b1b24]/90 px-3 text-[11px] font-bold text-zinc-200 hover:bg-[#242432]"
+              className="inline-flex h-[30px] min-w-[102px] items-center justify-center rounded-[8px] border border-zinc-500/55 bg-[#1b1b24]/90 px-3 text-[10px] font-bold text-zinc-200 hover:bg-[#242432] sm:min-w-[118px] md:w-[126px] md:text-[11px]"
             >
               DIAG: {showDetectionPanel ? "ON" : "OFF"}
             </button>
           </div>
 
           {!isCalibrationMode && (
-            <div className="absolute right-2 top-11 z-40 rounded-md border border-emerald-300/40 bg-black/72 px-2 py-1 text-[10px] font-mono text-emerald-300 md:right-[5px] md:-top-[18px] md:top-auto">
+            <div className="absolute right-2 top-[72px] z-40 rounded-md border border-emerald-300/40 bg-black/72 px-2 py-1 text-[10px] font-mono text-emerald-300 md:right-[5px] md:-top-[18px] md:top-auto">
               FPS {fps}
             </div>
           )}
 
           <div className="relative overflow-hidden rounded-2xl border border-ninja-border bg-black aspect-[4/3]">
           {!isCalibrationMode && (
-            <div className="absolute inset-x-0 top-0 z-30 h-[45px] border-b border-white/10 bg-[#141419]/90">
-              <p className="absolute left-5 top-1/2 -translate-y-1/2 text-xs font-bold text-white">
+            <div className="absolute inset-x-0 top-0 z-30 h-[58px] border-b border-white/10 bg-[#141419]/90 md:h-[45px]">
+              <p className="absolute left-3 top-[14px] text-[10px] font-bold text-white md:left-5 md:top-1/2 md:-translate-y-1/2 md:text-xs">
                 {hudRank} • LV.{hudLevel}
               </p>
-              <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2">
-                <div className="h-[10px] w-[58vw] min-w-[180px] max-w-[400px] rounded-full bg-zinc-700">
-                  <div className="h-[10px] rounded-full bg-orange-500" style={{ width: `${hudProgressPct}%` }} />
+              <div className="absolute left-1/2 top-[38px] flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 md:top-1/2 md:gap-2">
+                <div className="h-[9px] w-[48vw] min-w-[120px] max-w-[230px] rounded-full bg-zinc-700 md:h-[10px] md:w-[58vw] md:min-w-[180px] md:max-w-[400px]">
+                  <div className="h-[9px] rounded-full bg-orange-500 md:h-[10px]" style={{ width: `${hudProgressPct}%` }} />
                 </div>
-                <p className="text-[10px] font-mono text-zinc-200">{hudXp} / {hudNextXp} XP</p>
+                <p className="text-[9px] font-mono text-zinc-200 md:text-[10px]">{hudXp} / {hudNextXp} XP</p>
               </div>
             </div>
           )}
@@ -1848,32 +2303,35 @@ export default function PlayArena({
           )}
 
           {!!comboCue && (
-            <div className="absolute inset-x-0 top-3 z-30 flex justify-center">
-              <div className="rounded-lg border border-orange-300/45 bg-black/65 px-4 py-2 text-xs font-black uppercase tracking-[0.12em] text-orange-200">
+            <div className="absolute inset-x-0 top-[66px] z-30 flex justify-center md:top-3">
+              <div className="rounded-lg border border-orange-300/45 bg-black/65 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-orange-200 md:px-4 md:py-2 md:text-xs">
                 {comboCue}
               </div>
             </div>
           )}
 
           {showSpeedHud && (
-            <div className="absolute left-[15px] top-[15px] z-30 rounded-[6px] border border-orange-300/55 bg-black/75 px-3 py-1.5">
-              <p className="text-[11px] font-black uppercase tracking-[0.12em] text-zinc-200">
+            <div className="absolute left-2 top-[66px] z-30 rounded-[6px] border border-orange-300/55 bg-black/75 px-2 py-1 md:left-[15px] md:top-[15px] md:px-3 md:py-1.5">
+              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-zinc-200 md:text-[11px]">
                 SPEED: <span className="text-white">{formatElapsed(elapsedMs)}</span>
               </p>
             </div>
           )}
 
           {showSignChip && (
-            <div className="absolute right-[18px] top-[15px] z-30 rounded-[8px] border border-emerald-300/55 bg-black/75 px-3 py-1.5">
-              <p className="text-[11px] font-black uppercase tracking-[0.12em] text-emerald-200">
+            <div className="absolute right-2 top-[66px] z-30 rounded-[8px] border border-emerald-300/55 bg-black/75 px-2 py-1 md:right-[18px] md:top-[15px] md:px-3 md:py-1.5">
+              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200 md:text-[11px]">
                 SIGN: {detectedLabel.toUpperCase()}
               </p>
             </div>
           )}
 
           {showDetectionPanel && (
-            <div className="absolute left-[12px] top-[14px] z-30 w-[320px] rounded-[10px] border border-zinc-400/45 bg-black/68 px-[10px] py-[8px] text-[11px] font-mono text-white/90">
+            <div className="absolute left-2 right-2 top-[102px] z-30 w-auto max-w-[320px] rounded-[10px] border border-zinc-400/45 bg-black/68 px-[10px] py-[8px] text-[10px] font-mono text-white/90 md:left-[12px] md:right-auto md:top-[14px] md:w-[320px] md:text-[11px]">
               <div>MODEL: MEDIAPIPE</div>
+              <div>MP BACKEND: {detectorBackend}</div>
+              <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>
+              <div>CAM: {cameraStatusText}</div>
               <div>HANDS: {detectedHands}</div>
               <div>STRICT 2H: {restrictedSigns ? "ON" : "OFF"}</div>
               <div>LIGHT: {lightingStatus.toUpperCase().replace("_", " ")}</div>
@@ -1906,10 +2364,20 @@ export default function PlayArena({
                   <div
                     className="absolute rounded-full bg-orange-400/45 blur-2xl"
                     style={{
-                      width: "160px",
-                      height: "160px",
-                      left: `${effectAnchorX}%`,
-                      top: `${effectAnchorY}%`,
+                      width: `${fireBlastWidth}px`,
+                      height: `${fireBlastHeight}px`,
+                      left: `calc(${fireAnchorX}% + ${fireOffsetX}%)`,
+                      top: `calc(${fireAnchorY}% + ${fireOffsetY}%)`,
+                      transform: "translate(-50%, -50%)",
+                    }}
+                  />
+                  <div
+                    className="absolute rounded-full bg-amber-200/30 blur-3xl"
+                    style={{
+                      width: `${Math.round(fireBlastWidth * 0.72)}px`,
+                      height: `${Math.round(fireBlastHeight * 0.72)}px`,
+                      left: `calc(${fireAnchorX}% + ${(fireOffsetX * 1.2)}%)`,
+                      top: `calc(${fireAnchorY}% + ${(fireOffsetY * 1.2)}%)`,
                       transform: "translate(-50%, -50%)",
                     }}
                   />
@@ -1933,6 +2401,32 @@ export default function PlayArena({
                       }}
                     />
                   ))}
+                </div>
+              )}
+              {effectLabel === "reaper" && (
+                <div className="absolute inset-0">
+                  <div className="absolute inset-0 bg-gradient-to-t from-rose-950/45 via-red-800/18 to-transparent" />
+                  <div
+                    className="absolute rounded-full bg-red-400/30 blur-3xl"
+                    style={{
+                      width: "230px",
+                      height: "230px",
+                      left: `${fireAnchorX}%`,
+                      top: `${Math.max(8, fireAnchorY - 2)}%`,
+                      transform: "translate(-50%, -50%)",
+                    }}
+                  />
+                  <div
+                    className="absolute rounded-full border border-red-300/40 bg-red-900/25"
+                    style={{
+                      width: "88px",
+                      height: "88px",
+                      left: `${fireAnchorX}%`,
+                      top: `${Math.max(8, fireAnchorY - 1)}%`,
+                      transform: "translate(-50%, -50%)",
+                      boxShadow: "0 0 36px rgba(220,38,38,0.45)",
+                    }}
+                  />
                 </div>
               )}
               {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideoSrc && (
@@ -1961,10 +2455,22 @@ export default function PlayArena({
           )}
 
           {!!xpPopupText && (
-            <div className="pointer-events-none absolute inset-x-0 top-20 z-30 flex justify-center">
-              <div className="rounded-lg border border-orange-300/45 bg-black/60 px-4 py-2 text-base font-black text-orange-200">
+            <div key={`xp-popup-${xpPopupNonce}`} className="pointer-events-none absolute inset-x-0 top-[90px] z-30 flex justify-center md:top-20">
+              <div
+                className="rounded-lg border border-orange-300/45 bg-black/60 px-4 py-2 text-base font-black text-orange-200"
+                style={{ animation: "xpFloatFade 1.9s ease-out forwards" }}
+              >
                 {xpPopupText}
               </div>
+            </div>
+          )}
+
+          {cameraFailure !== "none" && phase !== "loading" && phase !== "error" && (
+            <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/68 px-5 text-center">
+              <Camera className="h-8 w-8 text-red-300" />
+              <p className="text-xl font-black text-red-200">
+                {cameraFailure === "disconnected" ? "Camera Disconnected" : "Camera blocked! Check OBS/Discord."}
+              </p>
             </div>
           )}
 
@@ -2006,7 +2512,10 @@ export default function PlayArena({
 
           {phase === "countdown" && (
             <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/55">
-              <p className="text-7xl font-black text-orange-300 drop-shadow-[0_0_18px_rgba(255,160,80,0.5)]">
+              <p
+                className="text-6xl font-black text-orange-300 drop-shadow-[0_0_18px_rgba(255,160,80,0.5)] md:text-7xl"
+                style={countdown > 0 ? { animation: "countdownPulse 1s linear infinite" } : undefined}
+              >
                 {countdown > 0 ? countdown : "GO"}
               </p>
             </div>
@@ -2128,9 +2637,9 @@ export default function PlayArena({
         </div>
 
         {!isCalibrationMode && (
-          <div className="relative h-5 text-[11px] text-zinc-400">
-            <span className="absolute left-1/2 -translate-x-1/2">Press ESC to exit</span>
-            <span className="absolute right-0">[C] Calibrate</span>
+          <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-zinc-400 sm:text-[11px]">
+            <span className="w-full text-center sm:w-auto sm:text-left">Press ESC to exit</span>
+            <span className="w-full text-center sm:w-auto sm:text-right">[C] Calibrate</span>
           </div>
         )}
 
@@ -2156,6 +2665,10 @@ export default function PlayArena({
             <p className="mt-2 text-sm text-zinc-200">
               YOLO switching is disabled in web play. MediaPipe is enforced to keep detection timing and leaderboard validation standardized.
             </p>
+            <div className="mt-3 rounded-lg border border-blue-300/30 bg-blue-950/20 px-3 py-2 text-[11px] font-mono text-blue-100/90">
+              <div>BACKEND: {detectorBackend}</div>
+              <div>ERROR: {detectorError || "none"}</div>
+            </div>
             <button
               type="button"
               onClick={() => setShowModelInfo(false)}
@@ -2166,6 +2679,17 @@ export default function PlayArena({
           </div>
         </div>
       )}
+      <style jsx global>{`
+        @keyframes countdownPulse {
+          0% { transform: scale(1.5); }
+          100% { transform: scale(1); }
+        }
+        @keyframes xpFloatFade {
+          0% { transform: translateY(0px); opacity: 1; }
+          75% { opacity: 1; }
+          100% { transform: translateY(-38px); opacity: 0; }
+        }
+      `}</style>
     </div>
   );
 }
