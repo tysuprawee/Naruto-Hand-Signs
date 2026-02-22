@@ -32,7 +32,7 @@ export const DEFAULT_FILTERS: CalibrationProfile = {
     lightingMax: 210,
     lightingMinContrast: 22,
     voteMinConfidence: 0.45,
-    voteRequiredHits: 3,
+    voteRequiredHits: 2,
 };
 
 function clamp(value: number, min: number, max: number): number {
