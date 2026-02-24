@@ -1,6 +1,6 @@
 # Dataset Version Runbook
 
-Use this every time you update the challenge dataset to keep caching and DB versioning consistent.
+Use this every time you update the `/play` dataset to keep caching and DB versioning consistent.
 
 ## 1. Record Dataset (same process as before)
 
@@ -18,7 +18,13 @@ src/mediapipe_signs_db.csv
 
 ## 2. Publish CSV for web
 
-Copy recorder output to the deployed static file path:
+Run polish pass first (remove one-hand samples for two-hand-only gameplay):
+
+```powershell
+python src\polish_mediapipe_csv.py --input src\mediapipe_signs_db.csv --inplace
+```
+
+Then copy recorder output to the deployed static file path:
 
 ```powershell
 Copy-Item src\mediapipe_signs_db.csv web\public\mediapipe_signs_db.csv -Force
@@ -55,7 +61,7 @@ where type = 'dataset';
 insert into public.app_config (type, message, version, is_active, priority, created_at, url, checksum)
 values (
   'dataset',
-  'Web challenge MediaPipe dataset',
+  'Web /play MediaPipe dataset',
   'YYYY.MM.DD.N',
   true,
   900,
@@ -106,10 +112,10 @@ Open:
 https://<your-domain>/mediapipe_signs_db.csv
 ```
 
-Confirm file downloads and challenge page loads normally.
+Confirm file downloads and `/play` loads normally.
 
 ## Notes
 
-- The challenge client now caches dataset by `dataset` version from `app_config`.
+- The `/play` client caches dataset by `dataset` version from `app_config`.
 - Browser should re-use cached CSV until version changes.
 - Keep `sql/dataset_version_commands.sql` as your SQL reference template.

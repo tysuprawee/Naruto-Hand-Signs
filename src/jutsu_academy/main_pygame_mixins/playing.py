@@ -1214,7 +1214,9 @@ class PlayingMixin:
             # Gloss
             pygame.draw.rect(self.screen, (255, 255, 255, 30), (bar_x, bar_y, bar_w * progress, 5), border_radius=5)
 
-        xp_txt = f"{self.progression.xp} / {next_lv_xp} XP"
+        xp_progress = int(self.progression.xp - prev_lv_xp)
+        xp_required = int(next_lv_xp - prev_lv_xp)
+        xp_txt = f"{xp_progress} / {xp_required} XP"
         xp_surf = self.fonts["tiny"].render(xp_txt, True, COLORS["text_dim"])
         self.screen.blit(xp_surf, (bar_x + bar_w + 10, bar_y - 3))
 

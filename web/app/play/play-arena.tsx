@@ -13,6 +13,7 @@ import {
 
 import { KNNClassifier, normalizeHand } from "@/utils/knn";
 import { OFFICIAL_JUTSUS } from "@/utils/jutsu-registry";
+import { getXpForLevel } from "@/utils/progression";
 import {
   applyTemporalVote,
   DEFAULT_FILTERS,
@@ -125,10 +126,14 @@ interface PlayArenaProps {
   mode: PlayMode;
   restrictedSigns: boolean;
   debugHands: boolean;
+  viewportFit?: boolean;
   busy?: boolean;
   sfxVolume?: number;
   cameraIdx?: number;
   resolutionIdx?: number;
+  datasetVersion?: string;
+  datasetChecksum?: string;
+  datasetUrl?: string;
   calibrationProfile?: Partial<CalibrationProfile> | null;
   progressionHud?: {
     xp: number;
@@ -251,6 +256,15 @@ function toNumber(value: unknown, fallback: number): number {
   return Number.isFinite(num) ? num : fallback;
 }
 
+function shortDatasetChecksum(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0").toUpperCase();
+}
+
 function sanitizeCalibrationProfile(raw: Partial<CalibrationProfile> | null | undefined): CalibrationProfile {
   return {
     version: Math.max(1, Math.floor(toNumber(raw?.version, DEFAULT_FILTERS.version))),
@@ -264,12 +278,17 @@ function sanitizeCalibrationProfile(raw: Partial<CalibrationProfile> | null | un
   };
 }
 
-function parseCsv(text: string): Record<string, string | number>[] {
+type DatasetRow = Record<string, string | number>;
+
+const DATASET_LABEL_ROWS_CACHE = new Map<string, DatasetRow[]>();
+const DATASET_FULL_ROWS_CACHE = new Map<string, DatasetRow[]>();
+
+function parseCsv(text: string): DatasetRow[] {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
 
   const headers = lines[0].split(",").map((h) => h.trim());
-  const rows: Record<string, string | number>[] = [];
+  const rows: DatasetRow[] = [];
 
   for (let i = 1; i < lines.length; i += 1) {
     const line = lines[i];
@@ -285,6 +304,17 @@ function parseCsv(text: string): Record<string, string | number>[] {
   }
 
   return rows;
+}
+
+function buildDatasetVersionToken(version: string): string {
+  const token = String(version || "").trim();
+  return token || "local";
+}
+
+function appendDatasetVersion(url: string, versionToken: string): string {
+  const base = String(url || "").trim() || "/mediapipe_signs_db.csv";
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}v=${encodeURIComponent(versionToken)}`;
 }
 
 function normalizeLabel(label: string): string {
@@ -307,6 +337,16 @@ function normalizeLabel(label: string): string {
     "clap hands": "clap",
   };
   return aliases[token] || token;
+}
+
+function getRequiredDatasetLabels(sequence: string[]): string[] {
+  const labels = new Set<string>(["idle"]);
+  for (const raw of sequence) {
+    const normalized = normalizeLabel(raw);
+    if (!normalized) continue;
+    labels.add(normalized);
+  }
+  return [...labels];
 }
 
 function signsMatch(
@@ -628,10 +668,14 @@ export default function PlayArena({
   mode,
   restrictedSigns,
   debugHands,
+  viewportFit = false,
   busy = false,
   sfxVolume = 0.35,
   cameraIdx = 0,
   resolutionIdx = 0,
+  datasetVersion = "",
+  datasetChecksum = "",
+  datasetUrl = "/mediapipe_signs_db.csv",
   calibrationProfile,
   progressionHud,
   onBack,
@@ -644,8 +688,19 @@ export default function PlayArena({
 }: PlayArenaProps) {
   const isRankMode = mode === "rank";
   const isCalibrationMode = mode === "calibration";
+  const isViewportFitSession = viewportFit && !isCalibrationMode;
   const jutsu = OFFICIAL_JUTSUS[jutsuName];
   const sequence = useMemo(() => (jutsu?.sequence ?? []).map((s) => normalizeLabel(s)), [jutsu]);
+  const sequenceKey = useMemo(() => sequence.join("|"), [sequence]);
+  const datasetVersionToken = useMemo(() => buildDatasetVersionToken(datasetVersion), [datasetVersion]);
+  const datasetChecksumHint = useMemo(
+    () => String(datasetChecksum || "").trim().toUpperCase(),
+    [datasetChecksum],
+  );
+  const datasetSourceUrl = useMemo(
+    () => String(datasetUrl || "").trim() || "/mediapipe_signs_db.csv",
+    [datasetUrl],
+  );
 
   const activeCalibrationProfile = useMemo(
     () => sanitizeCalibrationProfile(calibrationProfile),
@@ -664,6 +719,10 @@ export default function PlayArena({
   const lastDetectRef = useRef(0);
   const voteWindowRef = useRef<VoteEntry[]>([]);
   const latestLandmarksRef = useRef<Landmark[][]>([]);
+  const loadedDatasetRowsByLabelRef = useRef<Map<string, DatasetRow[]>>(new Map());
+  const datasetLoadingRef = useRef(false);
+  const ensureDatasetRowsForSequenceRef = useRef<(targetSequence: string[]) => Promise<void>>(async () => { });
+  const sequenceRef = useRef(sequence);
   const lightingLastRef = useRef(0);
   const sampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sampleCtxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -697,9 +756,8 @@ export default function PlayArena({
   const calibrationReturnTimerRef = useRef<number | null>(null);
   const phoenixRafRef = useRef(0);
   const phoenixLastAtRef = useRef(0);
-  const fpsRafRef = useRef(0);
-  const fpsLastAtRef = useRef(0);
-  const fpsFramesRef = useRef(0);
+  const cameraFpsWindowStartRef = useRef(0);
+  const cameraFpsFrameCountRef = useRef(0);
   const xpPopupTimerRef = useRef<number | null>(null);
   const runFinishedRef = useRef(false);
   const cameraFailureRef = useRef<CameraRuntimeFailure>("none");
@@ -748,6 +806,7 @@ export default function PlayArena({
   const [fps, setFps] = useState(0);
   const [detectorBackend, setDetectorBackend] = useState("TASKS VIDEO");
   const [detectorError, setDetectorError] = useState("");
+  const [datasetChecksumDisplay, setDatasetChecksumDisplay] = useState("--------");
   const [activeEffect, setActiveEffect] = useState("");
   const [showJutsuEffect, setShowJutsuEffect] = useState(false);
   const [effectAnchor, setEffectAnchor] = useState<EffectAnchor | null>(null);
@@ -764,11 +823,85 @@ export default function PlayArena({
     try {
       const audio = new Audio(src);
       audio.volume = clamp(sfxVolume * volume, 0, 1);
-      void audio.play().catch(() => {});
+      void audio.play().catch(() => { });
     } catch {
       // Ignore autoplay errors.
     }
   }, [sfxVolume]);
+
+  const ensureDatasetRowsForSequence = useCallback(async (targetSequence: string[]) => {
+    const requiredLabels = getRequiredDatasetLabels(targetSequence);
+    const missingLabels = requiredLabels.filter((label) => !loadedDatasetRowsByLabelRef.current.has(label));
+    if (missingLabels.length === 0) {
+      const existing = [...loadedDatasetRowsByLabelRef.current.values()].flat();
+      if (existing.length > 0) {
+        knnRef.current = new KNNClassifier(existing, 3, 1.8);
+      }
+      return;
+    }
+
+    datasetLoadingRef.current = true;
+    try {
+      for (const label of missingLabels) {
+        const normalizedLabel = normalizeLabel(label);
+        const cacheKey = `${datasetVersionToken}:${normalizedLabel}`;
+        let rows = DATASET_LABEL_ROWS_CACHE.get(cacheKey) || [];
+
+        if (rows.length === 0) {
+          const sliceUrl = `/api/mediapipe-dataset?labels=${encodeURIComponent(normalizedLabel)}&v=${encodeURIComponent(datasetVersionToken)}`;
+          try {
+            const sliceRes = await fetch(sliceUrl, { cache: "force-cache" });
+            if (sliceRes.ok) {
+              const sliceCsv = await sliceRes.text();
+              rows = parseCsv(sliceCsv).filter((row) => normalizeLabel(String(row.label || "")) === normalizedLabel);
+            }
+          } catch {
+            // Fall through to full-dataset fallback.
+          }
+        }
+
+        if (rows.length === 0) {
+          const fullCacheKey = `full:${datasetVersionToken}`;
+          let allRows = DATASET_FULL_ROWS_CACHE.get(fullCacheKey) || [];
+          if (allRows.length === 0) {
+            const fullUrl = appendDatasetVersion(datasetSourceUrl, datasetVersionToken);
+            const fullRes = await fetch(fullUrl, { cache: "force-cache" });
+            if (!fullRes.ok) {
+              throw new Error(`Dataset fetch failed (${fullRes.status})`);
+            }
+            const fullCsv = await fullRes.text();
+            allRows = parseCsv(fullCsv);
+            DATASET_FULL_ROWS_CACHE.set(fullCacheKey, allRows);
+            if (!datasetChecksumHint) {
+              setDatasetChecksumDisplay(shortDatasetChecksum(fullCsv));
+            }
+          }
+          rows = allRows.filter((row) => normalizeLabel(String(row.label || "")) === normalizedLabel);
+        }
+
+        DATASET_LABEL_ROWS_CACHE.set(cacheKey, rows);
+        loadedDatasetRowsByLabelRef.current.set(normalizedLabel, rows);
+      }
+
+      const mergedRows = [...loadedDatasetRowsByLabelRef.current.values()].flat();
+      if (mergedRows.length <= 0) {
+        throw new Error("dataset_empty");
+      }
+      knnRef.current = new KNNClassifier(mergedRows, 3, 1.8);
+
+      if (datasetChecksumHint) {
+        setDatasetChecksumDisplay(datasetChecksumHint.slice(0, 8));
+      } else {
+        const signature = [...loadedDatasetRowsByLabelRef.current.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, rows]) => `${name}:${rows.length}`)
+          .join("|");
+        setDatasetChecksumDisplay(shortDatasetChecksum(`${datasetVersionToken}|${signature}`));
+      }
+    } finally {
+      datasetLoadingRef.current = false;
+    }
+  }, [datasetChecksumHint, datasetSourceUrl, datasetVersionToken]);
 
   const queueSfx = useCallback((src: string, delayMs = 0, volume = 1) => {
     const timer = window.setTimeout(() => {
@@ -952,6 +1085,16 @@ export default function PlayArena({
       proofTokenReasonRef.current = String((err as Error)?.message || "token_request_failed");
     }
   }, [appendProofEvent, isRankMode, jutsuName, onRequestRunToken, resetProofState, sequence.length]);
+
+  useEffect(() => {
+    if (!datasetChecksumHint) return;
+    setDatasetChecksumDisplay(datasetChecksumHint.slice(0, 8));
+  }, [datasetChecksumHint]);
+
+  useEffect(() => {
+    loadedDatasetRowsByLabelRef.current = new Map();
+    knnRef.current = null;
+  }, [datasetVersionToken]);
 
   const resetRunState = useCallback(() => {
     voteWindowRef.current = [];
@@ -1178,6 +1321,7 @@ export default function PlayArena({
 
   const startRun = useCallback(() => {
     if (phaseRef.current === "loading" || phaseRef.current === "error") return;
+    if (datasetLoadingRef.current || !knnRef.current) return;
 
     if (isRankMode) {
       if (phaseRef.current === "completed") {
@@ -1296,6 +1440,14 @@ export default function PlayArena({
   }, [phase]);
 
   useEffect(() => {
+    ensureDatasetRowsForSequenceRef.current = ensureDatasetRowsForSequence;
+  }, [ensureDatasetRowsForSequence]);
+
+  useEffect(() => {
+    sequenceRef.current = sequence;
+  }, [sequence, sequenceKey]);
+
+  useEffect(() => {
     currentStepRef.current = currentStep;
   }, [currentStep]);
 
@@ -1361,9 +1513,9 @@ export default function PlayArena({
 
   const canSwitchJutsuNow = useCallback((): boolean => {
     if (isCalibrationMode) return false;
+    if (isRankMode) return false;
     if (phaseRef.current === "loading" || phaseRef.current === "error") return false;
     if (phaseRef.current === "countdown" || phaseRef.current === "active" || phaseRef.current === "casting") return false;
-    if (isRankMode && phaseRef.current !== "ready") return false;
     return true;
   }, [isCalibrationMode, isRankMode]);
 
@@ -1443,12 +1595,8 @@ export default function PlayArena({
         setDetectorBackend("INIT");
         setDetectorError("");
 
-        const csvResp = await fetch("/mediapipe_signs_db.csv", { cache: "force-cache" });
-        if (!csvResp.ok) throw new Error(`Dataset fetch failed (${csvResp.status})`);
-        const csvText = await csvResp.text();
+        await ensureDatasetRowsForSequenceRef.current(sequenceRef.current);
         if (cancelled) return;
-        const rows = parseCsv(csvText);
-        knnRef.current = new KNNClassifier(rows, 3, 1.8);
 
         setLoadingMessage("Loading hand tracker...");
         const vision = await import("@mediapipe/tasks-vision");
@@ -1542,6 +1690,9 @@ export default function PlayArena({
         if (cancelled) return;
         videoStallSinceRef.current = 0;
         lastVideoMediaTimeRef.current = -1;
+        cameraFpsWindowStartRef.current = 0;
+        cameraFpsFrameCountRef.current = 0;
+        setFps(0);
         clearCameraFailure();
 
         if (cameraTrackCleanupRef.current) {
@@ -1644,12 +1795,36 @@ export default function PlayArena({
       handBackendRef.current = "none";
       cameraFailureRef.current = "none";
       setCameraFailure("none");
+      cameraFpsWindowStartRef.current = 0;
+      cameraFpsFrameCountRef.current = 0;
+      setFps(0);
       voteWindowRef.current = [];
       latestLandmarksRef.current = [];
       sampleCtxRef.current = null;
       sampleCanvasRef.current = null;
     };
   }, [cameraIdx, clearCameraFailure, markCameraFailure, resolutionIdx]);
+
+  useEffect(() => {
+    if (phaseRef.current === "loading" || phaseRef.current === "error") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await ensureDatasetRowsForSequence(sequenceRef.current);
+      } catch (err) {
+        if (cancelled) return;
+        const message = String((err as Error)?.message || err || "dataset_preload_failed");
+        setDetectorError((prev) => {
+          const token = `dataset: ${message}`;
+          if (prev.includes(token)) return prev;
+          return prev ? `${prev} | ${token}` : token;
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ensureDatasetRowsForSequence, sequenceKey]);
 
   useEffect(() => {
     if (phase === "ready" && (mode === "free" || mode === "calibration")) {
@@ -1692,26 +1867,6 @@ export default function PlayArena({
   }, [phase]);
 
   useEffect(() => {
-    const trackFps = (ts: number) => {
-      if (!fpsLastAtRef.current) fpsLastAtRef.current = ts;
-      fpsFramesRef.current += 1;
-      if (ts - fpsLastAtRef.current >= 1000) {
-        setFps(fpsFramesRef.current);
-        fpsFramesRef.current = 0;
-        fpsLastAtRef.current = ts;
-      }
-      fpsRafRef.current = requestAnimationFrame(trackFps);
-    };
-    fpsRafRef.current = requestAnimationFrame(trackFps);
-    return () => {
-      if (fpsRafRef.current) cancelAnimationFrame(fpsRafRef.current);
-      fpsRafRef.current = 0;
-      fpsFramesRef.current = 0;
-      fpsLastAtRef.current = 0;
-    };
-  }, []);
-
-  useEffect(() => {
     if (!videoRef.current || !canvasRef.current) return;
 
     const render = () => {
@@ -1725,6 +1880,7 @@ export default function PlayArena({
       const track = stream?.getVideoTracks?.()[0] ?? null;
       if (!stream || !track || track.readyState === "ended") {
         markCameraFailure("disconnected", "camera_track_unavailable");
+        setFps(0);
         return;
       }
 
@@ -1734,6 +1890,7 @@ export default function PlayArena({
         }
         if ((nowMs - videoStallSinceRef.current) >= CAMERA_STALL_TIMEOUT_MS) {
           markCameraFailure("blocked", "video_not_ready");
+          setFps(0);
         }
         return;
       }
@@ -1743,12 +1900,24 @@ export default function PlayArena({
         lastVideoMediaTimeRef.current = mediaTime;
         videoStallSinceRef.current = 0;
         clearCameraFailure();
+        if (!cameraFpsWindowStartRef.current) {
+          cameraFpsWindowStartRef.current = nowMs;
+        }
+        cameraFpsFrameCountRef.current += 1;
+        const fpsWindowMs = nowMs - cameraFpsWindowStartRef.current;
+        if (fpsWindowMs >= 1000) {
+          const measured = Math.round((cameraFpsFrameCountRef.current * 1000) / fpsWindowMs);
+          setFps(Math.max(0, measured));
+          cameraFpsFrameCountRef.current = 0;
+          cameraFpsWindowStartRef.current = nowMs;
+        }
       } else {
         if (!videoStallSinceRef.current) {
           videoStallSinceRef.current = nowMs;
         }
         if ((nowMs - videoStallSinceRef.current) >= CAMERA_STALL_TIMEOUT_MS) {
           markCameraFailure(track.muted ? "blocked" : "disconnected", "video_frame_stalled");
+          setFps(0);
         }
       }
 
@@ -2258,10 +2427,10 @@ export default function PlayArena({
     : 0;
   const iconLayout = useMemo(() => {
     const n = Math.max(1, sequence.length);
-    const maxIconSize = 80;
-    const minIconSize = 40;
-    const gap = 12;
-    const maxTotalWidth = 840;
+    const maxIconSize = isViewportFitSession ? 68 : 80;
+    const minIconSize = isViewportFitSession ? 34 : 40;
+    const gap = isViewportFitSession ? 10 : 12;
+    const maxTotalWidth = isViewportFitSession ? 760 : 840;
     let iconSize = maxIconSize;
     let totalWidth = (n * iconSize) + ((n - 1) * gap);
     if (totalWidth > maxTotalWidth) {
@@ -2270,7 +2439,7 @@ export default function PlayArena({
       totalWidth = (n * iconSize) + ((n - 1) * gap);
     }
     return { iconSize, gap, totalWidth };
-  }, [sequence.length]);
+  }, [isViewportFitSession, sequence.length]);
   const calibrationProgressPct = Math.min(
     100,
     Math.round((1 - (calibrationSecondsLeft / CALIBRATION_DURATION_S)) * 100),
@@ -2281,15 +2450,15 @@ export default function PlayArena({
     ? "RUNNING"
     : phase === "casting"
       ? "CASTING"
-    : phase === "completed"
-      ? "COMPLETE"
-      : phase === "countdown"
-        ? "COUNTDOWN"
-        : phase === "ready"
-          ? (isRankMode ? "WAITING" : "READY")
-          : phase === "error"
-            ? "ERROR"
-            : "LOADING";
+      : phase === "completed"
+        ? "COMPLETE"
+        : phase === "countdown"
+          ? "COUNTDOWN"
+          : phase === "ready"
+            ? (isRankMode ? "WAITING" : "READY")
+            : phase === "error"
+              ? "ERROR"
+              : "LOADING";
 
   const iconProgressStep = phase === "casting" ? sequence.length : currentStep;
   const nextSign = currentStep < sequence.length ? toDisplayLabel(sequence[currentStep]).toUpperCase() : "COMPLETE";
@@ -2314,9 +2483,16 @@ export default function PlayArena({
   const hudLevel = Math.max(0, Math.floor(Number(progressionHud?.level) || 0));
   const hudXp = Math.max(0, Math.floor(Number(progressionHud?.xp) || 0));
   const hudRank = String(progressionHud?.rank || "Academy Student");
-  const hudNextXp = Math.max(hudXp + 1, Math.floor(Number(progressionHud?.xpToNextLevel) || (hudXp + 1200)));
-  const hudProgressPct = Math.max(0, Math.min(100, ((hudXp / hudNextXp) * 100)));
+  const hudPrevLevelXp = Math.max(0, getXpForLevel(hudLevel));
+  const hudNextXp = Math.max(
+    hudPrevLevelXp + 1,
+    Math.floor(Number(progressionHud?.xpToNextLevel) || getXpForLevel(Math.max(1, hudLevel + 1))),
+  );
+  const hudXpRequired = Math.max(1, hudNextXp - hudPrevLevelXp);
+  const hudXpIntoLevel = Math.max(0, Math.min(hudXpRequired, hudXp - hudPrevLevelXp));
+  const hudProgressPct = Math.max(0, Math.min(100, ((hudXpIntoLevel / hudXpRequired) * 100)));
   const showNavArrows = !isCalibrationMode && canSwitchJutsuNow() && Boolean(onPrevJutsu || onNextJutsu);
+  const datasetVersionLabel = datasetVersionToken === "local" ? "LOCAL" : datasetVersionToken;
 
   const effectLabel = String(activeEffect || jutsu?.effect || "").toLowerCase();
   const effectVideoSrc = effectLabel === "lightning"
@@ -2360,10 +2536,41 @@ export default function PlayArena({
       : 560;
   const effectSizePx = Math.max(280, Math.min(920, Math.round(effectBaseSize * effectScale)));
   const tripleOffsets = comboTripleEffect !== "none" ? [-28, 0, 28] : [0];
+  const arenaStageMaxWidthClass = isViewportFitSession ? "max-w-[1040px]" : "max-w-[900px] lg:max-w-[680px] xl:max-w-[720px]";
+  const topControlChips = (
+    <>
+      <button
+        type="button"
+        onClick={() => setShowModelInfo(true)}
+        className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full border border-sky-300/70 bg-[#12182d]/95 text-sky-200 hover:bg-[#1a2545] md:h-[22px] md:w-[22px]"
+      >
+        <Info className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        onClick={() => setShowModelInfo(true)}
+        className="inline-flex h-[30px] min-w-[128px] items-center justify-center rounded-[8px] border border-emerald-300/55 bg-[#1a1a23]/92 px-3 text-[10px] font-bold text-zinc-100 hover:bg-[#21212d] sm:min-w-[158px] md:w-[182px] md:text-[11px]"
+      >
+        MODEL: MEDIAPIPE
+      </button>
+      <button
+        type="button"
+        onClick={() => setShowDetectionPanel((prev) => !prev)}
+        className="inline-flex h-[30px] min-w-[102px] items-center justify-center rounded-[8px] border border-zinc-500/55 bg-[#1b1b24]/90 px-3 text-[10px] font-bold text-zinc-200 hover:bg-[#242432] sm:min-w-[118px] md:w-[126px] md:text-[11px]"
+      >
+        DIAG: {showDetectionPanel ? "ON" : "OFF"}
+      </button>
+      {!isCalibrationMode && (
+        <div className="inline-flex h-[30px] min-w-[82px] items-center justify-center rounded-[8px] border border-emerald-300/45 bg-black/72 px-3 text-[10px] font-mono text-emerald-300 md:text-[11px]">
+          FPS {fps}
+        </div>
+      )}
+    </>
+  );
 
   return (
-    <div className="mx-auto w-full max-w-6xl rounded-3xl border border-ninja-border bg-ninja-panel/92 p-4 shadow-[0_18px_55px_rgba(0,0,0,0.5)] md:p-6">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div className={`mx-auto w-full max-w-6xl rounded-3xl border border-ninja-border bg-ninja-panel/92 shadow-[0_18px_55px_rgba(0,0,0,0.5)] ${isViewportFitSession ? "flex h-full min-h-0 flex-col p-3 md:p-4" : "p-4 md:p-6"}`}>
+      <div className={`flex flex-wrap items-start justify-between gap-3 ${isViewportFitSession ? "mb-1" : "mb-4"}`}>
         <div>
           <p className="text-[11px] font-black uppercase tracking-[0.14em] text-ninja-dim">
             {isCalibrationMode ? "Calibration Session" : isRankMode ? "Rank Session" : "Free Session"}
@@ -2377,334 +2584,325 @@ export default function PlayArena({
               : (jutsu?.displayText || "Practice hand-sign execution.")}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void handleBackAction()}
-          className="inline-flex h-11 items-center gap-2 rounded-xl border border-ninja-border bg-ninja-card px-4 text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          BACK
-        </button>
-      </div>
-
-      <div className="space-y-4">
-        <div className="relative mx-auto w-full max-w-[900px] lg:max-w-[680px] xl:max-w-[720px]">
-          <div className="mb-2 flex flex-wrap items-center justify-end gap-1.5 md:flex-nowrap">
-            <button
-              type="button"
-              onClick={() => setShowModelInfo(true)}
-              className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full border border-sky-300/70 bg-[#12182d]/95 text-sky-200 hover:bg-[#1a2545] md:h-[22px] md:w-[22px]"
-            >
-              <Info className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowModelInfo(true)}
-              className="inline-flex h-[30px] min-w-[128px] items-center justify-center rounded-[8px] border border-emerald-300/55 bg-[#1a1a23]/92 px-3 text-[10px] font-bold text-zinc-100 hover:bg-[#21212d] sm:min-w-[158px] md:w-[182px] md:text-[11px]"
-            >
-              MODEL: MEDIAPIPE
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowDetectionPanel((prev) => !prev)}
-              className="inline-flex h-[30px] min-w-[102px] items-center justify-center rounded-[8px] border border-zinc-500/55 bg-[#1b1b24]/90 px-3 text-[10px] font-bold text-zinc-200 hover:bg-[#242432] sm:min-w-[118px] md:w-[126px] md:text-[11px]"
-            >
-              DIAG: {showDetectionPanel ? "ON" : "OFF"}
-            </button>
-            {!isCalibrationMode && (
-              <div className="inline-flex h-[30px] min-w-[82px] items-center justify-center rounded-[8px] border border-emerald-300/45 bg-black/72 px-3 text-[10px] font-mono text-emerald-300 md:text-[11px]">
-                FPS {fps}
-              </div>
-            )}
-          </div>
-
-          <div className="relative overflow-hidden rounded-2xl border border-ninja-border bg-black aspect-[4/3]">
-          {!isCalibrationMode && (
-            <div className="absolute inset-x-0 top-0 z-30 h-[58px] border-b border-white/10 bg-[#141419]/90 md:h-[45px]">
-              <p className="absolute left-3 top-[14px] text-[10px] font-bold text-white md:left-5 md:top-1/2 md:-translate-y-1/2 md:text-xs">
+        <div className={`flex flex-col items-end ${isViewportFitSession ? "gap-1" : ""}`}>
+          <button
+            type="button"
+            onClick={() => void handleBackAction()}
+            className="inline-flex h-11 items-center gap-2 rounded-xl border border-ninja-border bg-ninja-card px-4 text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            BACK
+          </button>
+          {isViewportFitSession && (
+            <div className="flex flex-wrap items-center justify-end gap-1.5 md:flex-nowrap">
+              {topControlChips}
+            </div>
+          )}
+          {!isCalibrationMode && isViewportFitSession && (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <p className="whitespace-nowrap text-[10px] font-bold text-white md:text-[11px]">
                 {hudRank} • LV.{hudLevel}
               </p>
-              <div className="absolute left-1/2 top-[38px] flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 md:top-1/2 md:gap-2">
-                <div className="h-[9px] w-[48vw] min-w-[120px] max-w-[230px] rounded-full bg-zinc-700 md:h-[10px] md:w-[58vw] md:min-w-[180px] md:max-w-[400px]">
-                  <div className="h-[9px] rounded-full bg-orange-500 md:h-[10px]" style={{ width: `${hudProgressPct}%` }} />
-                </div>
-                <p className="text-[9px] font-mono text-zinc-200 md:text-[10px]">{hudXp} / {hudNextXp} XP</p>
+              <div className="h-[8px] w-[42vw] min-w-[140px] max-w-[300px] rounded-full bg-zinc-700">
+                <div className="h-[8px] rounded-full bg-orange-500" style={{ width: `${hudProgressPct}%` }} />
               </div>
-            </div>
-          )}
-
-          {showTwoHandsGuide && (
-            <div className="absolute inset-0 z-10">
-              <Image
-                src="/pics/hands_layout.png"
-                alt="Show both hands"
-                fill
-                sizes="(max-width: 1024px) 100vw, 900px"
-                className="object-cover opacity-70"
-              />
-              <div className="absolute inset-x-0 bottom-4 flex justify-center">
-                <div className="rounded-lg border border-amber-300/55 bg-black/75 px-4 py-2 text-sm font-black text-amber-200">
-                  SHOW BOTH HANDS
-                </div>
-              </div>
-            </div>
-          )}
-
-          {!!comboCue && (
-            <div className="absolute inset-x-0 top-[66px] z-30 flex justify-center md:top-[54px]">
-              <div className="rounded-lg border border-orange-300/45 bg-black/65 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-orange-200 md:px-4 md:py-2 md:text-xs">
-                {comboCue}
-              </div>
-            </div>
-          )}
-
-          {showSpeedHud && (
-            <div className="absolute left-2 top-[66px] z-30 rounded-[6px] border border-orange-300/55 bg-black/75 px-2 py-1 md:left-[15px] md:top-[15px] md:px-3 md:py-1.5">
-              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-zinc-200 md:text-[11px]">
-                SPEED: <span className="text-white">{formatElapsed(elapsedMs)}</span>
+              <p className="shrink-0 whitespace-nowrap text-[9px] font-mono text-zinc-200 md:text-[10px]">
+                {hudXpIntoLevel} / {hudXpRequired} XP
               </p>
             </div>
           )}
+        </div>
+      </div>
 
-          {showSignChip && (
-            <div className={`absolute right-2 z-30 rounded-[8px] border border-emerald-300/55 bg-black/75 px-2 py-1 md:right-[18px] md:px-3 md:py-1.5 ${signChipTopClass}`}>
-              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200 md:text-[11px]">
-                SIGN: {detectedLabel.toUpperCase()}
-              </p>
+      <div className={isViewportFitSession ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-4"}>
+        <div className={`relative mx-auto w-full ${arenaStageMaxWidthClass} ${isViewportFitSession ? "flex min-h-0 flex-1 flex-col" : ""}`}>
+          {!isViewportFitSession && (
+            <div className="mb-2 flex flex-wrap items-center justify-end gap-1.5 md:flex-nowrap">
+              {topControlChips}
             </div>
           )}
 
-          {showDetectionPanel && (
-            <div className={`absolute left-2 right-2 z-30 w-auto max-w-[320px] rounded-[10px] border border-zinc-400/45 bg-black/68 px-[10px] py-[8px] text-[10px] font-mono text-white/90 md:left-[12px] md:right-auto md:w-[320px] md:text-[11px] ${detectionPanelTopClass}`}>
-              <div>MODEL: MEDIAPIPE</div>
-              <div>MP BACKEND: {detectorBackend}</div>
-              <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>
-              <div>CAM: {cameraStatusText}</div>
-              <div>HANDS: {detectedHands}</div>
-              <div>STRICT 2H: {restrictedSigns ? "ON" : "OFF"}</div>
-              <div>LIGHT: {lightingStatus.toUpperCase().replace("_", " ")}</div>
-              <div>VOTE {voteHits}/{VOTE_WINDOW_SIZE} • {detectedConfidencePct}%</div>
-              <div>{diagCalibrationText}</div>
-              <div>RAW: {rawDetectedLabel} {rawDetectedConfidencePct}%</div>
-              <div>STATE: {phaseLabel}</div>
-            </div>
-          )}
+          <div className={isViewportFitSession ? "relative flex min-h-0 flex-1 items-center justify-center overflow-hidden" : ""}>
+            <div className={`relative overflow-hidden border border-ninja-border bg-black ${isViewportFitSession ? "aspect-[4/3] h-full w-auto max-w-full rounded-[10px]" : "aspect-[4/3] rounded-2xl"}`}>
+            {!isCalibrationMode && !isViewportFitSession && (
+              <div className="absolute inset-x-0 top-0 z-30 h-[58px] border-b border-white/10 bg-[#141419]/90 md:h-[45px]">
+                <p className="absolute left-3 top-[14px] text-[10px] font-bold text-white md:left-5 md:top-1/2 md:-translate-y-1/2 md:text-xs">
+                  {hudRank} • LV.{hudLevel}
+                </p>
+                <div className="absolute left-1/2 top-[38px] flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 md:top-1/2 md:gap-2">
+                  <div className="h-[9px] w-[48vw] min-w-[120px] max-w-[230px] rounded-full bg-zinc-700 md:h-[10px] md:w-[58vw] md:min-w-[180px] md:max-w-[400px]">
+                    <div className="h-[9px] rounded-full bg-orange-500 md:h-[10px]" style={{ width: `${hudProgressPct}%` }} />
+                  </div>
+                  <p className="shrink-0 whitespace-nowrap text-[9px] font-mono text-zinc-200 md:text-[10px]">{hudXpIntoLevel} / {hudXpRequired} XP</p>
+                </div>
+              </div>
+            )}
 
-          <video ref={videoRef} className="hidden" playsInline muted />
-          <canvas ref={canvasRef} className="h-full w-full object-cover" />
+            {showTwoHandsGuide && (
+              <div className="absolute inset-0 z-10">
+                <Image
+                  src="/pics/hands_layout.png"
+                  alt="Show both hands"
+                  fill
+                  sizes="(max-width: 1024px) 100vw, 900px"
+                  className="object-cover opacity-70"
+                />
+                <div className="absolute inset-x-0 bottom-4 flex justify-center">
+                  <div className="rounded-lg border border-amber-300/55 bg-black/75 px-4 py-2 text-sm font-black text-amber-200">
+                    SHOW BOTH HANDS
+                  </div>
+                </div>
+              </div>
+            )}
 
-          {showJutsuEffect && (
-            <div className="pointer-events-none absolute inset-0 z-20">
-              {(effectLabel === "water" || effectLabel === "clone" || effectLabel === "eye") && (
-                <div
-                  className={`absolute inset-0 ${
-                    effectLabel === "water"
+            {!!comboCue && (
+              <div className="absolute inset-x-0 top-[66px] z-30 flex justify-center md:top-[54px]">
+                <div className="rounded-lg border border-orange-300/45 bg-black/65 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-orange-200 md:px-4 md:py-2 md:text-xs">
+                  {comboCue}
+                </div>
+              </div>
+            )}
+
+            {showSpeedHud && (
+              <div className="absolute left-2 top-[66px] z-30 rounded-[6px] border border-orange-300/55 bg-black/75 px-2 py-1 md:left-[15px] md:top-[15px] md:px-3 md:py-1.5">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-zinc-200 md:text-[11px]">
+                  SPEED: <span className="text-white">{formatElapsed(elapsedMs)}</span>
+                </p>
+              </div>
+            )}
+
+            {showSignChip && (
+              <div className={`absolute right-2 z-30 rounded-[8px] border border-emerald-300/55 bg-black/75 px-2 py-1 md:right-[18px] md:px-3 md:py-1.5 ${signChipTopClass}`}>
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200 md:text-[11px]">
+                  SIGN: {detectedLabel.toUpperCase()}
+                </p>
+              </div>
+            )}
+
+            {showDetectionPanel && (
+              <div className={`absolute left-2 right-2 z-30 w-auto max-w-[320px] rounded-[10px] border border-zinc-400/45 bg-black/68 px-[10px] py-[8px] text-[10px] font-mono text-white/90 md:left-[12px] md:right-auto md:w-[320px] md:text-[11px] ${detectionPanelTopClass}`}>
+                <div>MODEL: MEDIAPIPE</div>
+                <div>DB VER: {datasetVersionLabel}</div>
+                <div>DB CRC: {datasetChecksumDisplay.slice(0, 8)}</div>
+                <div>MP BACKEND: {detectorBackend}</div>
+                <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>
+                <div>CAM: {cameraStatusText}</div>
+                <div>HANDS: {detectedHands}</div>
+                <div>STRICT 2H: {restrictedSigns ? "ON" : "OFF"}</div>
+                <div>LIGHT: {lightingStatus.toUpperCase().replace("_", " ")}</div>
+                <div>VOTE {voteHits}/{VOTE_WINDOW_SIZE} • {detectedConfidencePct}%</div>
+                <div>{diagCalibrationText}</div>
+                <div>RAW: {rawDetectedLabel} {rawDetectedConfidencePct}%</div>
+                <div>STATE: {phaseLabel}</div>
+              </div>
+            )}
+
+            <video ref={videoRef} className="hidden" playsInline muted />
+            <canvas ref={canvasRef} className="h-full w-full object-cover" />
+
+            {showJutsuEffect && (
+              <div className="pointer-events-none absolute inset-0 z-20">
+                {(effectLabel === "water" || effectLabel === "clone" || effectLabel === "eye") && (
+                  <div
+                    className={`absolute inset-0 ${effectLabel === "water"
                         ? "bg-gradient-to-t from-sky-800/35 via-cyan-500/15 to-transparent"
                         : effectLabel === "clone"
                           ? "bg-gradient-to-r from-violet-500/15 via-indigo-400/15 to-violet-500/15"
                           : "bg-gradient-to-br from-red-700/20 via-fuchsia-500/15 to-transparent"
-                  }`}
-                />
-              )}
-              {effectLabel === "fire" && !isPhoenixFireEffect && (
-                <>
-                  <div className="absolute inset-0 bg-gradient-to-t from-orange-700/35 via-amber-500/20 to-transparent" />
-                  <div
-                    className="absolute rounded-full bg-orange-400/45 blur-2xl"
-                    style={{
-                      width: `${fireBlastWidth}px`,
-                      height: `${fireBlastHeight}px`,
-                      left: `calc(${fireAnchorX}% + ${fireOffsetX}%)`,
-                      top: `calc(${fireAnchorY}% + ${fireOffsetY}%)`,
-                      transform: "translate(-50%, -50%)",
-                    }}
+                      }`}
                   />
-                  <div
-                    className="absolute rounded-full bg-amber-200/30 blur-3xl"
-                    style={{
-                      width: `${Math.round(fireBlastWidth * 0.72)}px`,
-                      height: `${Math.round(fireBlastHeight * 0.72)}px`,
-                      left: `calc(${fireAnchorX}% + ${(fireOffsetX * 1.2)}%)`,
-                      top: `calc(${fireAnchorY}% + ${(fireOffsetY * 1.2)}%)`,
-                      transform: "translate(-50%, -50%)",
-                    }}
-                  />
-                </>
-              )}
-              {isPhoenixFireEffect && (
-                <div className="absolute inset-0">
-                  <div className="absolute inset-0 bg-gradient-to-t from-orange-900/30 via-orange-500/10 to-transparent" />
-                  {phoenixFireballs.map((ball) => (
-                    <div
-                      key={`phoenix-${ball.id}`}
-                      className="absolute rounded-full mix-blend-screen"
-                      style={{
-                        left: `${ball.x * 100}%`,
-                        top: `${ball.y * 100}%`,
-                        width: `${ball.radius * 2}px`,
-                        height: `${ball.radius * 2}px`,
-                        transform: "translate(-50%, -50%)",
-                        background: "radial-gradient(circle, rgba(255,255,220,0.86) 0%, rgba(255,165,60,0.75) 44%, rgba(255,80,30,0.24) 100%)",
-                        boxShadow: "0 0 18px rgba(255,110,30,0.55), 0 0 44px rgba(255,90,20,0.35)",
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
-              {effectLabel === "reaper" && (
-                <div className="absolute inset-0">
-                  <div className="absolute inset-0 bg-gradient-to-t from-rose-950/45 via-red-800/18 to-transparent" />
-                  <div
-                    className="absolute rounded-full bg-red-400/30 blur-3xl"
-                    style={{
-                      width: "230px",
-                      height: "230px",
-                      left: `${fireAnchorX}%`,
-                      top: `${Math.max(8, fireAnchorY - 2)}%`,
-                      transform: "translate(-50%, -50%)",
-                    }}
-                  />
-                  <div
-                    className="absolute rounded-full border border-red-300/40 bg-red-900/25"
-                    style={{
-                      width: "88px",
-                      height: "88px",
-                      left: `${fireAnchorX}%`,
-                      top: `${Math.max(8, fireAnchorY - 1)}%`,
-                      transform: "translate(-50%, -50%)",
-                      boxShadow: "0 0 36px rgba(220,38,38,0.45)",
-                    }}
-                  />
-                </div>
-              )}
-              {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideoSrc && (
-                <div className="absolute inset-0">
-                  {tripleOffsets.map((offsetPct, idx) => (
-                    <video
-                      key={`effect-${effectVideoSrc}-${idx}-${offsetPct}`}
-                      src={effectVideoSrc}
-                      autoPlay
-                      muted
-                      loop
-                      playsInline
-                      className="absolute object-contain opacity-70 mix-blend-screen"
-                      style={{
-                        width: `${effectSizePx}px`,
-                        height: `${effectSizePx}px`,
-                        left: `calc(${effectAnchorX}% + ${offsetPct}%)`,
-                        top: `${effectAnchorY}%`,
-                        transform: "translate(-50%, -50%)",
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {!!xpPopupText && (
-            <div key={`xp-popup-${xpPopupNonce}`} className="pointer-events-none absolute inset-x-0 top-[90px] z-30 flex justify-center md:top-20">
-              <div
-                className="rounded-lg border border-orange-300/45 bg-black/60 px-4 py-2 text-base font-black text-orange-200"
-                style={{ animation: "xpFloatFade 1.9s ease-out forwards" }}
-              >
-                {xpPopupText}
-              </div>
-            </div>
-          )}
-
-          {cameraFailure !== "none" && phase !== "loading" && phase !== "error" && (
-            <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/68 px-5 text-center">
-              <Camera className="h-8 w-8 text-red-300" />
-              <p className="text-xl font-black text-red-200">
-                {cameraFailure === "disconnected" ? "Camera Disconnected" : "Camera blocked! Check OBS/Discord."}
-              </p>
-            </div>
-          )}
-
-          {(phase === "loading" || phase === "error") && (
-            <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/70">
-              {phase === "loading" ? (
-                <Loader2 className="h-8 w-8 animate-spin text-ninja-accent" />
-              ) : (
-                <Camera className="h-8 w-8 text-red-300" />
-              )}
-              <p className={`px-4 text-center text-sm ${phase === "error" ? "text-red-200" : "text-zinc-200"}`}>
-                {phase === "error" ? errorMessage : loadingMessage}
-              </p>
-            </div>
-          )}
-
-          {phase === "ready" && isRankMode && (
-            <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/58 px-4">
-              <div className="w-full max-w-md rounded-2xl border border-orange-300/45 bg-zinc-950/80 p-5 text-center shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
-                <p className="text-2xl font-black text-orange-200">PRESS [SPACE] TO START</p>
-                <p className="mt-2 text-sm text-zinc-200">Perform the sequence as fast as possible.</p>
-                <div className="mt-3 text-left text-xs text-zinc-300">
-                  <p>1. Timer starts on GO.</p>
-                  <p>2. Detect all signs in order.</p>
-                  <p>3. Timer stops on final sign.</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {phase === "ready" && isCalibrationMode && (
-            <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-2 bg-black/58 text-center">
-              <p className="text-2xl font-black text-amber-200">CALIBRATION READY</p>
-              <p className="max-w-xl px-4 text-sm text-zinc-200">
-                Keep both hands visible and perform signs naturally for 12 seconds.
-              </p>
-            </div>
-          )}
-
-          {phase === "countdown" && (
-            <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/55">
-              <p
-                className="text-6xl font-black text-orange-300 drop-shadow-[0_0_18px_rgba(255,160,80,0.5)] md:text-7xl"
-                style={countdown > 0 ? { animation: "countdownPulse 1s linear infinite" } : undefined}
-              >
-                {countdown > 0 ? countdown : "GO"}
-              </p>
-            </div>
-          )}
-
-          {phase === "casting" && !isCalibrationMode && (
-            <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 px-5">
-              <div className="w-full max-w-md rounded-2xl border border-orange-300/40 bg-zinc-950/82 p-5 text-center shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
-                <p className="text-sm font-black uppercase tracking-[0.16em] text-orange-200">Casting</p>
-                <p className="mt-2 text-2xl font-black text-white">{String(jutsu?.displayText || "JUTSU")}</p>
-                <p className="mt-2 text-sm text-zinc-200">{formatElapsed(elapsedMs)} • {signsLanded}/{sequence.length} signs</p>
-              </div>
-            </div>
-          )}
-
-          {phase === "completed" && (
-            <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/65 px-5">
-              <div className={`w-full ${isRankMode ? "max-w-md" : "max-w-sm"} rounded-2xl border bg-zinc-950/82 p-5 text-center shadow-[0_18px_50px_rgba(0,0,0,0.55)] ${
-                isRankMode ? "border-orange-300/45" : "border-emerald-300/35"
-              }`}>
-                <CheckCircle2 className={`mx-auto h-10 w-10 ${isRankMode ? "text-orange-200" : "text-emerald-300"}`} />
-                <p className="mt-2 text-xl font-black text-white">
-                  {isCalibrationMode ? "CALIBRATION COMPLETE" : isRankMode ? "RESULTS" : "RUN COMPLETE"}
-                </p>
-                {!isCalibrationMode && (
+                )}
+                {effectLabel === "fire" && !isPhoenixFireEffect && (
                   <>
-                    <p className="mt-2 text-3xl font-black text-emerald-200">{formatElapsed(elapsedMs)}</p>
-                    <p className="mt-1 text-sm text-zinc-200">Signs: {signsLanded}/{sequence.length}</p>
+                    <div className="absolute inset-0 bg-gradient-to-t from-orange-700/35 via-amber-500/20 to-transparent" />
+                    <div
+                      className="absolute rounded-full bg-orange-400/45 blur-2xl"
+                      style={{
+                        width: `${fireBlastWidth}px`,
+                        height: `${fireBlastHeight}px`,
+                        left: `calc(${fireAnchorX}% + ${fireOffsetX}%)`,
+                        top: `calc(${fireAnchorY}% + ${fireOffsetY}%)`,
+                        transform: "translate(-50%, -50%)",
+                      }}
+                    />
+                    <div
+                      className="absolute rounded-full bg-amber-200/30 blur-3xl"
+                      style={{
+                        width: `${Math.round(fireBlastWidth * 0.72)}px`,
+                        height: `${Math.round(fireBlastHeight * 0.72)}px`,
+                        left: `calc(${fireAnchorX}% + ${(fireOffsetX * 1.2)}%)`,
+                        top: `calc(${fireAnchorY}% + ${(fireOffsetY * 1.2)}%)`,
+                        transform: "translate(-50%, -50%)",
+                      }}
+                    />
                   </>
                 )}
-                {!!submitStatus && <p className="mt-3 text-sm font-bold text-emerald-200">{submitStatus}</p>}
-                {!!submitDetail && <p className="mt-1 text-xs text-zinc-200">{submitDetail}</p>}
-                {!!rankInfo && <p className="mt-1 text-xs font-bold text-amber-200">{rankInfo}</p>}
-                {isRankMode && (
-                  <p className="mt-4 text-[11px] uppercase tracking-[0.14em] text-zinc-400">
-                    Press Space to ready up • Esc to exit
-                  </p>
+                {isPhoenixFireEffect && (
+                  <div className="absolute inset-0">
+                    <div className="absolute inset-0 bg-gradient-to-t from-orange-900/30 via-orange-500/10 to-transparent" />
+                    {phoenixFireballs.map((ball) => (
+                      <div
+                        key={`phoenix-${ball.id}`}
+                        className="absolute rounded-full mix-blend-screen"
+                        style={{
+                          left: `${ball.x * 100}%`,
+                          top: `${ball.y * 100}%`,
+                          width: `${ball.radius * 2}px`,
+                          height: `${ball.radius * 2}px`,
+                          transform: "translate(-50%, -50%)",
+                          background: "radial-gradient(circle, rgba(255,255,220,0.86) 0%, rgba(255,165,60,0.75) 44%, rgba(255,80,30,0.24) 100%)",
+                          boxShadow: "0 0 18px rgba(255,110,30,0.55), 0 0 44px rgba(255,90,20,0.35)",
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+                {effectLabel === "reaper" && (
+                  <div className="absolute inset-0">
+                    <div className="absolute inset-0 bg-gradient-to-t from-rose-950/45 via-red-800/18 to-transparent" />
+                    <div
+                      className="absolute rounded-full bg-red-400/30 blur-3xl"
+                      style={{
+                        width: "230px",
+                        height: "230px",
+                        left: `${fireAnchorX}%`,
+                        top: `${Math.max(8, fireAnchorY - 2)}%`,
+                        transform: "translate(-50%, -50%)",
+                      }}
+                    />
+                    <div
+                      className="absolute rounded-full border border-red-300/40 bg-red-900/25"
+                      style={{
+                        width: "88px",
+                        height: "88px",
+                        left: `${fireAnchorX}%`,
+                        top: `${Math.max(8, fireAnchorY - 1)}%`,
+                        transform: "translate(-50%, -50%)",
+                        boxShadow: "0 0 36px rgba(220,38,38,0.45)",
+                      }}
+                    />
+                  </div>
+                )}
+                {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideoSrc && (
+                  <div className="absolute inset-0">
+                    {tripleOffsets.map((offsetPct, idx) => (
+                      <video
+                        key={`effect-${effectVideoSrc}-${idx}-${offsetPct}`}
+                        src={effectVideoSrc}
+                        autoPlay
+                        muted
+                        loop
+                        playsInline
+                        className="absolute object-contain opacity-70 mix-blend-screen"
+                        style={{
+                          width: `${effectSizePx}px`,
+                          height: `${effectSizePx}px`,
+                          left: `calc(${effectAnchorX}% + ${offsetPct}%)`,
+                          top: `${effectAnchorY}%`,
+                          transform: "translate(-50%, -50%)",
+                        }}
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
+            )}
+
+            {!!xpPopupText && (
+              <div key={`xp-popup-${xpPopupNonce}`} className="pointer-events-none absolute inset-x-0 top-[90px] z-30 flex justify-center md:top-20">
+                <div
+                  className="rounded-lg border border-orange-300/45 bg-black/60 px-4 py-2 text-base font-black text-orange-200"
+                  style={{ animation: "xpFloatFade 1.9s ease-out forwards" }}
+                >
+                  {xpPopupText}
+                </div>
+              </div>
+            )}
+
+            {cameraFailure !== "none" && phase !== "loading" && phase !== "error" && (
+              <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/68 px-5 text-center">
+                <Camera className="h-8 w-8 text-red-300" />
+                <p className="text-xl font-black text-red-200">
+                  {cameraFailure === "disconnected" ? "Camera Disconnected" : "Camera blocked! Check OBS/Discord."}
+                </p>
+              </div>
+            )}
+
+            {(phase === "loading" || phase === "error") && (
+              <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/70">
+                {phase === "loading" ? (
+                  <Loader2 className="h-8 w-8 animate-spin text-ninja-accent" />
+                ) : (
+                  <Camera className="h-8 w-8 text-red-300" />
+                )}
+                <p className={`px-4 text-center text-sm ${phase === "error" ? "text-red-200" : "text-zinc-200"}`}>
+                  {phase === "error" ? errorMessage : loadingMessage}
+                </p>
+              </div>
+            )}
+
+            {phase === "ready" && isRankMode && (
+              <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/58 px-4">
+                <div className="w-full max-w-md rounded-2xl border border-orange-300/45 bg-zinc-950/80 p-5 text-center shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
+                  <p className="text-2xl font-black text-orange-200">PRESS [SPACE] TO START</p>
+                  <p className="mt-2 text-sm text-zinc-200">Perform the sequence as fast as possible.</p>
+                  <div className="mt-3 text-left text-xs text-zinc-300">
+                    <p>1. Timer starts on GO.</p>
+                    <p>2. Detect all signs in order.</p>
+                    <p>3. Timer stops on final sign.</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {phase === "ready" && isCalibrationMode && (
+              <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-2 bg-black/58 text-center">
+                <p className="text-2xl font-black text-amber-200">CALIBRATION READY</p>
+                <p className="max-w-xl px-4 text-sm text-zinc-200">
+                  Keep both hands visible and perform signs naturally for 12 seconds.
+                </p>
+              </div>
+            )}
+
+            {phase === "countdown" && (
+              <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/55">
+                <p
+                  className="text-6xl font-black text-orange-300 drop-shadow-[0_0_18px_rgba(255,160,80,0.5)] md:text-7xl"
+                  style={countdown > 0 ? { animation: "countdownPulse 1s linear infinite" } : undefined}
+                >
+                  {countdown > 0 ? countdown : "GO"}
+                </p>
+              </div>
+            )}
+
+
+
+            {phase === "completed" && (
+              <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/65 px-5">
+                <div className={`w-full ${isRankMode ? "max-w-md" : "max-w-sm"} rounded-2xl border bg-zinc-950/82 p-5 text-center shadow-[0_18px_50px_rgba(0,0,0,0.55)] ${isRankMode ? "border-orange-300/45" : "border-emerald-300/35"
+                  }`}>
+                  <CheckCircle2 className={`mx-auto h-10 w-10 ${isRankMode ? "text-orange-200" : "text-emerald-300"}`} />
+                  <p className="mt-2 text-xl font-black text-white">
+                    {isCalibrationMode ? "CALIBRATION COMPLETE" : isRankMode ? "RESULTS" : "RUN COMPLETE"}
+                  </p>
+                  {!isCalibrationMode && (
+                    <>
+                      <p className="mt-2 text-3xl font-black text-emerald-200">{formatElapsed(elapsedMs)}</p>
+                      <p className="mt-1 text-sm text-zinc-200">Signs: {signsLanded}/{sequence.length}</p>
+                    </>
+                  )}
+                  {!!submitStatus && <p className="mt-3 text-sm font-bold text-emerald-200">{submitStatus}</p>}
+                  {!!submitDetail && <p className="mt-1 text-xs text-zinc-200">{submitDetail}</p>}
+                  {!!rankInfo && <p className="mt-1 text-xs font-bold text-amber-200">{rankInfo}</p>}
+                  {isRankMode && (
+                    <p className="mt-4 text-[11px] uppercase tracking-[0.14em] text-zinc-400">
+                      Press Space to ready up • Esc to exit
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
             </div>
-          )}
           </div>
 
           {showNavArrows && (
@@ -2727,17 +2925,19 @@ export default function PlayArena({
           )}
         </div>
 
-        <div className="rounded-2xl border border-ninja-border bg-[#14141e]/92 p-4 md:p-5">
-          <p className={`text-center text-sm font-black uppercase tracking-[0.12em] md:text-[15px] ${iconBarStatusColorClass}`}>
+        <div className={isViewportFitSession ? "shrink-0 pt-1" : "rounded-2xl border border-ninja-border bg-[#14141e]/92 shrink-0 p-4 md:p-5"}>
+          <p className={`text-center font-black uppercase tracking-[0.12em] ${isViewportFitSession ? "text-xs md:text-[13px]" : "text-sm md:text-[15px]"} ${iconBarStatusColorClass}`}>
             {iconBarStatus}
           </p>
-          <div className="mx-auto mt-3 h-2 max-w-[860px] rounded-full bg-[#2e2a24]">
-            <div className="h-2 rounded-full bg-orange-500/95 transition-all duration-300" style={{ width: `${progressPct}%` }} />
-          </div>
+          {!isViewportFitSession && (
+            <div className="mx-auto mt-3 h-2 max-w-[860px] rounded-full bg-[#2e2a24]">
+              <div className="h-2 rounded-full bg-orange-500/95 transition-all duration-300" style={{ width: `${progressPct}%` }} />
+            </div>
+          )}
 
           {!isCalibrationMode && (
             <>
-              <div className="mt-4 overflow-x-auto pb-2">
+              <div className={`${isViewportFitSession ? "mt-2" : "mt-4"} overflow-x-auto pb-1`}>
                 <div
                   className="mx-auto flex w-max items-start justify-center"
                   style={{
@@ -2745,30 +2945,32 @@ export default function PlayArena({
                     minWidth: `${iconLayout.totalWidth}px`,
                   }}
                 >
-                {sequence.map((sign, index) => {
-                  const signState =
-                    phase === "casting" && index < iconProgressStep
-                      ? "casting"
-                      : index < iconProgressStep
-                        ? "done"
-                        : index === iconProgressStep && phase === "active"
-                          ? "active"
-                          : "pending";
-                  return (
-                    <SignTile
-                      key={`${sign}-${index}`}
-                      sign={sign}
-                      state={signState}
-                      iconSize={iconLayout.iconSize}
-                    />
-                  );
-                })}
+                  {sequence.map((sign, index) => {
+                    const signState =
+                      phase === "casting" && index < iconProgressStep
+                        ? "casting"
+                        : index < iconProgressStep
+                          ? "done"
+                          : index === iconProgressStep && phase === "active"
+                            ? "active"
+                            : "pending";
+                    return (
+                      <SignTile
+                        key={`${sign}-${index}`}
+                        sign={sign}
+                        state={signState}
+                        iconSize={iconLayout.iconSize}
+                      />
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="mt-3 text-right text-xs font-mono text-zinc-400">
-                {iconProgressStep}/{sequence.length}
-              </div>
+              {!isViewportFitSession && (
+                <div className="mt-3 text-right text-xs font-mono text-zinc-400">
+                  {iconProgressStep}/{sequence.length}
+                </div>
+              )}
             </>
           )}
 

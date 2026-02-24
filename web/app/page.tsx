@@ -61,10 +61,10 @@ export default function Home() {
               <Sword className="w-4 h-4" />
               Play
             </Link> */}
-            <Link href="/challenge" className="flex items-center gap-2 text-green-400 font-bold hover:text-green-300 transition-colors">
+            {/* <Link href="/challenge" className="flex items-center gap-2 text-green-400 font-bold hover:text-green-300 transition-colors">
               <Hand className="w-4 h-4" />
               Sign Tester
-            </Link>
+            </Link> */}
             <Link href="/leaderboard" className="flex items-center gap-2 text-ninja-accent font-bold hover:text-ninja-accent-glow transition-colors">
               <Trophy className="w-4 h-4" />
               Leaderboard
@@ -137,14 +137,14 @@ export default function Home() {
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </Link> */}
 
-              <Link
+              {/* <Link
                 href="/challenge"
                 className="group h-14 px-8 bg-green-600/20 hover:bg-green-600/30 border border-green-500/40 text-green-400 hover:text-green-300 text-lg font-bold rounded-lg flex items-center gap-3 transition-all shadow-[0_0_20px_rgba(50,200,120,0.15)] hover:shadow-[0_0_30px_rgba(50,200,120,0.25)] hover:-translate-y-0.5"
               >
                 <Hand className="w-5 h-5" />
                 TRY SIGN TESTER
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </Link>
+              </Link> */}
 
               <Link
                 href="/leaderboard"

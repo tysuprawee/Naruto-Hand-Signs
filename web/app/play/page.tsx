@@ -10,7 +10,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
-  LogIn,
   LogOut,
   Maximize,
   Settings,
@@ -167,6 +166,11 @@ const PENDING_RANK_QUEUE_PREFIX = "jutsu-play-pending-rank-submit-v1";
 const PENDING_RANK_QUEUE_MAX = 20;
 const PENDING_RANK_REPLAY_BATCH = 4;
 const WEB_APP_VERSION = "1.0.0";
+const DEFAULT_RUNTIME_DATASET = {
+  version: "",
+  url: "/mediapipe_signs_db.csv",
+  checksum: "",
+} as const;
 
 interface RuntimeGateState {
   message: string;
@@ -178,6 +182,12 @@ interface AnnouncementRow {
   id: string;
   message: string;
   createdAt: string;
+}
+
+interface RuntimeDatasetState {
+  version: string;
+  url: string;
+  checksum: string;
 }
 
 interface ErrorModalState {
@@ -1323,6 +1333,15 @@ function LockedPanel({
 }) {
   return (
     <div className="mx-auto w-full max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-7 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
+      <button
+        type="button"
+        onClick={onBack}
+        className="mb-6 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        {backLabel}
+      </button>
+
       <h2 className="text-3xl font-black tracking-tight text-white">{title}</h2>
       <p className="mt-3 text-sm leading-relaxed text-ninja-dim">{description}</p>
 
@@ -1334,14 +1353,6 @@ function LockedPanel({
       >
         {joinLabel}
       </a>
-
-      <button
-        type="button"
-        onClick={onBack}
-        className="mt-6 flex h-12 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-      >
-        {backLabel}
-      </button>
     </div>
   );
 }
@@ -1361,7 +1372,6 @@ export default function PlayPage() {
   const [libraryIntent, setLibraryIntent] = useState<LibraryIntent>("browse");
   const [selectedJutsu, setSelectedJutsu] = useState<string>(Object.keys(OFFICIAL_JUTSUS)[0] || "");
   const [tutorialStep, setTutorialStep] = useState(0);
-  const [showQuitConfirm, setShowQuitConfirm] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [questNotice, setQuestNotice] = useState("");
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
@@ -1369,6 +1379,7 @@ export default function PlayPage() {
   const [serverClockSynced, setServerClockSynced] = useState(false);
   const [maintenanceGate, setMaintenanceGate] = useState<RuntimeGateState | null>(null);
   const [updateGate, setUpdateGate] = useState<RuntimeGateState | null>(null);
+  const [runtimeDataset, setRuntimeDataset] = useState<RuntimeDatasetState>(DEFAULT_RUNTIME_DATASET);
   const [connectionLostState, setConnectionLostState] = useState<ConnectionLostState | null>(null);
   const [errorModal, setErrorModal] = useState<ErrorModalState | null>(null);
   const [alertModal, setAlertModal] = useState<AlertModalState | null>(null);
@@ -1418,6 +1429,8 @@ export default function PlayPage() {
   const [levelUpPanel, setLevelUpPanel] = useState<LevelUpPanelState | null>(null);
   const [masteryPanel, setMasteryPanel] = useState<MasteryPanelState | null>(null);
   const [masteryBarDisplayPct, setMasteryBarDisplayPct] = useState(0);
+  const lastUiHoverAtRef = useRef(0);
+  const rewardModalSfxStateRef = useRef<{ mastery: boolean; level: boolean }>({ mastery: false, level: false });
   const [leaderboardModeIdx, setLeaderboardModeIdx] = useState(() => {
     const idx = LEADERBOARD_MODE_LIST.indexOf("FIREBALL");
     return idx >= 0 ? idx : 0;
@@ -1500,6 +1513,10 @@ export default function PlayPage() {
     const discordId = String(identity?.discordId || "").trim();
     return discordId ? buildPendingRankQueueStorageKey(discordId) : "";
   }, [identity?.discordId]);
+  const effectiveMenuMusicVol = useMemo(
+    () => clampVolume(view === "settings" ? draftSettings.musicVol : savedSettings.musicVol, DEFAULT_SETTINGS.musicVol),
+    [draftSettings.musicVol, savedSettings.musicVol, view],
+  );
 
   const applyCompetitivePayload = useCallback((payload: Record<string, unknown>) => {
     const payloadResult = firstRecord(payload.result);
@@ -1555,6 +1572,32 @@ export default function PlayPage() {
     }
   }, [savedSettings.sfxVol]);
 
+  const playUiHoverSfx = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const now = performance.now();
+    if ((now - lastUiHoverAtRef.current) < 90) return;
+    lastUiHoverAtRef.current = now;
+    playUiSfx("/sounds/hover.mp3", 0.45);
+  }, [playUiSfx]);
+
+  const playUiClickSfx = useCallback(() => {
+    playUiSfx("/sounds/click.mp3", 0.65);
+  }, [playUiSfx]);
+
+  useEffect(() => {
+    const prev = rewardModalSfxStateRef.current;
+    if (masteryPanel && !prev.mastery) {
+      playUiSfx("/sounds/reward.mp3", 0.9);
+    }
+    if (levelUpPanel && !masteryPanel && !prev.level) {
+      playUiSfx("/sounds/reward.mp3", 0.85);
+    }
+    rewardModalSfxStateRef.current = {
+      mastery: Boolean(masteryPanel),
+      level: Boolean(levelUpPanel),
+    };
+  }, [levelUpPanel, masteryPanel, playUiSfx]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -1580,9 +1623,9 @@ export default function PlayPage() {
   useEffect(() => {
     const audio = menuMusicRef.current;
     if (!audio) return;
-    audio.volume = clampVolume(savedSettings.musicVol, DEFAULT_SETTINGS.musicVol);
+    audio.volume = effectiveMenuMusicVol;
     audio.muted = menuMusicMuted || audio.volume <= 0.001;
-  }, [menuMusicMuted, savedSettings.musicVol]);
+  }, [effectiveMenuMusicVol, menuMusicMuted]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2060,8 +2103,8 @@ export default function PlayPage() {
     try {
       const { data, error } = await supabase
         .from("app_config")
-        .select("id,type,message,version,is_active,priority,created_at,url")
-        .in("type", ["announcement", "version", "maintenance"])
+        .select("id,type,message,version,is_active,priority,created_at,url,checksum")
+        .in("type", ["announcement", "version", "maintenance", "dataset"])
         .eq("is_active", true)
         .order("priority", { ascending: false })
         .order("created_at", { ascending: false })
@@ -2096,6 +2139,22 @@ export default function PlayPage() {
         }
       } else {
         setUpdateGate(null);
+      }
+
+      const datasetRows = rows.filter((row) => String((row as { type?: string }).type || "") === "dataset");
+      if (datasetRows.length > 0) {
+        const latestDataset = datasetRows[0] as Record<string, unknown>;
+        setRuntimeDataset({
+          version: String(latestDataset.version || "").trim(),
+          url: String(latestDataset.url || "/mediapipe_signs_db.csv").trim() || "/mediapipe_signs_db.csv",
+          checksum: String(latestDataset.checksum || "").trim().toUpperCase(),
+        });
+      } else {
+        setRuntimeDataset({
+          version: DEFAULT_RUNTIME_DATASET.version,
+          url: DEFAULT_RUNTIME_DATASET.url,
+          checksum: DEFAULT_RUNTIME_DATASET.checksum,
+        });
       }
 
       const flattened: AnnouncementRow[] = [];
@@ -2327,16 +2386,21 @@ export default function PlayPage() {
 
     let alive = true;
 
-    void supabase.auth.getSession().then(({ data, error }) => {
+    const client = supabase;
+    void client.auth.getSession().then(({ data, error }) => {
       if (!alive) return;
       if (error) {
         setAuthError(error.message);
+        if (error.message.includes("Refresh Token Not Found") || error.message.includes("Invalid Refresh Token")) {
+          console.warn("Stale session detected, clearing...");
+          void client.auth.signOut();
+        }
       }
       setSession(data.session ?? null);
       setAuthReady(true);
     });
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: authListener } = client.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession ?? null);
       setAuthReady(true);
       setAuthBusy(false);
@@ -2609,19 +2673,6 @@ export default function PlayPage() {
     setView("menu");
   };
 
-  const handleQuit = async () => {
-    if (!supabase) return;
-    setAuthBusy(true);
-    setAuthError("");
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      setAuthError(error.message);
-      openErrorModal("Quit Failed", error.message);
-    }
-    setShowQuitConfirm(false);
-    setView("menu");
-    setAuthBusy(false);
-  };
 
   const handleLogout = async () => {
     if (!supabase) return;
@@ -2920,7 +2971,7 @@ export default function PlayPage() {
         last_sign_t: Number(proofCheck.lastSignSec.toFixed(3)),
         client_elapsed_s: Number(result.elapsedSeconds.toFixed(4)),
         client_fps_target: 60,
-        client_version: "web-play-v2",
+        client_version: WEB_APP_VERSION,
         token_source: tokenSource,
         event_chain_hash: chain,
         event_overflow: Boolean(proof?.eventOverflow),
@@ -3131,12 +3182,6 @@ export default function PlayPage() {
       openErrorModal(t("calibration.errorTitle", "Calibration Error"), message);
       return false;
     }
-    setQuestNotice(t("calibration.profileSynced", "Calibration profile synced."));
-    openAlertModal(
-      t("calibration.label", "Calibration"),
-      t("calibration.synced", "Calibration synced."),
-      t("common.ok", "OK"),
-    );
     return true;
   }, [callRpc, identity, openAlertModal, openErrorModal, t]);
 
@@ -3298,9 +3343,12 @@ export default function PlayPage() {
     ? announcements[Math.max(0, Math.min(announcementIndex, announcements.length - 1))]
     : null;
   const currentCameraOption = cameraOptions.find((camera) => camera.idx === draftSettings.cameraIdx) || null;
+  const isInGameSessionView = view === "free_session" || view === "rank_session";
+  const isMenuViewportView = view === "menu";
+  const isViewportLockedView = isInGameSessionView || isMenuViewportView;
 
   return (
-    <div className="min-h-screen bg-ninja-bg text-ninja-text">
+    <div className={isViewportLockedView ? "h-[100dvh] overflow-hidden bg-ninja-bg text-ninja-text" : "min-h-screen bg-ninja-bg text-ninja-text"}>
       <div
         className="fixed inset-0 z-0 pointer-events-none"
         style={{
@@ -3341,10 +3389,9 @@ export default function PlayPage() {
           </div>
         </header>
       )}
-
-
-
-      <main className="relative z-10 mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10">
+      <main className={isViewportLockedView
+        ? "relative z-10 mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden px-2 py-2 md:px-4 md:py-3"
+        : "relative z-10 mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10"}>
         {!authReady && (
           <div className="mx-auto mt-12 max-w-xl rounded-2xl border border-ninja-border bg-ninja-panel/85 p-8 text-center">
             <Loader2 className="mx-auto h-8 w-8 animate-spin text-ninja-accent" />
@@ -3386,7 +3433,7 @@ export default function PlayPage() {
         )}
 
         {session && (
-          <>
+          <div className={isViewportLockedView ? "flex h-full min-h-0 flex-col" : ""}>
             {!!questNotice && (
               <div className="mx-auto mb-4 w-full max-w-5xl rounded-xl border border-emerald-400/35 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">
                 {questNotice}
@@ -3407,7 +3454,7 @@ export default function PlayPage() {
             )}
 
             {view === "menu" && (
-              <div className="mx-auto max-w-2xl rounded-3xl border border-ninja-border bg-ninja-panel/88 p-6 md:p-8 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
+              <div className={`mx-auto max-w-2xl rounded-3xl border border-ninja-border bg-ninja-panel/88 p-6 md:p-8 shadow-[0_18px_55px_rgba(0,0,0,0.5)] ${isMenuViewportView ? "my-auto" : ""}`}>
                 <div className="flex items-start justify-between gap-4 mb-2 md:mb-0">
                   {session ? (
                     <div className="flex w-44 flex-col gap-2 rounded-xl border border-ninja-border bg-black/35 p-2 sm:w-56">
@@ -3445,7 +3492,7 @@ export default function PlayPage() {
                           <div className="space-y-1">
                             <div className="flex items-center justify-between text-[9px] font-bold uppercase tracking-wider text-zinc-400">
                               <span>LV.{progression.level}</span>
-                              <span>{progression.xp} / {nextLevelXpTargetLocal} XP</span>
+                              <span>{progress} / {required} XP</span>
                             </div>
                             <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/60 border border-ninja-border/50">
                               <div className="h-full rounded-full bg-emerald-400 transition-all duration-500" style={{ width: `${pct}%` }} />
@@ -3480,7 +3527,12 @@ export default function PlayPage() {
 
                     <button
                       type="button"
-                      onClick={() => setMenuMusicMuted((prev) => !prev)}
+                      onClick={() => {
+                        playUiClickSfx();
+                        setMenuMusicMuted((prev) => !prev);
+                      }}
+                      onMouseEnter={playUiHoverSfx}
+                      onFocus={playUiHoverSfx}
                       className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-ninja-border bg-black/35 hover:border-ninja-accent/45 hover:bg-black/55"
                       aria-label={menuMusicMuted ? t("menu.unmuteMenuMusic", "Unmute Menu Music") : t("menu.muteMenuMusic", "Mute Menu Music")}
                       title={menuMusicMuted ? t("menu.unmuteMenuMusic", "Unmute Menu Music") : t("menu.muteMenuMusic", "Mute Menu Music")}
@@ -3512,7 +3564,12 @@ export default function PlayPage() {
                 <div className="mx-auto mt-8 w-full max-w-[360px] space-y-3">
                   <button
                     type="button"
-                    onClick={() => setView("mode_select")}
+                    onClick={() => {
+                      playUiClickSfx();
+                      setView("mode_select");
+                    }}
+                    onMouseEnter={playUiHoverSfx}
+                    onFocus={playUiHoverSfx}
                     disabled={!stateReady || !identityLinked}
                     className="flex h-14 w-full items-center justify-center rounded-xl bg-ninja-accent text-base font-black tracking-wide text-white transition hover:bg-ninja-accent-glow disabled:cursor-not-allowed disabled:opacity-55"
                   >
@@ -3525,9 +3582,12 @@ export default function PlayPage() {
                   <button
                     type="button"
                     onClick={() => {
+                      playUiClickSfx();
                       setDraftSettings(savedSettings);
                       setView("settings");
                     }}
+                    onMouseEnter={playUiHoverSfx}
+                    onFocus={playUiHoverSfx}
                     className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
                   >
                     <Settings className="h-5 w-5" />
@@ -3536,9 +3596,12 @@ export default function PlayPage() {
                   <button
                     type="button"
                     onClick={() => {
+                      playUiClickSfx();
                       setTutorialStep(0);
                       setView("tutorial");
                     }}
+                    onMouseEnter={playUiHoverSfx}
+                    onFocus={playUiHoverSfx}
                     className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
                   >
                     <Sparkles className="h-5 w-5" />
@@ -3546,25 +3609,28 @@ export default function PlayPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setView("about")}
+                    onClick={() => {
+                      playUiClickSfx();
+                      setView("about");
+                    }}
+                    onMouseEnter={playUiHoverSfx}
+                    onFocus={playUiHoverSfx}
                     className="flex h-14 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
                   >
                     {t("menu.about", "ABOUT")}
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowLogoutConfirm(true)}
+                    onClick={() => {
+                      playUiClickSfx();
+                      setShowLogoutConfirm(true);
+                    }}
+                    onMouseEnter={playUiHoverSfx}
+                    onFocus={playUiHoverSfx}
                     className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
                   >
                     <LogOut className="h-5 w-5" />
                     {t("menu.signOut", "SIGN OUT")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowQuitConfirm(true)}
-                    className="flex h-14 w-full items-center justify-center rounded-xl bg-red-700/80 text-base font-black tracking-wide text-white transition hover:bg-red-600"
-                  >
-                    {t("menu.quit", "QUIT")}
                   </button>
                 </div>
               </div>
@@ -3572,6 +3638,14 @@ export default function PlayPage() {
 
             {view === "mode_select" && (
               <div className="mx-auto w-full max-w-5xl rounded-[30px] border border-indigo-300/25 bg-gradient-to-b from-indigo-950/40 to-slate-950/85 p-5 shadow-[0_22px_80px_rgba(0,0,0,0.6)] md:p-10">
+                <button
+                  type="button"
+                  onClick={() => setView("menu")}
+                  className="mb-8 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t("common.back", "BACK")}
+                </button>
                 <div className="text-center">
                   <h1 className="text-4xl font-black tracking-tight text-white md:text-6xl">{t("modeSelect.title", "SELECT YOUR PATH")}</h1>
                   <p className="mt-3 text-sm font-black tracking-[0.28em] text-ninja-accent md:text-lg">{t("modeSelect.subtitle", "CHOOSE YOUR TRAINING")}</p>
@@ -3647,20 +3721,20 @@ export default function PlayPage() {
                   >
                     {t("modeSelect.leaderboard", "LEADERBOARD")}
                   </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setView("menu")}
-                    className="mt-6 flex h-14 w-full items-center justify-center rounded-2xl border border-ninja-border bg-ninja-card text-xl font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
-                  >
-                    {t("modeSelect.back", "BACK")}
-                  </button>
                 </div>
               </div>
             )}
 
             {view === "calibration_gate" && (
               <div className="mx-auto w-full max-w-5xl rounded-[22px] border border-ninja-border bg-ninja-panel/92 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)] md:p-7">
+                <button
+                  type="button"
+                  onClick={() => setView(calibrationReturnView)}
+                  className="mb-6 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t("common.back", "BACK")}
+                </button>
                 <h2 className="text-3xl font-black tracking-tight text-white">{t("calibration.requiredTitle", "CALIBRATION REQUIRED")}</h2>
                 <p className="mt-2 text-sm leading-relaxed text-ninja-dim">
                   {t("calibration.requiredSubtitle", "Complete one calibration to unlock Free Play and Rank Mode.")}
@@ -3762,7 +3836,7 @@ export default function PlayPage() {
                       : t("calibration.retryCamera", "RETRY CAMERA")}
                   </button>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-3 sm:grid-cols-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -3773,13 +3847,6 @@ export default function PlayPage() {
                       className="flex h-[42px] items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
                     >
                       {t("settings.title", "SETTINGS")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setView(calibrationReturnView)}
-                      className="flex h-[42px] items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                    >
-                      {t("common.back", "BACK")}
                     </button>
                   </div>
                 </div>
@@ -3796,70 +3863,93 @@ export default function PlayPage() {
                 cameraIdx={savedSettings.cameraIdx}
                 resolutionIdx={savedSettings.resolutionIdx}
                 calibrationProfile={calibrationProfile}
+                datasetVersion={runtimeDataset.version}
+                datasetChecksum={runtimeDataset.checksum}
+                datasetUrl={runtimeDataset.url}
                 onCalibrationComplete={handleCalibrationComplete}
                 onBack={() => setView(calibrationReturnView)}
               />
             )}
 
             {view === "free_session" && selectedJutsuConfig && (
-              <PlayArena
-                jutsuName={selectedJutsu}
-                mode="free"
-                restrictedSigns={savedSettings.restrictedSigns}
-                debugHands={savedSettings.debugHands}
-                sfxVolume={savedSettings.sfxVol}
-                cameraIdx={savedSettings.cameraIdx}
-                resolutionIdx={savedSettings.resolutionIdx}
-                calibrationProfile={calibrationProfile}
-                busy={actionBusy}
-                onComplete={handleArenaComplete}
-                progressionHud={{
-                  xp: progression.xp,
-                  level: progression.level,
-                  rank: progression.rank,
-                  xpToNextLevel: nextLevelXpTarget,
-                }}
-                onPrevJutsu={() => handleCycleSelectedJutsu(-1)}
-                onNextJutsu={() => handleCycleSelectedJutsu(1)}
-                onQuickCalibrate={() => {
-                  setCalibrationReturnView("free_session");
-                  setView("calibration_session");
-                }}
-                onBack={() => setView("jutsu_library")}
-              />
+              <div className="min-h-0 flex-1">
+                <PlayArena
+                  jutsuName={selectedJutsu}
+                  mode="free"
+                  restrictedSigns={savedSettings.restrictedSigns}
+                  debugHands={savedSettings.debugHands}
+                  sfxVolume={savedSettings.sfxVol}
+                  cameraIdx={savedSettings.cameraIdx}
+                  resolutionIdx={savedSettings.resolutionIdx}
+                  calibrationProfile={calibrationProfile}
+                  datasetVersion={runtimeDataset.version}
+                  datasetChecksum={runtimeDataset.checksum}
+                  datasetUrl={runtimeDataset.url}
+                  busy={actionBusy}
+                  viewportFit
+                  onComplete={handleArenaComplete}
+                  progressionHud={{
+                    xp: progression.xp,
+                    level: progression.level,
+                    rank: progression.rank,
+                    xpToNextLevel: nextLevelXpTarget,
+                  }}
+                  onPrevJutsu={() => handleCycleSelectedJutsu(-1)}
+                  onNextJutsu={() => handleCycleSelectedJutsu(1)}
+                  onQuickCalibrate={() => {
+                    setCalibrationReturnView("free_session");
+                    setView("calibration_session");
+                  }}
+                  onBack={() => setView("jutsu_library")}
+                />
+              </div>
             )}
 
             {view === "rank_session" && selectedJutsuConfig && (
-              <PlayArena
-                jutsuName={selectedJutsu}
-                mode="rank"
-                restrictedSigns={savedSettings.restrictedSigns}
-                debugHands={savedSettings.debugHands}
-                sfxVolume={savedSettings.sfxVol}
-                cameraIdx={savedSettings.cameraIdx}
-                resolutionIdx={savedSettings.resolutionIdx}
-                calibrationProfile={calibrationProfile}
-                busy={actionBusy}
-                onComplete={handleArenaComplete}
-                onRequestRunToken={requestRankRunToken}
-                progressionHud={{
-                  xp: progression.xp,
-                  level: progression.level,
-                  rank: progression.rank,
-                  xpToNextLevel: nextLevelXpTarget,
-                }}
-                onPrevJutsu={() => handleCycleSelectedJutsu(-1)}
-                onNextJutsu={() => handleCycleSelectedJutsu(1)}
-                onQuickCalibrate={() => {
-                  setCalibrationReturnView("rank_session");
-                  setView("calibration_session");
-                }}
-                onBack={() => setView("jutsu_library")}
-              />
+              <div className="min-h-0 flex-1">
+                <PlayArena
+                  jutsuName={selectedJutsu}
+                  mode="rank"
+                  restrictedSigns={savedSettings.restrictedSigns}
+                  debugHands={savedSettings.debugHands}
+                  sfxVolume={savedSettings.sfxVol}
+                  cameraIdx={savedSettings.cameraIdx}
+                  resolutionIdx={savedSettings.resolutionIdx}
+                  calibrationProfile={calibrationProfile}
+                  datasetVersion={runtimeDataset.version}
+                  datasetChecksum={runtimeDataset.checksum}
+                  datasetUrl={runtimeDataset.url}
+                  busy={actionBusy}
+                  viewportFit
+                  onComplete={handleArenaComplete}
+                  onRequestRunToken={requestRankRunToken}
+                  progressionHud={{
+                    xp: progression.xp,
+                    level: progression.level,
+                    rank: progression.rank,
+                    xpToNextLevel: nextLevelXpTarget,
+                  }}
+                  onPrevJutsu={() => handleCycleSelectedJutsu(-1)}
+                  onNextJutsu={() => handleCycleSelectedJutsu(1)}
+                  onQuickCalibrate={() => {
+                    setCalibrationReturnView("rank_session");
+                    setView("calibration_session");
+                  }}
+                  onBack={() => setView("jutsu_library")}
+                />
+              </div>
             )}
 
             {view === "jutsu_library" && (
               <div className="mx-auto w-full max-w-5xl rounded-3xl border border-ninja-border bg-ninja-panel/92 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)] md:p-8">
+                <button
+                  type="button"
+                  onClick={() => setView("mode_select")}
+                  className="mb-6 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t("common.back", "BACK")}
+                </button>
                 <div className="flex flex-wrap items-end justify-between gap-4">
                   <div>
                     <h2 className="text-3xl font-black tracking-tight text-white">{t("library.title", "JUTSU LIBRARY")}</h2>
@@ -3899,9 +3989,16 @@ export default function PlayPage() {
                                 ? "text-orange-300"
                                 : "text-zinc-400";
                           return (
-                            <button
+                            <div
                               key={name}
-                              type="button"
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  (e.currentTarget as HTMLDivElement).click();
+                                }
+                              }}
                               onClick={() => {
                                 setSelectedJutsu(name);
                                 if (libraryIntent === "browse") return;
@@ -3925,14 +4022,14 @@ export default function PlayPage() {
                                 }
                                 setView("free_session");
                               }}
-                              className={`relative overflow-hidden rounded-xl border text-left transition ${selected
+                              className={`relative w-full h-full min-h-[148px] overflow-hidden rounded-xl border text-left flex flex-col cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ninja-accent transition ${selected
                                 ? "border-ninja-accent shadow-[0_0_18px_rgba(255,120,50,0.32)]"
                                 : unlocked
                                   ? "border-ninja-border hover:border-ninja-accent/50"
                                   : "border-zinc-700"
                                 }`}
                             >
-                              <div className="absolute inset-0">
+                              <div className="absolute inset-0 z-0">
                                 {texture ? (
                                   <Image
                                     src={texture}
@@ -3945,25 +4042,27 @@ export default function PlayPage() {
                                   <div className="h-full w-full bg-gradient-to-br from-zinc-700 to-zinc-900" />
                                 )}
                               </div>
-                              <div className="relative z-10 bg-gradient-to-b from-black/45 via-black/60 to-black/80 p-3">
+                              <div className="relative z-10 bg-gradient-to-b from-black/45 via-black/60 to-black/80 p-3 flex-1 flex flex-col w-full h-full">
                                 <p className="text-sm font-black text-white">{name}</p>
                                 <p className="mt-1 text-[11px] text-zinc-300">{config.sequence.length} {t("library.signs", "signs")}</p>
-                                <p className={`mt-1 text-[11px] font-bold uppercase ${masteryColor}`}>
-                                  {t("library.mastery", "Mastery")}: {masteryTierLabel}
-                                  {masteryRow ? ` • ${masteryRow.bestTime.toFixed(2)}s` : ""}
-                                </p>
-                                {masteryRow && masteryTier === "none" && (
-                                  <p className="mt-0.5 text-[10px] font-semibold text-zinc-400">
-                                    {t("library.bronzeTarget", "Bronze target")}: {masteryBronzeTarget.toFixed(2)}s
+                                <div className="mt-auto pt-2">
+                                  <p className={`text-[11px] font-bold uppercase ${masteryColor}`}>
+                                    {t("library.mastery", "Mastery")}: {masteryTierLabel}
+                                    {masteryRow ? ` • ${masteryRow.bestTime.toFixed(2)}s` : ""}
                                   </p>
-                                )}
-                                <p className={`mt-1 text-[11px] font-bold ${unlocked ? "text-emerald-300" : "text-red-300"}`}>
-                                  {unlocked
-                                    ? t("library.unlocked", "UNLOCKED")
-                                    : `${t("library.locked", "LOCKED")} • LV.${config.minLevel}`}
-                                </p>
+                                  {masteryRow && masteryTier === "none" && (
+                                    <p className="mt-0.5 text-[10px] font-semibold text-zinc-400">
+                                      {t("library.bronzeTarget", "Bronze target")}: {masteryBronzeTarget.toFixed(2)}s
+                                    </p>
+                                  )}
+                                  <p className={`mt-1 text-[11px] font-bold ${unlocked ? "text-emerald-300" : "text-red-300"}`}>
+                                    {unlocked
+                                      ? t("library.unlocked", "UNLOCKED")
+                                      : `${t("library.locked", "LOCKED")} • LV.${config.minLevel}`}
+                                  </p>
+                                </div>
                               </div>
-                            </button>
+                            </div>
                           );
                         })}
                       </div>
@@ -3979,19 +4078,19 @@ export default function PlayPage() {
                     <p className="mt-2 text-xs text-zinc-300">{t("library.sequence", "Sequence")}: {selectedJutsuConfig.sequence.map((s) => s.toUpperCase()).join(" → ")}</p>
                   </div>
                 )}
-
-                <button
-                  type="button"
-                  onClick={() => setView("mode_select")}
-                  className="mt-6 flex h-12 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                >
-                  {t("common.backToSelectPath", "BACK TO SELECT PATH")}
-                </button>
               </div>
             )}
 
             {view === "quest_board" && (
               <div className="mx-auto w-full max-w-5xl rounded-3xl border border-ninja-border bg-ninja-panel/92 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)] md:p-8">
+                <button
+                  type="button"
+                  onClick={() => setView("mode_select")}
+                  className="mb-6 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t("common.back", "BACK")}
+                </button>
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
                     <h2 className="text-3xl font-black tracking-tight text-white">{t("quest.boardTitle", "QUEST BOARD")}</h2>
@@ -4094,18 +4193,20 @@ export default function PlayPage() {
                   </section>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setView("mode_select")}
-                  className="mt-6 flex h-12 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                >
-                  {t("common.backToSelectPath", "BACK TO SELECT PATH")}
-                </button>
+
               </div>
             )}
 
             {view === "leaderboard" && (
               <div className="relative mx-auto w-full max-w-5xl overflow-hidden rounded-3xl border border-indigo-200/20 bg-ninja-panel/95 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.6)] md:p-8">
+                <button
+                  type="button"
+                  onClick={() => setView("mode_select")}
+                  className="relative z-10 mb-6 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t("common.back", "BACK")}
+                </button>
                 <div className="pointer-events-none absolute inset-0">
                   <div className="absolute -top-28 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-cyan-400/10 blur-3xl" />
                   <div className="absolute -right-24 top-20 h-56 w-56 rounded-full bg-orange-500/12 blur-3xl" />
@@ -4402,13 +4503,7 @@ export default function PlayPage() {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setView("mode_select")}
-                    className="mt-6 flex h-12 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                  >
-                    {t("common.backToSelectPath", "BACK TO SELECT PATH")}
-                  </button>
+
                 </div>
               </div>
             )}
@@ -4425,6 +4520,26 @@ export default function PlayPage() {
 
             {view === "settings" && (
               <div className="mx-auto max-w-2xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-8 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
+                <div className="mb-6 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraftSettings(savedSettings);
+                      setView("menu");
+                    }}
+                    className="flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    {t("common.cancel", "CANCEL")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveSettings()}
+                    className="h-10 rounded-xl bg-ninja-accent px-5 text-xs font-black tracking-wide text-white hover:bg-ninja-accent-glow"
+                  >
+                    {t("settings.saveAndBack", "SAVE & BACK")}
+                  </button>
+                </div>
                 <h2 className="text-3xl font-black tracking-tight text-white">{t("settings.title", "SETTINGS")}</h2>
                 <p className="mt-1 text-sm text-ninja-dim">{t("settings.subtitle", "Menu settings mirror the pygame controls.")}</p>
 
@@ -4578,26 +4693,9 @@ export default function PlayPage() {
                       setCalibrationReturnView("settings");
                       setView("calibration_gate");
                     }}
-                    className="h-12 rounded-xl border border-amber-500/40 bg-amber-500/15 px-6 text-sm font-black tracking-wide text-amber-200 hover:bg-amber-500/25"
+                    className="h-12 w-full rounded-xl border border-amber-500/40 bg-amber-500/15 px-6 text-sm font-black tracking-wide text-amber-200 hover:bg-amber-500/25"
                   >
                     {t("settings.runCalibration", "RUN CALIBRATION")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleSaveSettings()}
-                    className="h-12 rounded-xl bg-ninja-accent px-6 text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow"
-                  >
-                    {t("settings.saveAndBack", "SAVE & BACK")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDraftSettings(savedSettings);
-                      setView("menu");
-                    }}
-                    className="h-12 rounded-xl border border-ninja-border bg-ninja-card px-6 text-sm font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40"
-                  >
-                    {t("common.cancel", "CANCEL")}
                   </button>
                 </div>
               </div>
@@ -4605,6 +4703,18 @@ export default function PlayPage() {
 
             {view === "tutorial" && (
               <div className="mx-auto max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-6 md:p-8 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void markTutorialSeen();
+                    setTutorialStep(0);
+                    setView("menu");
+                  }}
+                  className="mb-6 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t("common.back", "BACK")}
+                </button>
                 <p className="text-xs font-black tracking-[0.2em] text-ninja-dim">
                   {t("tutorial.step", "STEP")} {tutorialStep + 1} / {TUTORIAL_STEPS.length}
                 </p>
@@ -4678,6 +4788,14 @@ export default function PlayPage() {
 
             {view === "about" && (
               <div className="mx-auto max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
+                <button
+                  type="button"
+                  onClick={() => setView("menu")}
+                  className="mb-8 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t("common.back", "BACK")}
+                </button>
                 <h2 className="text-3xl font-black tracking-tight text-white">{t("about.title", "ABOUT JUTSU ACADEMY")}</h2>
                 <p className="mt-1 text-sm text-ninja-dim">{t("about.subtitle", "Project details, controls, privacy, and roadmap.")}</p>
 
@@ -4706,7 +4824,7 @@ export default function PlayPage() {
                 </div>
               </div>
             )}
-          </>
+          </div>
         )}
       </main>
 
@@ -4722,7 +4840,7 @@ export default function PlayPage() {
             <p className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">
               {t("announcement.title", "Announcement")} {announcementIndex + 1} / {announcements.length}
             </p>
-            <p className="mt-4 rounded-xl border border-ninja-border bg-black/30 px-4 py-4 text-sm leading-relaxed text-zinc-100">
+            <p className="mt-4 rounded-xl border border-ninja-border bg-black/30 px-4 py-4 text-sm leading-relaxed text-zinc-100 min-h-[160px]">
               {activeAnnouncement.message}
             </p>
             <div className="mt-4 flex flex-wrap justify-end gap-2">
@@ -5151,47 +5269,6 @@ export default function PlayPage() {
               >
                 {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {t("connection.exitToLogin", "EXIT TO LOGIN")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showQuitConfirm && session && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button
-            type="button"
-            aria-label="Close quit dialog"
-            onClick={() => setShowQuitConfirm(false)}
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-          />
-
-          <div className="relative w-full max-w-md rounded-2xl border border-ninja-border bg-ninja-panel p-6">
-            <h3 className="text-2xl font-black tracking-tight text-white">{t("quit.title", "Leaving so soon?")}</h3>
-            <p className="mt-2 text-sm text-ninja-dim">
-              {t("quit.subtitle", "QUIT in web signs out your Discord session and returns you to login.")}
-            </p>
-            {authError && (
-              <p className="mt-3 rounded-lg border border-red-400/35 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-                {authError}
-              </p>
-            )}
-            <div className="mt-5 flex gap-3">
-              <button
-                type="button"
-                onClick={() => void handleQuit()}
-                disabled={authBusy}
-                className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-black text-white hover:bg-red-500 disabled:opacity-60"
-              >
-                {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
-                {t("quit.confirm", "YES, QUIT")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowQuitConfirm(false)}
-                className="h-11 flex-1 rounded-xl border border-ninja-border bg-ninja-card text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
-              >
-                {t("quit.stay", "STAY")}
               </button>
             </div>
           </div>
