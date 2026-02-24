@@ -14,7 +14,6 @@ class UISetupMixin:
             "settings": Button(cx - btn_w // 2, start_y + gap, btn_w, btn_h, "SETTINGS"),
             "tutorial": Button(cx - btn_w // 2, start_y + gap * 2, btn_w, btn_h, "TUTORIAL", color=COLORS["bg_card"]),
             "about": Button(cx - btn_w // 2, start_y + gap * 3, btn_w, btn_h, "ABOUT", color=COLORS["bg_card"]),
-            "quit": Button(cx - btn_w // 2, start_y + gap * 4, btn_w, btn_h, "QUIT", color=COLORS["error"]),
         }
         
         # Mute button position (top right)

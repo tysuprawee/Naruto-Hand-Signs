@@ -30,28 +30,55 @@ interface ModeRow {
     mode: string;
 }
 
+function normalizeIdentityUsername(raw: unknown): string {
+    const value = String(raw || "").trim();
+    if (!value) return "";
+    const withoutAt = value.startsWith("@") ? value.slice(1).trim() : value;
+    const tagged = withoutAt.match(/^(.+?)#\d{1,5}$/);
+    return (tagged ? tagged[1] : withoutAt).trim().toLowerCase();
+}
+
 function speedIdentityKey(row: Pick<LeaderboardEntry, "discord_id" | "username">): string {
     const discordId = String(row.discord_id || "").trim();
     if (discordId) return `d:${discordId}`;
-    const username = String(row.username || "").trim().toLowerCase();
+    const username = normalizeIdentityUsername(row.username);
     if (username) return `u:${username}`;
     return "";
 }
 
+function compareSpeedRows(a: LeaderboardEntry, b: LeaderboardEntry): number {
+    const aScore = Number(a.score_time);
+    const bScore = Number(b.score_time);
+    if (aScore !== bScore) return aScore - bScore;
+
+    const aCreatedAt = Number(new Date(String(a.created_at || "")).getTime());
+    const bCreatedAt = Number(new Date(String(b.created_at || "")).getTime());
+    if (Number.isFinite(aCreatedAt) && Number.isFinite(bCreatedAt) && aCreatedAt !== bCreatedAt) {
+        return aCreatedAt - bCreatedAt;
+    }
+
+    return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
 function dedupeBestSpeedRows(rows: LeaderboardEntry[]): LeaderboardEntry[] {
-    const seen = new Set<string>();
-    const out: LeaderboardEntry[] = [];
+    const bestByIdentity = new Map<string, LeaderboardEntry>();
+    const fallbackRows: LeaderboardEntry[] = [];
     for (const row of rows) {
         const score = Number(row.score_time);
         if (!Number.isFinite(score) || score <= 0) continue;
+
         const identity = speedIdentityKey(row);
-        const fallback = String(row.id || "").trim();
-        const key = identity || (fallback ? `r:${fallback}` : "");
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        out.push(row);
+        if (!identity) {
+            fallbackRows.push(row);
+            continue;
+        }
+
+        const existing = bestByIdentity.get(identity);
+        if (!existing || compareSpeedRows(row, existing) < 0) {
+            bestByIdentity.set(identity, row);
+        }
     }
-    return out;
+    return [...bestByIdentity.values(), ...fallbackRows].sort(compareSpeedRows);
 }
 
 function LeaderboardContent() {
@@ -178,6 +205,7 @@ function LeaderboardContent() {
                         .select("id,created_at,username,score_time,mode,discord_id,avatar_url")
                         .eq("mode", mode)
                         .order("score_time", { ascending: true })
+                        .order("created_at", { ascending: true })
                         .order("id", { ascending: true })
                         .range(cursor, cursor + batchSize - 1);
 

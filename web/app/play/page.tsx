@@ -143,6 +143,7 @@ interface MasteryPanelState {
 
 interface LeaderboardSpeedRow {
   id: string;
+  created_at?: string | null;
   username: string;
   score_time: number;
   mode: string;
@@ -205,6 +206,13 @@ interface PendingRankSubmitRecord {
   result: PlayArenaResult;
 }
 
+interface DirectProfileMetaResult {
+  ok: boolean;
+  profile?: Record<string, unknown>;
+  reason?: string;
+  detail?: string;
+}
+
 type LightingReadiness = "good" | "low_light" | "overexposed" | "low_contrast";
 
 const DEFAULT_SETTINGS: MenuSettingsState = {
@@ -251,7 +259,7 @@ const JUTSU_TEXTURES: Record<string, string> = {
 };
 
 const MASTERY_ICON_BY_TIER: Record<"none" | "bronze" | "silver" | "gold", string> = {
-  none: "/pics/mastery/locked_badge.png",
+  none: "/pics/ui/reward_xp.png",
   bronze: "/pics/mastery/bronze_badge.png",
   silver: "/pics/mastery/silver_badge.png",
   gold: "/pics/mastery/gold_badge.png",
@@ -392,12 +400,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function parseRecordJson(raw: unknown): Record<string, unknown> | null {
+  if (isRecord(raw)) return raw;
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | null {
+  for (const value of values) {
+    if (isRecord(value)) return value;
+  }
+  return null;
+}
+
 function firstNonEmpty(...values: unknown[]): string {
   for (const raw of values) {
     const value = String(raw || "").trim();
     if (value) return value;
   }
   return "";
+}
+
+function normalizeJutsuNameToken(raw: unknown): string {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveCanonicalJutsuName(raw: unknown): string {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (OFFICIAL_JUTSUS[value]) return value;
+  const lower = value.toLowerCase();
+  const matched = Object.keys(OFFICIAL_JUTSUS).find((name) => name.toLowerCase() === lower);
+  if (matched) return matched;
+  const normalized = normalizeJutsuNameToken(value);
+  if (!normalized) return value;
+  const normalizedMatch = Object.keys(OFFICIAL_JUTSUS).find(
+    (name) => normalizeJutsuNameToken(name) === normalized,
+  );
+  return normalizedMatch || value;
 }
 
 function normalizeDiscordUsername(raw: unknown): string {
@@ -669,11 +720,31 @@ function sanitizeMasteryMap(raw: unknown): MasteryMap {
   if (!isRecord(raw)) return {};
   const out: MasteryMap = {};
   for (const [nameRaw, row] of Object.entries(raw)) {
-    const name = String(nameRaw || "").trim();
+    const name = resolveCanonicalJutsuName(nameRaw);
     if (!name) continue;
     const best = isRecord(row) ? Number(row.best_time ?? row.bestTime) : Number(row);
     if (!Number.isFinite(best) || best <= 0) continue;
+    const prevBest = Number(out[name]?.bestTime || 0);
+    if (Number.isFinite(prevBest) && prevBest > 0 && prevBest <= best) continue;
     out[name] = { bestTime: best };
+  }
+  return out;
+}
+
+function mergeMasteryMapsKeepBest(...maps: MasteryMap[]): MasteryMap {
+  const out: MasteryMap = {};
+  for (const map of maps) {
+    if (!map || typeof map !== "object") continue;
+    for (const [nameRaw, row] of Object.entries(map)) {
+      const name = resolveCanonicalJutsuName(nameRaw);
+      if (!name) continue;
+      const best = Number(row?.bestTime);
+      if (!Number.isFinite(best) || best <= 0) continue;
+      const prev = Number(out[name]?.bestTime || 0);
+      if (!Number.isFinite(prev) || prev <= 0 || best < prev) {
+        out[name] = { bestTime: best };
+      }
+    }
   }
   return out;
 }
@@ -709,7 +780,8 @@ function hasCalibrationProfile(profile: CalibrationProfile | null): boolean {
 }
 
 function getMasteryThresholds(jutsuName: string): { bronze: number; silver: number; gold: number } {
-  const seqLen = Math.max(1, OFFICIAL_JUTSUS[jutsuName]?.sequence?.length || 1);
+  const canonicalJutsu = resolveCanonicalJutsuName(jutsuName);
+  const seqLen = Math.max(1, OFFICIAL_JUTSUS[canonicalJutsu]?.sequence?.length || 1);
   return {
     bronze: seqLen * 4.0,
     silver: seqLen * 2.8,
@@ -731,7 +803,8 @@ function getMasteryTier(
 }
 
 function getRunXpGain(jutsuName: string): number {
-  const seqLen = Math.max(1, OFFICIAL_JUTSUS[jutsuName]?.sequence?.length || 1);
+  const canonicalJutsu = resolveCanonicalJutsuName(jutsuName);
+  const seqLen = Math.max(1, OFFICIAL_JUTSUS[canonicalJutsu]?.sequence?.length || 1);
   return 50 + (seqLen * 10);
 }
 
@@ -1181,25 +1254,44 @@ function formatLeaderboardModeLabel(rawMode: string): string {
 function getSpeedLeaderboardIdentityKey(row: Pick<LeaderboardSpeedRow, "discord_id" | "username">): string {
   const discordId = String(row.discord_id || "").trim();
   if (discordId) return `d:${discordId}`;
-  const username = String(row.username || "").trim().toLowerCase();
+  const username = normalizeDiscordUsername(row.username).toLowerCase();
   if (username) return `u:${username}`;
   return "";
 }
 
+function compareSpeedLeaderboardRows(a: LeaderboardSpeedRow, b: LeaderboardSpeedRow): number {
+  const aScore = Number(a.score_time);
+  const bScore = Number(b.score_time);
+  if (aScore !== bScore) return aScore - bScore;
+
+  const aCreatedAt = Number(new Date(String(a.created_at || "")).getTime());
+  const bCreatedAt = Number(new Date(String(b.created_at || "")).getTime());
+  if (Number.isFinite(aCreatedAt) && Number.isFinite(bCreatedAt) && aCreatedAt !== bCreatedAt) {
+    return aCreatedAt - bCreatedAt;
+  }
+
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
 function dedupeSpeedLeaderboardRows(rows: LeaderboardSpeedRow[]): LeaderboardSpeedRow[] {
-  const seen = new Set<string>();
-  const out: LeaderboardSpeedRow[] = [];
+  const bestByIdentity = new Map<string, LeaderboardSpeedRow>();
+  const fallbackRows: LeaderboardSpeedRow[] = [];
   for (const row of rows) {
     const score = Number(row.score_time);
     if (!Number.isFinite(score) || score <= 0) continue;
+
     const identityKey = getSpeedLeaderboardIdentityKey(row);
-    const fallbackId = String(row.id || "").trim();
-    const key = identityKey || (fallbackId ? `r:${fallbackId}` : "");
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(row);
+    if (!identityKey) {
+      fallbackRows.push(row);
+      continue;
+    }
+
+    const existing = bestByIdentity.get(identityKey);
+    if (!existing || compareSpeedLeaderboardRows(row, existing) < 0) {
+      bestByIdentity.set(identityKey, row);
+    }
   }
-  return out;
+  return [...bestByIdentity.values(), ...fallbackRows].sort(compareSpeedLeaderboardRows);
 }
 
 function getLeaderboardTitleForRank(rank: number): "HOKAGE" | "JONIN" | "CHUNIN" | "GENIN" {
@@ -1325,6 +1417,7 @@ export default function PlayPage() {
   const [identityLinked, setIdentityLinked] = useState(false);
   const [levelUpPanel, setLevelUpPanel] = useState<LevelUpPanelState | null>(null);
   const [masteryPanel, setMasteryPanel] = useState<MasteryPanelState | null>(null);
+  const [masteryBarDisplayPct, setMasteryBarDisplayPct] = useState(0);
   const [leaderboardModeIdx, setLeaderboardModeIdx] = useState(() => {
     const idx = LEADERBOARD_MODE_LIST.indexOf("FIREBALL");
     return idx >= 0 ? idx : 0;
@@ -1339,6 +1432,7 @@ export default function PlayPage() {
   const [leaderboardHasNext, setLeaderboardHasNext] = useState(false);
   const menuMusicRef = useRef<HTMLAudioElement | null>(null);
   const pendingRankReplayBusyRef = useRef(false);
+  const profileMetaHydratedRef = useRef(false);
 
   const identity = useMemo(() => resolveSessionIdentity(session), [session]);
   const username = useMemo(() => getDiscordDisplayName(session, identity), [session, identity]);
@@ -1408,25 +1502,45 @@ export default function PlayPage() {
   }, [identity?.discordId]);
 
   const applyCompetitivePayload = useCallback((payload: Record<string, unknown>) => {
-    const profilePayload = isRecord(payload.profile) ? payload.profile : payload;
+    const payloadResult = firstRecord(payload.result);
+    const nestedFunctionPayload = firstRecord(
+      payloadResult?.get_competitive_state_authoritative,
+      payload.get_competitive_state_authoritative,
+    );
+    const rootPayload = firstRecord(nestedFunctionPayload, payloadResult, payload) || payload;
+    const profilePayload = firstRecord(rootPayload.profile, payload.profile, rootPayload) || rootPayload;
+
     if (hasProgressionShape(profilePayload)) {
       setProgression(sanitizeProgression(profilePayload));
+    } else if (hasProgressionShape(rootPayload)) {
+      setProgression(sanitizeProgression(rootPayload));
     }
 
-    if (isRecord(profilePayload.mastery)) {
-      setMastery(sanitizeMasteryMap(profilePayload.mastery));
+    const masteryPayload = parseRecordJson(profilePayload.mastery)
+      ?? parseRecordJson(rootPayload.mastery)
+      ?? parseRecordJson(payload.mastery);
+    if (masteryPayload) {
+      const nextMastery = sanitizeMasteryMap(masteryPayload);
+      setMastery((prev) => mergeMasteryMapsKeepBest(prev, nextMastery));
     }
     const nextTutorial = sanitizeTutorialMeta(profilePayload);
     setTutorialMeta(nextTutorial);
-    if (isRecord(profilePayload.calibration_profile ?? profilePayload.calibrationProfile)) {
-      const source = (profilePayload.calibration_profile ?? profilePayload.calibrationProfile) as Record<string, unknown>;
+    const calibrationSource = parseRecordJson(profilePayload.calibration_profile ?? profilePayload.calibrationProfile)
+      ?? parseRecordJson(rootPayload.calibration_profile ?? rootPayload.calibrationProfile);
+    if (calibrationSource) {
+      const source = calibrationSource as Record<string, unknown>;
       setCalibrationProfile(sanitizeCalibrationProfileState(source));
     }
 
-    if (isRecord(payload.quests)) {
-      setQuestState(sanitizeQuestState(payload.quests, new Date()));
-    } else if (hasQuestShape(payload)) {
-      setQuestState(sanitizeQuestState(payload, new Date()));
+    const questsPayload = parseRecordJson(rootPayload.quests)
+      ?? parseRecordJson(profilePayload.quests)
+      ?? parseRecordJson(payload.quests);
+    if (questsPayload) {
+      setQuestState(sanitizeQuestState(questsPayload, new Date()));
+    } else if (hasQuestShape(rootPayload)) {
+      setQuestState(sanitizeQuestState(rootPayload, new Date()));
+    } else if (hasQuestShape(profilePayload)) {
+      setQuestState(sanitizeQuestState(profilePayload, new Date()));
     }
   }, []);
 
@@ -1559,6 +1673,37 @@ export default function PlayPage() {
     };
   }, [session, t, triggerConnectionLost]);
 
+  const fetchProfileMetaDirect = useCallback(async (targetIdentity: AuthIdentity): Promise<DirectProfileMetaResult> => {
+    if (!supabase) {
+      return { ok: false, reason: "offline" };
+    }
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("username,discord_id,mastery,tutorial_seen,tutorial_seen_at,tutorial_version,quests,calibration_profile,xp,level,rank,total_signs,total_jutsus,fastest_combo")
+        .eq("discord_id", targetIdentity.discordId)
+        .limit(1);
+      if (error) {
+        return {
+          ok: false,
+          reason: "profile_meta_fetch_failed",
+          detail: String(error.message || ""),
+        };
+      }
+      const row = Array.isArray(data) ? data[0] : null;
+      if (!isRecord(row)) {
+        return { ok: false, reason: "profile_missing" };
+      }
+      return { ok: true, profile: row };
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "profile_meta_exception",
+        detail: String((err as Error)?.message || err || ""),
+      };
+    }
+  }, []);
+
   const readPendingRankQueue = useCallback((): PendingRankSubmitRecord[] => {
     if (typeof window === "undefined" || !pendingRankQueueStorageKey) return [];
     try {
@@ -1666,9 +1811,10 @@ export default function PlayPage() {
         while (!cancelled) {
           const { data, error } = await sb
             .from("leaderboard")
-            .select("id,username,score_time,mode,avatar_url,discord_id")
+            .select("id,created_at,username,score_time,mode,avatar_url,discord_id")
             .eq("mode", leaderboardMode)
             .order("score_time", { ascending: true })
+            .order("created_at", { ascending: true })
             .order("id", { ascending: true })
             .range(cursor, cursor + batchSize - 1);
 
@@ -1989,20 +2135,21 @@ export default function PlayPage() {
     const baseUrl = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
     if (!baseUrl) return;
 
-    const endpoints = [baseUrl, `${baseUrl.replace(/\/$/, "")}/rest/v1/`];
+    const endpoints = [`${baseUrl.replace(/\/$/, "")}/rest/v1/`];
+    const apiKey = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
     for (const endpoint of endpoints) {
       try {
         const head = await fetch(endpoint, {
           method: "HEAD",
           cache: "no-store",
-          headers: { apikey: String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "") },
+          headers: apiKey ? { apikey: apiKey } : undefined,
         });
         let dateHeader = head.headers.get("date");
         if (!dateHeader) {
           const getRes = await fetch(endpoint, {
             method: "GET",
             cache: "no-store",
-            headers: { apikey: String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "") },
+            headers: apiKey ? { apikey: apiKey } : undefined,
           });
           dateHeader = getRes.headers.get("date");
         }
@@ -2019,7 +2166,7 @@ export default function PlayPage() {
   }, []);
 
   const bootstrapAuthoritativeProfile = useCallback(async (targetIdentity: AuthIdentity) => {
-    return callRpc("upsert_profile_guarded_bound", {
+    const guardedRes = await callRpc("upsert_profile_guarded_bound_auth", {
       p_username: targetIdentity.username,
       p_discord_id: targetIdentity.discordId,
       p_xp: 0,
@@ -2032,6 +2179,53 @@ export default function PlayPage() {
       p_tutorial_seen_at: null,
       p_tutorial_version: "1.0",
     });
+    if (Boolean(guardedRes.ok)) {
+      return guardedRes;
+    }
+    if (String(guardedRes.reason || "") === "identity_mismatch") {
+      return guardedRes;
+    }
+
+    const settingsRes = await callRpc("upsert_profile_settings_bound_auth", {
+      p_username: targetIdentity.username,
+      p_discord_id: targetIdentity.discordId,
+      p_user_settings: {
+        music_vol: DEFAULT_SETTINGS.musicVol,
+        sfx_vol: DEFAULT_SETTINGS.sfxVol,
+        camera_idx: DEFAULT_SETTINGS.cameraIdx,
+        debug_hands: DEFAULT_SETTINGS.debugHands,
+        resolution_idx: DEFAULT_SETTINGS.resolutionIdx,
+        fullscreen: DEFAULT_SETTINGS.fullscreen,
+      },
+    });
+    if (Boolean(settingsRes.ok)) {
+      return settingsRes;
+    }
+    if (String(settingsRes.reason || "") === "identity_mismatch") {
+      return settingsRes;
+    }
+
+    const calibrationRes = await callRpc("upsert_calibration_profile_bound_auth", {
+      p_username: targetIdentity.username,
+      p_discord_id: targetIdentity.discordId,
+      p_calibration_profile: createDefaultCalibrationProfile(),
+    });
+    if (Boolean(calibrationRes.ok)) {
+      return calibrationRes;
+    }
+    if (String(calibrationRes.reason || "") === "identity_mismatch") {
+      return calibrationRes;
+    }
+
+    return {
+      ok: false,
+      reason: "bootstrap_failed",
+      detail: [
+        `guarded=${String(guardedRes.reason || "unknown")}`,
+        `settings=${String(settingsRes.reason || "unknown")}`,
+        `calibration=${String(calibrationRes.reason || "unknown")}`,
+      ].join("; "),
+    };
   }, [callRpc]);
 
   const syncAuthoritativeState = useCallback(async (targetIdentity: AuthIdentity, silent: boolean) => {
@@ -2044,7 +2238,7 @@ export default function PlayPage() {
       p_discord_id: targetIdentity.discordId,
     };
 
-    let bindRes = await callRpc("bind_profile_identity_bound", identityPayload);
+    let bindRes = await callRpc("bind_profile_identity_bound_auth", identityPayload);
     if (!Boolean(bindRes.ok) && String(bindRes.reason || "") === "profile_missing") {
       const bootstrapRes = await bootstrapAuthoritativeProfile(targetIdentity);
       if (!Boolean(bootstrapRes.ok)) {
@@ -2052,7 +2246,7 @@ export default function PlayPage() {
           setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
         }
       }
-      bindRes = await callRpc("bind_profile_identity_bound", identityPayload);
+      bindRes = await callRpc("bind_profile_identity_bound_auth", identityPayload);
     }
 
     setIdentityLinked(Boolean(bindRes.ok));
@@ -2063,19 +2257,23 @@ export default function PlayPage() {
       return;
     }
 
-    let stateRes = await callRpc("get_competitive_state_authoritative_bound", identityPayload);
+    let stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", identityPayload);
     if (!Boolean(stateRes.ok) && String(stateRes.reason || "") === "profile_missing") {
       const bootstrapRes = await bootstrapAuthoritativeProfile(targetIdentity);
       if (Boolean(bootstrapRes.ok)) {
-        stateRes = await callRpc("get_competitive_state_authoritative_bound", identityPayload);
+        stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", identityPayload);
       } else if (!silent) {
         setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
       }
     }
 
-    const [settingsRes, calibrationRes] = await Promise.all([
-      callRpc("get_profile_settings_bound", identityPayload),
-      callRpc("get_calibration_profile_bound", identityPayload),
+    const shouldFetchDirectProfile = !profileMetaHydratedRef.current;
+    const [settingsRes, calibrationRes, directProfileRes] = await Promise.all([
+      callRpc("get_profile_settings_bound_auth", identityPayload),
+      callRpc("get_calibration_profile_bound_auth", identityPayload),
+      shouldFetchDirectProfile
+        ? fetchProfileMetaDirect(targetIdentity)
+        : Promise.resolve<DirectProfileMetaResult | null>(null),
     ]);
 
     if (Boolean(stateRes.ok)) {
@@ -2086,6 +2284,15 @@ export default function PlayPage() {
       }
     } else if (!silent || String(stateRes.reason || "") === "identity_mismatch") {
       setStateError(toRpcError("Failed to fetch authoritative state", stateRes));
+    }
+
+    if (directProfileRes?.ok && isRecord(directProfileRes.profile)) {
+      applyCompetitivePayload({
+        ok: true,
+        profile: directProfileRes.profile,
+        quests: directProfileRes.profile.quests,
+      });
+      profileMetaHydratedRef.current = true;
     }
 
     if (Boolean(settingsRes.ok) && isRecord(settingsRes.settings)) {
@@ -2113,7 +2320,7 @@ export default function PlayPage() {
     if (!silent) {
       setStateBusy(false);
     }
-  }, [applyCompetitivePayload, bootstrapAuthoritativeProfile, callRpc]);
+  }, [applyCompetitivePayload, bootstrapAuthoritativeProfile, callRpc, fetchProfileMetaDirect]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -2134,6 +2341,7 @@ export default function PlayPage() {
       setAuthReady(true);
       setAuthBusy(false);
       pendingRankReplayBusyRef.current = false;
+      profileMetaHydratedRef.current = false;
       if (nextSession) {
         setAuthError("");
         setStateReady(false);
@@ -2379,7 +2587,7 @@ export default function PlayPage() {
     }
 
     if (identity) {
-      const res = await callRpc("upsert_profile_settings_bound", {
+      const res = await callRpc("upsert_profile_settings_bound_auth", {
         p_username: identity.username,
         p_discord_id: identity.discordId,
         p_user_settings: {
@@ -2439,39 +2647,59 @@ export default function PlayPage() {
     setView("menu");
   };
 
-  const persistProfileMeta = useCallback(async (nextMastery: MasteryMap) => {
+  const persistProfileMeta = useCallback(async (
+    nextMastery: MasteryMap,
+    tutorialOverride?: TutorialMetaState,
+  ) => {
     if (!identity) return { ok: false, reason: "missing_identity" };
+
+    let safeMastery = mergeMasteryMapsKeepBest(nextMastery);
+    const cloudMeta = await fetchProfileMetaDirect(identity);
+    if (cloudMeta.ok && isRecord(cloudMeta.profile)) {
+      const cloudMastery = sanitizeMasteryMap(cloudMeta.profile.mastery);
+      safeMastery = mergeMasteryMapsKeepBest(cloudMastery, safeMastery);
+      profileMetaHydratedRef.current = true;
+    }
+
     const rpcMastery = Object.fromEntries(
-      Object.entries(nextMastery).map(([name, info]) => [name, { best_time: info.bestTime }]),
+      Object.entries(safeMastery).map(([name, info]) => [name, { best_time: info.bestTime }]),
     );
-    return callRpc("upsert_profile_meta_guarded_bound", {
+    const tutorialState = tutorialOverride || tutorialMeta;
+    const res = await callRpc("upsert_profile_meta_guarded_bound_auth", {
       p_username: identity.username,
       p_discord_id: identity.discordId,
-      p_tutorial_seen: tutorialMeta.tutorialSeen,
-      p_tutorial_seen_at: tutorialMeta.tutorialSeenAt,
-      p_tutorial_version: tutorialMeta.tutorialVersion,
+      p_tutorial_seen: tutorialState.tutorialSeen,
+      p_tutorial_seen_at: tutorialState.tutorialSeenAt,
+      p_tutorial_version: tutorialState.tutorialVersion,
       p_mastery: rpcMastery,
       p_quests: questState,
     });
-  }, [callRpc, identity, questState, tutorialMeta]);
+
+    if (Object.keys(safeMastery).length > Object.keys(nextMastery).length) {
+      setMastery((prev) => mergeMasteryMapsKeepBest(prev, safeMastery));
+    }
+
+    return res;
+  }, [callRpc, fetchProfileMetaDirect, identity, questState, tutorialMeta]);
 
   const recordMasteryCompletion = useCallback(async (jutsuName: string, clearTime: number) => {
     if (!Number.isFinite(clearTime) || clearTime <= 0) return null;
 
-    const previousBest = mastery[jutsuName]?.bestTime ?? null;
-    const previousTier = getMasteryTier(jutsuName, previousBest);
+    const canonicalJutsu = resolveCanonicalJutsuName(jutsuName);
+    const previousBest = mastery[canonicalJutsu]?.bestTime ?? null;
+    const previousTier = getMasteryTier(canonicalJutsu, previousBest);
     if (previousBest !== null && clearTime >= previousBest) {
       return null;
     }
 
     const nextMastery: MasteryMap = {
       ...mastery,
-      [jutsuName]: { bestTime: clearTime },
+      [canonicalJutsu]: { bestTime: clearTime },
     };
-    const newTier = getMasteryTier(jutsuName, clearTime);
+    const newTier = getMasteryTier(canonicalJutsu, clearTime);
     setMastery(nextMastery);
     setMasteryPanel({
-      jutsuName,
+      jutsuName: canonicalJutsu,
       previousBest,
       newBest: clearTime,
       previousTier,
@@ -2496,9 +2724,9 @@ export default function PlayPage() {
       return { ok: false, xpAwarded: 0, previousLevel: progression.level, newLevel: progression.level, reason: "action_busy" };
     }
     if (!identity) {
-      const message = "Discord identity is unavailable. Re-login and retry.";
+      const message = t("run.identityUnavailable", "Discord identity is unavailable. Re-login and retry.");
       setStateError(message);
-      openErrorModal("Run Error", message);
+      openErrorModal(t("run.runErrorTitle", "Run Error"), message);
       return { ok: false, xpAwarded: 0, previousLevel: progression.level, newLevel: progression.level, reason: "missing_identity" };
     }
 
@@ -2513,7 +2741,7 @@ export default function PlayPage() {
     setActionBusy(true);
     setStateError("");
     try {
-      const res = await callRpc("award_jutsu_completion_authoritative_bound", {
+      const res = await callRpc("award_jutsu_completion_authoritative_bound_auth", {
         p_username: identity.username,
         p_discord_id: identity.discordId,
         p_xp_gain: xpGain,
@@ -2523,9 +2751,9 @@ export default function PlayPage() {
       });
 
       if (!Boolean(res.ok)) {
-        const message = toRpcError("Run award rejected", res);
+        const message = toRpcError(t("run.runAwardRejected", "Run award rejected"), res);
         setStateError(message);
-        openErrorModal("Run Error", message);
+        openErrorModal(t("run.runErrorTitle", "Run Error"), message);
         return { ok: false, xpAwarded: 0, previousLevel, newLevel: previousLevel, reason: String(res.reason || "award_rejected") };
       }
 
@@ -2540,15 +2768,13 @@ export default function PlayPage() {
           previousLevel,
           newLevel: nextProgression.level,
           rank: nextProgression.rank,
-          sourceLabel: "Jutsu Clear",
+          sourceLabel: t("levelUp.sourceJutsuClear", "Jutsu Clear"),
           unlocked: unlocks,
         });
       }
 
       if (unlocks.length > 0 && nextProgression.level <= previousLevel) {
-        setQuestNotice(`Unlocked: ${unlocks.join(", ")}`);
-      } else {
-        setQuestNotice(`${mode === "rank" ? "Rank" : "Free Play"} completion applied (+${gained} XP).`);
+        setQuestNotice(`${t("run.unlockedPrefix", "Unlocked")}: ${unlocks.join(", ")}`);
       }
 
       return {
@@ -2559,8 +2785,8 @@ export default function PlayPage() {
       };
     } catch (err) {
       const message = String((err as Error)?.message || err || "unknown_error");
-      setStateError(`Run award rejected: ${message}`);
-      openErrorModal("Run Error", `Run award rejected: ${message}`);
+      setStateError(`${t("run.runAwardRejected", "Run award rejected")}: ${message}`);
+      openErrorModal(t("run.runErrorTitle", "Run Error"), `${t("run.runAwardRejected", "Run award rejected")}: ${message}`);
       return { ok: false, xpAwarded: 0, previousLevel, newLevel: previousLevel, reason: message };
     } finally {
       setActionBusy(false);
@@ -2574,6 +2800,7 @@ export default function PlayPage() {
     selectedJutsu,
     selectedJutsuConfig?.sequence.length,
     openErrorModal,
+    t,
   ]);
 
   const requestRankRunToken = useCallback(async (payload: {
@@ -2582,7 +2809,7 @@ export default function PlayPage() {
     clientStartedAtIso: string;
   }) => {
     if (!identity) return { reason: "missing_identity" };
-    const res = await callRpc("issue_run_token_bound", {
+    const res = await callRpc("issue_run_token_bound_auth", {
       p_username: identity.username,
       p_discord_id: identity.discordId,
       p_mode: payload.jutsuName.toUpperCase(),
@@ -2669,7 +2896,7 @@ export default function PlayPage() {
       }
     }
 
-    const submitRes = await callRpc("submit_challenge_run_secure_bound", {
+    const submitRes = await callRpc("submit_challenge_run_secure_bound_auth", {
       p_username: identity.username,
       p_discord_id: identity.discordId,
       p_mode: modeLabel,
@@ -2822,12 +3049,14 @@ export default function PlayPage() {
       writePendingRankQueue([...remaining, ...replayLater]);
 
       if (recovered > 0) {
-        setQuestNotice(`Recovered ${recovered} pending rank submit${recovered === 1 ? "" : "s"}.`);
+        setQuestNotice(
+          `${t("run.recoveredPendingPrefix", "Recovered")} ${recovered} ${t("run.pendingRankSubmit", "pending rank submit")}${recovered === 1 ? "" : t("run.pluralSuffix", "s")}.`,
+        );
       }
     } finally {
       pendingRankReplayBusyRef.current = false;
     }
-  }, [attemptRankRunSecureSubmit, identity, identityLinked, readPendingRankQueue, session, stateReady, writePendingRankQueue]);
+  }, [attemptRankRunSecureSubmit, identity, identityLinked, readPendingRankQueue, session, stateReady, t, writePendingRankQueue]);
 
   useEffect(() => {
     if (!session || !identity || !identityLinked || !stateReady) return;
@@ -2881,7 +3110,7 @@ export default function PlayPage() {
     setCalibrationProfile(profile);
     if (!identity) return false;
 
-    const res = await callRpc("upsert_calibration_profile_bound", {
+    const res = await callRpc("upsert_calibration_profile_bound_auth", {
       p_username: identity.username,
       p_discord_id: identity.discordId,
       p_calibration_profile: {
@@ -2897,15 +3126,19 @@ export default function PlayPage() {
     });
 
     if (!Boolean(res.ok)) {
-      const message = toRpcError("Calibration sync failed", res);
+      const message = toRpcError(t("calibration.syncFailed", "Calibration sync failed"), res);
       setStateError(message);
-      openErrorModal("Calibration Error", message);
+      openErrorModal(t("calibration.errorTitle", "Calibration Error"), message);
       return false;
     }
-    setQuestNotice("Calibration profile synced.");
-    openAlertModal("Calibration", "Calibration synced.", "OK");
+    setQuestNotice(t("calibration.profileSynced", "Calibration profile synced."));
+    openAlertModal(
+      t("calibration.label", "Calibration"),
+      t("calibration.synced", "Calibration synced."),
+      t("common.ok", "OK"),
+    );
     return true;
-  }, [callRpc, identity, openAlertModal, openErrorModal]);
+  }, [callRpc, identity, openAlertModal, openErrorModal, t]);
 
   const markTutorialSeen = useCallback(async () => {
     const seenAt = tutorialMeta.tutorialSeenAt || new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -2917,29 +3150,18 @@ export default function PlayPage() {
     setTutorialMeta(nextMeta);
 
     if (!identity) return;
-    const rpcMastery = Object.fromEntries(
-      Object.entries(mastery).map(([name, info]) => [name, { best_time: info.bestTime }]),
-    );
-    const res = await callRpc("upsert_profile_meta_guarded_bound", {
-      p_username: identity.username,
-      p_discord_id: identity.discordId,
-      p_tutorial_seen: true,
-      p_tutorial_seen_at: seenAt,
-      p_tutorial_version: nextMeta.tutorialVersion,
-      p_mastery: rpcMastery,
-      p_quests: questState,
-    });
+    const res = await persistProfileMeta(mastery, nextMeta);
     if (!Boolean(res.ok)) {
       setStateError(toRpcError("Tutorial sync failed", res));
     }
-  }, [callRpc, identity, mastery, questState, tutorialMeta.tutorialSeenAt]);
+  }, [identity, mastery, persistProfileMeta, tutorialMeta.tutorialSeenAt]);
 
   const claimQuest = async (def: QuestDefinition) => {
     if (actionBusy) return;
     if (!identity) {
-      const message = "Discord identity is unavailable. Re-login and retry.";
+      const message = t("quest.identityUnavailable", "Discord identity is unavailable. Re-login and retry.");
       setStateError(message);
-      openErrorModal("Quest Reward", message);
+      openErrorModal(t("quest.rewardTitle", "Quest Reward"), message);
       return;
     }
 
@@ -2949,7 +3171,7 @@ export default function PlayPage() {
     setStateError("");
     try {
       const previousLevel = progression.level;
-      const res = await callRpc("claim_quest_authoritative_bound", {
+      const res = await callRpc("claim_quest_authoritative_bound_auth", {
         p_username: identity.username,
         p_discord_id: identity.discordId,
         p_scope: def.scope,
@@ -2966,23 +3188,27 @@ export default function PlayPage() {
             previousLevel,
             newLevel: nextProgression.level,
             rank: nextProgression.rank,
-            sourceLabel: "Quest Reward",
+            sourceLabel: t("levelUp.sourceQuestReward", "Quest Reward"),
             unlocked: unlocks,
           });
         }
         const rewardXp = Math.max(0, Math.floor(Number(res.reward_xp) || def.reward));
-        const title = String(res.title || def.title);
-        setQuestNotice(`Quest claimed: ${title} (+${rewardXp} XP).`);
-        openAlertModal("Quest Reward", `${title}\nReward claimed: +${rewardXp} XP`, "CLAIMED");
+        const title = String(res.title || getQuestDisplayTitle(def));
+        setQuestNotice(`${t("quest.questClaimedPrefix", "Quest claimed")}: ${title} (+${rewardXp} XP).`);
+        openAlertModal(
+          t("quest.rewardTitle", "Quest Reward"),
+          `${title}\n${t("quest.rewardClaimed", "Reward claimed")}: +${rewardXp} XP`,
+          t("quest.claimed", "CLAIMED"),
+        );
       } else {
-        const message = toRpcError("Quest claim failed", res);
+        const message = toRpcError(t("quest.claimFailed", "Quest claim failed"), res);
         setStateError(message);
-        openErrorModal("Quest Reward", message);
+        openErrorModal(t("quest.rewardTitle", "Quest Reward"), message);
       }
     } catch (err) {
-      const message = `Quest claim failed: ${String((err as Error)?.message || err || "unknown_error")}`;
+      const message = `${t("quest.claimFailed", "Quest claim failed")}: ${String((err as Error)?.message || err || "unknown_error")}`;
       setStateError(message);
-      openErrorModal("Quest Reward", message);
+      openErrorModal(t("quest.rewardTitle", "Quest Reward"), message);
     }
 
     setClaimBusyKey("");
@@ -2990,6 +3216,20 @@ export default function PlayPage() {
   };
 
   const tutorial = TUTORIAL_STEPS[tutorialStep];
+  const tutorialTitle = t(`tutorial.steps.${tutorialStep}.title`, tutorial.title);
+  const tutorialLines = tutorial.lines.map((line, lineIdx) => (
+    t(`tutorial.steps.${tutorialStep}.lines.${lineIdx}`, line)
+  ));
+  const getQuestDisplayTitle = useCallback((def: QuestDefinition): string => (
+    t(`quest.def.${def.id}.title`, def.title)
+  ), [t]);
+  const localizedAboutSections = useMemo(() => (
+    ABOUT_SECTIONS.map((section, sectionIdx) => ({
+      ...section,
+      title: t(`about.sections.${sectionIdx}.title`, section.title),
+      lines: section.lines.map((line, lineIdx) => t(`about.sections.${sectionIdx}.lines.${lineIdx}`, line)),
+    }))
+  ), [t]);
   const calibrationGateProgressPct = calibrationReady
     ? 100
     : Math.max(0, Math.min(99, Math.round((calibrationGateSamples / 140) * 100)));
@@ -3040,6 +3280,20 @@ export default function PlayPage() {
           ? { name: t("mastery.gold", "GOLD"), target: masteryThresholds.gold }
           : null
     : null;
+  useEffect(() => {
+    if (!masteryPanel) {
+      setMasteryBarDisplayPct(0);
+      return;
+    }
+    const targetPct = masteryPanel.newBest > 0
+      ? Math.max(1, masteryMarkerPct)
+      : 0;
+    setMasteryBarDisplayPct(0);
+    const timer = window.setTimeout(() => {
+      setMasteryBarDisplayPct(targetPct);
+    }, 40);
+    return () => window.clearTimeout(timer);
+  }, [masteryMarkerPct, masteryPanel]);
   const activeAnnouncement = announcements.length > 0
     ? announcements[Math.max(0, Math.min(announcementIndex, announcements.length - 1))]
     : null;
@@ -3103,7 +3357,7 @@ export default function PlayPage() {
             <div className="mb-6 text-center">
               <h1 className="text-3xl font-black tracking-tight text-white">Login Required</h1>
               <p className="mt-2 text-sm text-ninja-dim">
-                Sign in with Discord to enter <span className="text-ninja-accent font-semibold">/play</span>.
+                Welcome to the Academy. Sign in to begin your training.
               </p>
             </div>
 
@@ -3113,7 +3367,13 @@ export default function PlayPage() {
               disabled={!supabase || authBusy}
               className="flex h-14 w-full items-center justify-center gap-3 rounded-xl bg-indigo-600 px-6 text-base font-black text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {authBusy ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogIn className="h-5 w-5" />}
+              {authBusy ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <svg className="h-5 w-5 fill-current" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M107.7 8.07C99.71 4.29 91.13 1.51 82.16 0A101.44 101.44 0 0 0 78.73 7c-9.6-1.44-19.14-1.44-28.53 0A101.63 101.63 0 0 0 46.77 0c-8.97 1.51-17.55 4.3-25.54 8.07C4.1 33.56-1.9 58.4.45 82.91a100.95 100.95 0 0 0 30.65 13.45c2-2.73 3.8-5.63 5.4-8.7a46.68 46.68 0 0 1-15.82-7.55c1.23-.9 2.4-1.85 3.55-2.85 18 8.35 37.52 8.35 55.42 0 1.15 1 2.32 1.95 3.55 2.85a46.54 46.54 0 0 1-15.82 7.55c1.6 3.07 3.4 5.97 5.4 8.7a100.9 100.9 0 0 0 30.65-13.45c2.63-28.16-5-52.01-20.73-74.84ZM42.27 63.85c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Zm42.6 0c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Z" />
+                </svg>
+              )}
               LOGIN WITH DISCORD
             </button>
 
@@ -3602,13 +3862,13 @@ export default function PlayPage() {
               <div className="mx-auto w-full max-w-5xl rounded-3xl border border-ninja-border bg-ninja-panel/92 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)] md:p-8">
                 <div className="flex flex-wrap items-end justify-between gap-4">
                   <div>
-                    <h2 className="text-3xl font-black tracking-tight text-white">JUTSU LIBRARY</h2>
+                    <h2 className="text-3xl font-black tracking-tight text-white">{t("library.title", "JUTSU LIBRARY")}</h2>
                     <p className="mt-1 text-sm text-ninja-dim">
                       {libraryIntent === "free"
-                        ? "Free Play context: choose a jutsu, then jump into practice."
+                        ? t("library.contextFree", "Free Play context: choose a jutsu, then jump into practice.")
                         : libraryIntent === "rank"
-                          ? "Rank Mode context: choose a jutsu, then challenge your speed."
-                          : "Browse unlocks and requirements by level."}
+                          ? t("library.contextRank", "Rank Mode context: choose a jutsu, then challenge your speed.")
+                          : t("library.contextBrowse", "Browse unlocks and requirements by level.")}
                     </p>
                   </div>
                   <div className="rounded-xl border border-ninja-border bg-ninja-bg/40 px-4 py-2 text-sm text-zinc-100">
@@ -3627,6 +3887,10 @@ export default function PlayPage() {
                           const texture = JUTSU_TEXTURES[name] || "";
                           const masteryRow = mastery[name];
                           const masteryTier = getMasteryTier(name, masteryRow?.bestTime);
+                          const masteryTierLabel = masteryTier === "none"
+                            ? t("mastery.unranked", "UNRANKED")
+                            : masteryTier.toUpperCase();
+                          const masteryBronzeTarget = getMasteryThresholds(name).bronze;
                           const masteryColor = masteryTier === "gold"
                             ? "text-amber-300"
                             : masteryTier === "silver"
@@ -3643,7 +3907,11 @@ export default function PlayPage() {
                                 if (libraryIntent === "browse") return;
                                 if (!stateReady || !identityLinked || actionBusy) return;
                                 if (!unlocked) {
-                                  openAlertModal("Skill Locked", `${name} unlocks at LV.${config.minLevel}.`, "OK");
+                                  openAlertModal(
+                                    t("library.skillLocked", "Skill Locked"),
+                                    `${name} ${t("library.unlocksAt", "unlocks at")} LV.${config.minLevel}.`,
+                                    t("common.ok", "OK"),
+                                  );
                                   return;
                                 }
                                 if (needsCalibrationGate) {
@@ -3679,13 +3947,20 @@ export default function PlayPage() {
                               </div>
                               <div className="relative z-10 bg-gradient-to-b from-black/45 via-black/60 to-black/80 p-3">
                                 <p className="text-sm font-black text-white">{name}</p>
-                                <p className="mt-1 text-[11px] text-zinc-300">{config.sequence.length} signs</p>
+                                <p className="mt-1 text-[11px] text-zinc-300">{config.sequence.length} {t("library.signs", "signs")}</p>
                                 <p className={`mt-1 text-[11px] font-bold uppercase ${masteryColor}`}>
-                                  Mastery: {masteryTier}
+                                  {t("library.mastery", "Mastery")}: {masteryTierLabel}
                                   {masteryRow ? ` • ${masteryRow.bestTime.toFixed(2)}s` : ""}
                                 </p>
+                                {masteryRow && masteryTier === "none" && (
+                                  <p className="mt-0.5 text-[10px] font-semibold text-zinc-400">
+                                    {t("library.bronzeTarget", "Bronze target")}: {masteryBronzeTarget.toFixed(2)}s
+                                  </p>
+                                )}
                                 <p className={`mt-1 text-[11px] font-bold ${unlocked ? "text-emerald-300" : "text-red-300"}`}>
-                                  {unlocked ? "UNLOCKED" : `LOCKED • LV.${config.minLevel}`}
+                                  {unlocked
+                                    ? t("library.unlocked", "UNLOCKED")
+                                    : `${t("library.locked", "LOCKED")} • LV.${config.minLevel}`}
                                 </p>
                               </div>
                             </button>
@@ -3699,9 +3974,9 @@ export default function PlayPage() {
                 {selectedJutsuConfig && (
                   <div className="mt-6 rounded-2xl border border-ninja-border bg-ninja-bg/45 p-4">
                     <p className="text-lg font-black text-white">{selectedJutsu}</p>
-                    <p className="mt-1 text-xs text-ninja-dim">Required Level: {selectedJutsuConfig.minLevel}</p>
+                    <p className="mt-1 text-xs text-ninja-dim">{t("library.requiredLevel", "Required Level")}: {selectedJutsuConfig.minLevel}</p>
                     <p className="mt-2 text-sm text-zinc-200">{selectedJutsuConfig.displayText}</p>
-                    <p className="mt-2 text-xs text-zinc-300">Sequence: {selectedJutsuConfig.sequence.map((s) => s.toUpperCase()).join(" → ")}</p>
+                    <p className="mt-2 text-xs text-zinc-300">{t("library.sequence", "Sequence")}: {selectedJutsuConfig.sequence.map((s) => s.toUpperCase()).join(" → ")}</p>
                   </div>
                 )}
 
@@ -3719,33 +3994,34 @@ export default function PlayPage() {
               <div className="mx-auto w-full max-w-5xl rounded-3xl border border-ninja-border bg-ninja-panel/92 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)] md:p-8">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <h2 className="text-3xl font-black tracking-tight text-white">QUEST BOARD</h2>
+                    <h2 className="text-3xl font-black tracking-tight text-white">{t("quest.boardTitle", "QUEST BOARD")}</h2>
                     <p className="mt-1 text-sm text-ninja-dim">
-                      Server-authoritative quest state and claim rewards (same guarded RPC path as pygame).
+                      {t("quest.boardSubtitle", "Server-authoritative quest state and claim rewards (same guarded RPC path as pygame).")}
                     </p>
                   </div>
                   <div className="rounded-xl border border-ninja-border bg-ninja-bg/40 px-4 py-2 text-xs text-zinc-300">
-                    <div>Daily reset (UTC): {formatCountdown(dailyResetAt.getTime() - now.getTime())}</div>
-                    <div>Weekly reset (UTC): {formatCountdown(weeklyResetAt.getTime() - now.getTime())}</div>
-                    <div>Clock source: {serverClockSynced ? "Server-synced" : "Local fallback"}</div>
+                    <div>{t("quest.dailyResetUtc", "Daily reset (UTC)")}: {formatCountdown(dailyResetAt.getTime() - now.getTime())}</div>
+                    <div>{t("quest.weeklyResetUtc", "Weekly reset (UTC)")}: {formatCountdown(weeklyResetAt.getTime() - now.getTime())}</div>
+                    <div>{t("quest.clockSource", "Clock source")}: {serverClockSynced ? t("quest.serverSynced", "Server-synced") : t("quest.localFallback", "Local fallback")}</div>
                   </div>
                 </div>
 
                 <div className="mt-6 grid gap-5 lg:grid-cols-2">
                   <section className="rounded-2xl border border-ninja-border bg-ninja-bg/35 p-4">
                     <div className="mb-3 flex items-center gap-3">
-                      <Image src="/pics/quests/daily_icon.png" alt="Daily" width={32} height={32} className="h-8 w-8 object-contain" />
-                      <h3 className="text-sm font-black uppercase tracking-[0.16em] text-emerald-300">Daily</h3>
+                      <Image src="/pics/quests/daily_icon.png" alt={t("quest.daily", "Daily")} width={32} height={32} className="h-8 w-8 object-contain" />
+                      <h3 className="text-sm font-black uppercase tracking-[0.16em] text-emerald-300">{t("quest.daily", "Daily")}</h3>
                     </div>
                     <div className="space-y-3">
                       {QUEST_DEFS.filter((q) => q.scope === "daily").map((def) => {
                         const entry = questState.daily.quests[def.id as DailyQuestId];
                         const pct = Math.max(0, Math.min(1, entry.progress / Math.max(1, def.target)));
                         const ready = entry.progress >= def.target && !entry.claimed;
+                        const questTitle = getQuestDisplayTitle(def);
                         return (
                           <div key={def.id} className="rounded-xl border border-ninja-border bg-black/25 p-3">
                             <div className="flex items-center justify-between gap-2">
-                              <p className="text-sm font-semibold text-white">{def.title}</p>
+                              <p className="text-sm font-semibold text-white">{questTitle}</p>
                               <span className="text-xs text-zinc-300">{Math.min(entry.progress, def.target)}/{def.target}</span>
                             </div>
                             <div className="mt-2 h-2 rounded-full bg-zinc-700">
@@ -3754,7 +4030,7 @@ export default function PlayPage() {
                             <div className="mt-2 flex items-center justify-between">
                               <span className="text-xs font-bold text-amber-300">+{def.reward} XP</span>
                               {entry.claimed ? (
-                                <span className="text-xs font-black text-emerald-300">CLAIMED</span>
+                                <span className="text-xs font-black text-emerald-300">{t("quest.claimed", "CLAIMED")}</span>
                               ) : (
                                 <button
                                   type="button"
@@ -3762,7 +4038,9 @@ export default function PlayPage() {
                                   onClick={() => void claimQuest(def)}
                                   className="rounded-md px-3 py-1 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50 bg-orange-600 hover:bg-orange-500"
                                 >
-                                  {claimBusyKey === `${def.scope}:${def.id}` ? "CLAIMING..." : "CLAIM"}
+                                  {claimBusyKey === `${def.scope}:${def.id}`
+                                    ? t("quest.claiming", "CLAIMING...")
+                                    : t("quest.claim", "CLAIM")}
                                 </button>
                               )}
                             </div>
@@ -3774,18 +4052,19 @@ export default function PlayPage() {
 
                   <section className="rounded-2xl border border-ninja-border bg-ninja-bg/35 p-4">
                     <div className="mb-3 flex items-center gap-3">
-                      <Image src="/pics/quests/weekly_icon.png" alt="Weekly" width={32} height={32} className="h-8 w-8 object-contain" />
-                      <h3 className="text-sm font-black uppercase tracking-[0.16em] text-blue-300">Weekly</h3>
+                      <Image src="/pics/quests/weekly_icon.png" alt={t("quest.weekly", "Weekly")} width={32} height={32} className="h-8 w-8 object-contain" />
+                      <h3 className="text-sm font-black uppercase tracking-[0.16em] text-blue-300">{t("quest.weekly", "Weekly")}</h3>
                     </div>
                     <div className="space-y-3">
                       {QUEST_DEFS.filter((q) => q.scope === "weekly").map((def) => {
                         const entry = questState.weekly.quests[def.id as WeeklyQuestId];
                         const pct = Math.max(0, Math.min(1, entry.progress / Math.max(1, def.target)));
                         const ready = entry.progress >= def.target && !entry.claimed;
+                        const questTitle = getQuestDisplayTitle(def);
                         return (
                           <div key={def.id} className="rounded-xl border border-ninja-border bg-black/25 p-3">
                             <div className="flex items-center justify-between gap-2">
-                              <p className="text-sm font-semibold text-white">{def.title}</p>
+                              <p className="text-sm font-semibold text-white">{questTitle}</p>
                               <span className="text-xs text-zinc-300">{Math.min(entry.progress, def.target)}/{def.target}</span>
                             </div>
                             <div className="mt-2 h-2 rounded-full bg-zinc-700">
@@ -3794,7 +4073,7 @@ export default function PlayPage() {
                             <div className="mt-2 flex items-center justify-between">
                               <span className="text-xs font-bold text-amber-300">+{def.reward} XP</span>
                               {entry.claimed ? (
-                                <span className="text-xs font-black text-emerald-300">CLAIMED</span>
+                                <span className="text-xs font-black text-emerald-300">{t("quest.claimed", "CLAIMED")}</span>
                               ) : (
                                 <button
                                   type="button"
@@ -3802,7 +4081,9 @@ export default function PlayPage() {
                                   onClick={() => void claimQuest(def)}
                                   className="rounded-md px-3 py-1 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50 bg-orange-600 hover:bg-orange-500"
                                 >
-                                  {claimBusyKey === `${def.scope}:${def.id}` ? "CLAIMING..." : "CLAIM"}
+                                  {claimBusyKey === `${def.scope}:${def.id}`
+                                    ? t("quest.claiming", "CLAIMING...")
+                                    : t("quest.claim", "CLAIM")}
                                 </button>
                               )}
                             </div>
@@ -4327,13 +4608,13 @@ export default function PlayPage() {
                 <p className="text-xs font-black tracking-[0.2em] text-ninja-dim">
                   {t("tutorial.step", "STEP")} {tutorialStep + 1} / {TUTORIAL_STEPS.length}
                 </p>
-                <h2 className="mt-2 text-3xl font-black tracking-tight text-white">{tutorial.title}</h2>
+                <h2 className="mt-2 text-3xl font-black tracking-tight text-white">{tutorialTitle}</h2>
 
                 <div className="mt-5 grid grid-cols-1 items-start gap-5 md:grid-cols-[320px,1fr]">
                   <div className="flex w-full items-center justify-center overflow-hidden rounded-2xl border border-ninja-border bg-black/40 p-2 md:h-[220px] aspect-[16/11]">
                     <Image
                       src={tutorial.iconPath}
-                      alt={tutorial.title}
+                      alt={tutorialTitle}
                       width={320}
                       height={220}
                       className="h-full w-full object-contain"
@@ -4342,7 +4623,7 @@ export default function PlayPage() {
 
                   <div className="rounded-2xl border border-ninja-border bg-ninja-bg/40 p-5">
                     <ul className="space-y-3 text-sm text-zinc-200">
-                      {tutorial.lines.map((line) => (
+                      {tutorialLines.map((line) => (
                         <li key={line} className="leading-relaxed">
                           {line}
                         </li>
@@ -4397,11 +4678,11 @@ export default function PlayPage() {
 
             {view === "about" && (
               <div className="mx-auto max-w-3xl rounded-3xl border border-ninja-border bg-ninja-panel/90 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)]">
-                <h2 className="text-3xl font-black tracking-tight text-white">ABOUT JUTSU ACADEMY</h2>
-                <p className="mt-1 text-sm text-ninja-dim">Project details, controls, privacy, and roadmap.</p>
+                <h2 className="text-3xl font-black tracking-tight text-white">{t("about.title", "ABOUT JUTSU ACADEMY")}</h2>
+                <p className="mt-1 text-sm text-ninja-dim">{t("about.subtitle", "Project details, controls, privacy, and roadmap.")}</p>
 
                 <div className="mt-6 max-h-[62vh] space-y-4 overflow-y-auto pr-1">
-                  {ABOUT_SECTIONS.map((section) => (
+                  {localizedAboutSections.map((section) => (
                     <section key={section.title} className="rounded-xl border border-ninja-border bg-ninja-bg/35 p-4">
                       <h3
                         className={`text-base font-black uppercase tracking-wide ${section.tone === "success"
@@ -4607,10 +4888,19 @@ export default function PlayPage() {
               <div className="mt-4">
                 <div className="relative h-[8px] rounded-full" style={{ backgroundColor: "rgb(50, 40, 30)" }}>
                   <div
-                    className="h-[8px] rounded-full transition-all"
+                    className="h-[8px] rounded-full transition-[width] duration-700 ease-out"
                     style={{
-                      width: `${masteryMarkerPct}%`,
+                      width: `${masteryBarDisplayPct}%`,
                       backgroundColor: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
+                    }}
+                  />
+                  <span
+                    className="absolute -top-[7px] h-[22px] w-[2px] rounded-full transition-[left] duration-700 ease-out"
+                    style={{
+                      left: `${masteryBarDisplayPct}%`,
+                      transform: "translateX(-50%)",
+                      backgroundColor: "rgba(245, 245, 245, 0.85)",
+                      boxShadow: "0 0 8px rgba(255,255,255,0.35)",
                     }}
                   />
                   <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryBronzePct}%`, backgroundColor: "rgb(196, 128, 60)" }} />

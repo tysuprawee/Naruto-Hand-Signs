@@ -154,7 +154,7 @@ const VOTE_WINDOW_SIZE = 2;
 const VOTE_TTL_MS = 700;
 const SIGN_ACCEPT_COOLDOWN_MS = 500;
 const LIGHTING_INTERVAL_MS = 240;
-const TWO_HANDS_GUIDE_DELAY_MS = 2000;
+const TWO_HANDS_GUIDE_DELAY_MS = 500;
 const EFFECT_DEFAULT_DURATION_MS = 2200;
 const CAMERA_STALL_TIMEOUT_MS = 1400;
 
@@ -167,6 +167,80 @@ const RESOLUTION_OPTIONS: Array<{ width: number; height: number }> = [
   { width: 1280, height: 720 },
   { width: 1920, height: 1080 },
 ];
+
+const MEDIAPIPE_CONSOLE_NOISE_PATTERNS: RegExp[] = [
+  /Created TensorFlow Lite XNNPACK delegate for CPU\.?/i,
+  /OpenGL error checking is disabled/i,
+  /FaceBlendshapesGraph acceleration to xnnpack/i,
+];
+
+function shouldSuppressMediapipeConsoleNoise(args: unknown[]): boolean {
+  if (!Array.isArray(args) || args.length === 0) return false;
+  for (const arg of args) {
+    const text = arg instanceof Error
+      ? `${arg.name}: ${arg.message}`
+      : String(arg ?? "");
+    if (!text) continue;
+    if (MEDIAPIPE_CONSOLE_NOISE_PATTERNS.some((pattern) => pattern.test(text))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function withSuppressedMediapipeConsole<T>(run: () => T): T {
+  if (typeof window === "undefined") {
+    return run();
+  }
+
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const originalInfo = console.info;
+
+  const wrap = <TArgs extends unknown[]>(fn: (...args: TArgs) => void) => ((...args: TArgs) => {
+    if (shouldSuppressMediapipeConsoleNoise(args)) return;
+    fn(...args);
+  });
+
+  console.error = wrap(originalError);
+  console.warn = wrap(originalWarn);
+  console.info = wrap(originalInfo);
+
+  try {
+    return run();
+  } finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+    console.info = originalInfo;
+  }
+}
+
+async function withSuppressedMediapipeConsoleAsync<T>(run: () => Promise<T>): Promise<T> {
+  if (typeof window === "undefined") {
+    return run();
+  }
+
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const originalInfo = console.info;
+
+  const wrap = <TArgs extends unknown[]>(fn: (...args: TArgs) => void) => ((...args: TArgs) => {
+    if (shouldSuppressMediapipeConsoleNoise(args)) return;
+    fn(...args);
+  });
+
+  console.error = wrap(originalError);
+  console.warn = wrap(originalWarn);
+  console.info = wrap(originalInfo);
+
+  try {
+    return await run();
+  } finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+    console.info = originalInfo;
+  }
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -273,6 +347,9 @@ function getHandednessLabel(result: HandsResultShape, handIndex: number): string
 function buildFeatures(result: HandsResultShape): { features: number[]; numHands: number } {
   const landmarks = result.landmarks ?? [];
   const numHands = landmarks.length;
+  if (numHands <= 0) {
+    return { features: [], numHands: 0 };
+  }
 
   let h1 = new Array(63).fill(0);
   let h2 = new Array(63).fill(0);
@@ -419,58 +496,99 @@ function signImageCandidates(sign: string): string[] {
   if (!normalized) return ["/pics/placeholder.png"];
   return [
     `/pics/signs/${normalized}.jpg`,
-    `/pics/signs/${normalized}.jpeg`,
-    `/pics/signs/${normalized}.png`,
-    `/pics/${normalized}.jpg`,
-    `/pics/${normalized}.jpeg`,
-    `/pics/${normalized}.png`,
     "/pics/placeholder.png",
   ];
 }
 
 function SignTile({
   sign,
-  index,
   state,
+  iconSize,
 }: {
   sign: string;
-  index: number;
   state: "pending" | "active" | "done" | "casting";
+  iconSize: number;
 }) {
   const candidates = useMemo(() => signImageCandidates(sign), [sign]);
-  const [candidateIndex, setCandidateIndex] = useState(0);
-
-  const src = candidates[Math.min(candidateIndex, candidates.length - 1)] || "/pics/placeholder.png";
+  const [candidateState, setCandidateState] = useState<{ sign: string; index: number }>({
+    sign,
+    index: 0,
+  });
+  const activeCandidateIndex = candidateState.sign === sign ? candidateState.index : 0;
+  const src = candidates[Math.min(activeCandidateIndex, candidates.length - 1)] || "/pics/placeholder.png";
+  const borderInsetPx = state === "active"
+    ? -4
+    : state === "done"
+      ? -3
+      : state === "casting"
+        ? -4
+        : 0;
+  const borderColor = state === "active"
+    ? "rgba(245, 140, 40, 0.95)"
+    : state === "done"
+      ? "rgba(85, 210, 120, 0.95)"
+      : state === "casting"
+        ? "rgba(255, 206, 120, 0.95)"
+        : "rgba(92, 102, 120, 0.9)";
 
   return (
-    <div className="flex min-w-[72px] flex-col items-center gap-1.5 md:min-w-[84px] md:gap-2">
+    <div
+      className="relative shrink-0"
+      style={{ width: `${iconSize}px`, height: `${iconSize}px` }}
+    >
+      {state === "casting" && (
+        <span
+          className="pointer-events-none absolute rounded-[12px]"
+          style={{
+            left: "-8px",
+            top: "-8px",
+            width: `${iconSize + 16}px`,
+            height: `${iconSize + 16}px`,
+            backgroundColor: "rgba(255, 190, 80, 0.22)",
+            boxShadow: "0 0 22px rgba(255, 185, 80, 0.38)",
+          }}
+        />
+      )}
+
+      <span
+        className="pointer-events-none absolute rounded-[10px] border"
+        style={{
+          left: `${borderInsetPx}px`,
+          top: `${borderInsetPx}px`,
+          width: `${iconSize - (2 * borderInsetPx)}px`,
+          height: `${iconSize - (2 * borderInsetPx)}px`,
+          borderColor,
+          borderWidth: "2px",
+        }}
+      />
+
       <div
-        className={`rounded-xl border p-1 md:p-1.5 shadow-[0_8px_20px_rgba(0,0,0,0.35)] ${
-          state === "done"
-            ? "border-emerald-400/55 bg-emerald-500/12"
-            : state === "casting"
-              ? "border-amber-300/70 bg-amber-500/15"
-              : state === "active"
-                ? "border-orange-400/65 bg-orange-500/12"
-                : "border-ninja-border bg-ninja-card/55"
-        }`}
+        className="relative h-full w-full overflow-hidden rounded-[8px] bg-[#1b1e28] shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
       >
         <Image
           src={src}
           alt={toDisplayLabel(sign)}
-          width={68}
-          height={68}
+          width={iconSize}
+          height={iconSize}
           onError={() => {
-            setCandidateIndex((prev) => Math.min(prev + 1, candidates.length - 1));
+            setCandidateState((prev) => {
+              const base = prev.sign === sign ? prev.index : 0;
+              return {
+                sign,
+                index: Math.min(base + 1, candidates.length - 1),
+              };
+            });
           }}
-          className={`h-[58px] w-[58px] rounded-lg object-cover md:h-[68px] md:w-[68px] ${
-            state === "done" ? "opacity-45" : ""
-          }`}
+          className="h-full w-full object-cover"
+          style={{ opacity: state === "done" ? 0.4 : 1 }}
         />
+        {state === "casting" && (
+          <span
+            className="pointer-events-none absolute inset-0 rounded-[8px]"
+            style={{ backgroundColor: "rgba(255, 170, 60, 0.13)" }}
+          />
+        )}
       </div>
-      <p className="text-[9px] font-bold uppercase tracking-wide text-zinc-200 md:text-[10px]">
-        {index + 1}. {toDisplayLabel(sign)}
-      </p>
     </div>
   );
 }
@@ -975,6 +1093,9 @@ export default function PlayArena({
     elapsedRef.current = elapsed;
     setElapsedMs(elapsed);
     runFinishedRef.current = true;
+    // Match pygame flow: sequence resets to step 0 once all signs are completed.
+    currentStepRef.current = 0;
+    setCurrentStep(0);
 
     if (isRankMode) {
       appendProofEvent("run_finish", nowMs, {
@@ -1356,7 +1477,7 @@ export default function PlayArena({
         ];
         for (const candidate of candidates) {
           try {
-            handLandmarker = await HandLandmarker.createFromOptions(filesetResolver, {
+            handLandmarker = await withSuppressedMediapipeConsoleAsync(() => HandLandmarker.createFromOptions(filesetResolver, {
               baseOptions: {
                 modelAssetPath: handModelPath,
                 delegate: candidate.delegate,
@@ -1366,7 +1487,7 @@ export default function PlayArena({
               minHandDetectionConfidence: 0.25,
               minHandPresenceConfidence: 0.25,
               minTrackingConfidence: 0.25,
-            });
+            }));
             backend = candidate.backend;
             break;
           } catch (err) {
@@ -1388,7 +1509,7 @@ export default function PlayArena({
           const faceCandidates: Array<"GPU" | "CPU"> = ["GPU", "CPU"];
           for (const delegate of faceCandidates) {
             try {
-              faceRef.current = await FaceLandmarker.createFromOptions(filesetResolver, {
+              faceRef.current = await withSuppressedMediapipeConsoleAsync(() => FaceLandmarker.createFromOptions(filesetResolver, {
                 baseOptions: {
                   modelAssetPath: faceModelPath,
                   delegate,
@@ -1398,7 +1519,7 @@ export default function PlayArena({
                 minFaceDetectionConfidence: 0.35,
                 minFacePresenceConfidence: 0.35,
                 minTrackingConfidence: 0.35,
-              });
+              }));
               break;
             } catch (err) {
               const faceErr = `face_${delegate.toLowerCase()}: ${String((err as Error)?.message || err)}`;
@@ -1707,11 +1828,11 @@ export default function PlayArena({
       let result: HandsResultShape = { landmarks: [], handedness: [] };
       try {
         if (handBackendRef.current === "tasks_image" && typeof hands.detect === "function") {
-          result = (hands.detect(video) as HandsResultShape) || result;
+          result = withSuppressedMediapipeConsole(() => (hands.detect!(video) as HandsResultShape) || result);
         } else if (typeof hands.detectForVideo === "function") {
-          result = (hands.detectForVideo(video, nowMs) as HandsResultShape) || result;
+          result = withSuppressedMediapipeConsole(() => (hands.detectForVideo!(video, nowMs) as HandsResultShape) || result);
         } else if (typeof hands.detect === "function") {
-          result = (hands.detect(video) as HandsResultShape) || result;
+          result = withSuppressedMediapipeConsole(() => (hands.detect!(video) as HandsResultShape) || result);
         }
       } catch (err) {
         const message = String((err as Error)?.message || err || "hand_detect_failed");
@@ -1729,9 +1850,9 @@ export default function PlayArena({
         try {
           let faceResult: FaceResultShape = { faceLandmarks: [] };
           if (typeof face.detectForVideo === "function") {
-            faceResult = (face.detectForVideo(video, nowMs) as FaceResultShape) || faceResult;
+            faceResult = withSuppressedMediapipeConsole(() => (face.detectForVideo!(video, nowMs) as FaceResultShape) || faceResult);
           } else if (typeof face.detect === "function") {
-            faceResult = (face.detect(video) as FaceResultShape) || faceResult;
+            faceResult = withSuppressedMediapipeConsole(() => (face.detect!(video) as FaceResultShape) || faceResult);
           }
           const firstFace = faceResult.faceLandmarks?.[0];
           if (Array.isArray(firstFace) && firstFace.length > 0) {
@@ -1819,9 +1940,14 @@ export default function PlayArena({
         rawLabel = normalizeLabel(prediction.label || "idle");
         rawConfidence = Math.max(0, Number(prediction.confidence || 0));
 
-        if (restrictedSigns && numHands < 2) {
-          rawLabel = "idle";
-          rawConfidence = 0;
+        if (!isCalibrationMode && restrictedSigns && numHands < 2) {
+          voteWindowRef.current = [];
+          setRawDetectedLabel("Show both hands");
+          setRawDetectedConfidence(0);
+          setVoteHits(0);
+          setDetectedLabel("Show both hands");
+          setDetectedConfidence(0);
+          return;
         }
 
         const lightingPass = !isRankMode || lightingStatusRef.current === "good";
@@ -2126,9 +2252,25 @@ export default function PlayArena({
     };
   }, [activeEffect, jutsu?.effect, jutsuName, showJutsuEffect]);
 
+  const sequenceProgressStep = phase === "casting" ? sequence.length : currentStep;
   const sequenceProgressPct = sequence.length > 0
-    ? Math.min(100, Math.round((currentStep / sequence.length) * 100))
+    ? Math.min(100, Math.round((sequenceProgressStep / sequence.length) * 100))
     : 0;
+  const iconLayout = useMemo(() => {
+    const n = Math.max(1, sequence.length);
+    const maxIconSize = 80;
+    const minIconSize = 40;
+    const gap = 12;
+    const maxTotalWidth = 840;
+    let iconSize = maxIconSize;
+    let totalWidth = (n * iconSize) + ((n - 1) * gap);
+    if (totalWidth > maxTotalWidth) {
+      iconSize = Math.floor((maxTotalWidth - ((n - 1) * gap)) / n);
+      iconSize = Math.max(minIconSize, iconSize);
+      totalWidth = (n * iconSize) + ((n - 1) * gap);
+    }
+    return { iconSize, gap, totalWidth };
+  }, [sequence.length]);
   const calibrationProgressPct = Math.min(
     100,
     Math.round((1 - (calibrationSecondsLeft / CALIBRATION_DURATION_S)) * 100),
@@ -2149,7 +2291,7 @@ export default function PlayArena({
             ? "ERROR"
             : "LOADING";
 
-  const iconProgressStep = (phase === "completed" || phase === "casting") ? sequence.length : currentStep;
+  const iconProgressStep = phase === "casting" ? sequence.length : currentStep;
   const nextSign = currentStep < sequence.length ? toDisplayLabel(sequence[currentStep]).toUpperCase() : "COMPLETE";
 
   const iconBarStatus = isCalibrationMode
@@ -2160,11 +2302,14 @@ export default function PlayArena({
         : "CAPTURE LIGHTING + CONFIDENCE PROFILE"
     : phase === "casting"
       ? `CASTING • ${String(jutsu?.displayText || "JUTSU").toUpperCase()}`
-      : phase === "completed"
-        ? "RUN COMPLETE"
       : phase === "countdown"
         ? "GET READY..."
         : `NEXT SIGN: ${nextSign}`;
+  const iconBarStatusColorClass = isCalibrationMode
+    ? "text-ninja-accent"
+    : phase === "casting"
+      ? "text-orange-200"
+      : "text-white";
 
   const hudLevel = Math.max(0, Math.floor(Number(progressionHud?.level) || 0));
   const hudXp = Math.max(0, Math.floor(Number(progressionHud?.xp) || 0));
@@ -2184,6 +2329,10 @@ export default function PlayArena({
   const showSignChip = phase === "active"
     && !isCalibrationMode
     && !["idle", "unknown", "no hands"].includes(normalizeLabel(detectedLabel));
+  const signChipTopClass = showSpeedHud ? "top-[98px] md:top-[15px]" : "top-[66px] md:top-[15px]";
+  const detectionPanelTopClass = showSpeedHud || showSignChip
+    ? "top-[132px] md:top-[56px]"
+    : "top-[102px] md:top-[56px]";
   const detectedConfidencePct = Math.round(detectedConfidence * 100);
   const rawDetectedConfidencePct = Math.round(rawDetectedConfidence * 100);
   const diagCalibrationText = isCalibrationMode && phase === "active"
@@ -2239,8 +2388,8 @@ export default function PlayArena({
       </div>
 
       <div className="space-y-4">
-        <div className="relative">
-          <div className="absolute inset-x-2 top-2 z-40 flex flex-wrap items-center justify-end gap-1.5 md:inset-x-auto md:right-4 md:-top-[42px] md:top-auto md:flex-nowrap">
+        <div className="relative mx-auto w-full max-w-[900px] lg:max-w-[680px] xl:max-w-[720px]">
+          <div className="mb-2 flex flex-wrap items-center justify-end gap-1.5 md:flex-nowrap">
             <button
               type="button"
               onClick={() => setShowModelInfo(true)}
@@ -2262,13 +2411,12 @@ export default function PlayArena({
             >
               DIAG: {showDetectionPanel ? "ON" : "OFF"}
             </button>
+            {!isCalibrationMode && (
+              <div className="inline-flex h-[30px] min-w-[82px] items-center justify-center rounded-[8px] border border-emerald-300/45 bg-black/72 px-3 text-[10px] font-mono text-emerald-300 md:text-[11px]">
+                FPS {fps}
+              </div>
+            )}
           </div>
-
-          {!isCalibrationMode && (
-            <div className="absolute right-2 top-[72px] z-40 rounded-md border border-emerald-300/40 bg-black/72 px-2 py-1 text-[10px] font-mono text-emerald-300 md:right-[5px] md:-top-[18px] md:top-auto">
-              FPS {fps}
-            </div>
-          )}
 
           <div className="relative overflow-hidden rounded-2xl border border-ninja-border bg-black aspect-[4/3]">
           {!isCalibrationMode && (
@@ -2303,7 +2451,7 @@ export default function PlayArena({
           )}
 
           {!!comboCue && (
-            <div className="absolute inset-x-0 top-[66px] z-30 flex justify-center md:top-3">
+            <div className="absolute inset-x-0 top-[66px] z-30 flex justify-center md:top-[54px]">
               <div className="rounded-lg border border-orange-300/45 bg-black/65 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-orange-200 md:px-4 md:py-2 md:text-xs">
                 {comboCue}
               </div>
@@ -2319,7 +2467,7 @@ export default function PlayArena({
           )}
 
           {showSignChip && (
-            <div className="absolute right-2 top-[66px] z-30 rounded-[8px] border border-emerald-300/55 bg-black/75 px-2 py-1 md:right-[18px] md:top-[15px] md:px-3 md:py-1.5">
+            <div className={`absolute right-2 z-30 rounded-[8px] border border-emerald-300/55 bg-black/75 px-2 py-1 md:right-[18px] md:px-3 md:py-1.5 ${signChipTopClass}`}>
               <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200 md:text-[11px]">
                 SIGN: {detectedLabel.toUpperCase()}
               </p>
@@ -2327,7 +2475,7 @@ export default function PlayArena({
           )}
 
           {showDetectionPanel && (
-            <div className="absolute left-2 right-2 top-[102px] z-30 w-auto max-w-[320px] rounded-[10px] border border-zinc-400/45 bg-black/68 px-[10px] py-[8px] text-[10px] font-mono text-white/90 md:left-[12px] md:right-auto md:top-[14px] md:w-[320px] md:text-[11px]">
+            <div className={`absolute left-2 right-2 z-30 w-auto max-w-[320px] rounded-[10px] border border-zinc-400/45 bg-black/68 px-[10px] py-[8px] text-[10px] font-mono text-white/90 md:left-[12px] md:right-auto md:w-[320px] md:text-[11px] ${detectionPanelTopClass}`}>
               <div>MODEL: MEDIAPIPE</div>
               <div>MP BACKEND: {detectorBackend}</div>
               <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>
@@ -2579,20 +2727,27 @@ export default function PlayArena({
           )}
         </div>
 
-        <div className="rounded-2xl border border-ninja-border bg-ninja-bg/45 p-4">
-          <p className="text-center text-sm font-black uppercase tracking-[0.12em] text-ninja-accent">
+        <div className="rounded-2xl border border-ninja-border bg-[#14141e]/92 p-4 md:p-5">
+          <p className={`text-center text-sm font-black uppercase tracking-[0.12em] md:text-[15px] ${iconBarStatusColorClass}`}>
             {iconBarStatus}
           </p>
-          <div className="mt-3 h-2 rounded-full bg-zinc-700">
-            <div className="h-2 rounded-full bg-orange-500 transition-all" style={{ width: `${progressPct}%` }} />
+          <div className="mx-auto mt-3 h-2 max-w-[860px] rounded-full bg-[#2e2a24]">
+            <div className="h-2 rounded-full bg-orange-500/95 transition-all duration-300" style={{ width: `${progressPct}%` }} />
           </div>
 
           {!isCalibrationMode && (
             <>
-              <div className="mt-4 flex items-start justify-start gap-3 overflow-x-auto pb-2">
+              <div className="mt-4 overflow-x-auto pb-2">
+                <div
+                  className="mx-auto flex w-max items-start justify-center"
+                  style={{
+                    columnGap: `${iconLayout.gap}px`,
+                    minWidth: `${iconLayout.totalWidth}px`,
+                  }}
+                >
                 {sequence.map((sign, index) => {
                   const signState =
-                    (phase === "completed" || phase === "casting") && index < iconProgressStep
+                    phase === "casting" && index < iconProgressStep
                       ? "casting"
                       : index < iconProgressStep
                         ? "done"
@@ -2603,14 +2758,15 @@ export default function PlayArena({
                     <SignTile
                       key={`${sign}-${index}`}
                       sign={sign}
-                      index={index}
                       state={signState}
+                      iconSize={iconLayout.iconSize}
                     />
                   );
                 })}
+                </div>
               </div>
 
-              <div className="mt-3 text-right text-xs font-mono text-zinc-300">
+              <div className="mt-3 text-right text-xs font-mono text-zinc-400">
                 {iconProgressStep}/{sequence.length}
               </div>
             </>
