@@ -470,6 +470,31 @@ function normalizeDiscordUsername(raw: unknown): string {
   return normalized;
 }
 
+function normalizeProfileUsername(raw: unknown): string {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  return value
+    .replace(/\s+/g, "_")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+}
+
+function buildBootstrapUsernameCandidates(baseUsername: string, discordId: string): string[] {
+  const cleanBase = normalizeProfileUsername(baseUsername) || "shinobi";
+  const numericDiscordId = String(discordId || "").replace(/\D/g, "");
+  const suffix6 = (numericDiscordId || "000000").slice(-6);
+  const suffix4 = suffix6.slice(-4);
+  const candidates = [
+    cleanBase,
+    `${cleanBase}_${suffix4}`,
+    `${cleanBase}_${suffix6}`,
+    `shinobi_${suffix6}`,
+  ];
+  return Array.from(new Set(candidates.map((value) => normalizeProfileUsername(value)).filter(Boolean)));
+}
+
 function pickDiscordUsername(...values: unknown[]): string {
   for (const raw of values) {
     const value = normalizeDiscordUsername(raw);
@@ -1446,12 +1471,21 @@ export default function PlayPage() {
   const menuMusicRef = useRef<HTMLAudioElement | null>(null);
   const pendingRankReplayBusyRef = useRef(false);
   const profileMetaHydratedRef = useRef(false);
+  const [boundUsername, setBoundUsername] = useState("");
 
-  const identity = useMemo(() => resolveSessionIdentity(session), [session]);
-  const username = useMemo(() => getDiscordDisplayName(session, identity), [session, identity]);
+  const sessionIdentity = useMemo(() => resolveSessionIdentity(session), [session]);
+  const identity = useMemo(() => {
+    if (!sessionIdentity) return null;
+    if (!boundUsername) return sessionIdentity;
+    return {
+      username: boundUsername,
+      discordId: sessionIdentity.discordId,
+    };
+  }, [boundUsername, sessionIdentity]);
+  const username = useMemo(() => getDiscordDisplayName(session, sessionIdentity), [session, sessionIdentity]);
   const avatarUrl = useMemo(() => getDiscordAvatar(session), [session]);
   const visibleStateError = stateError || (
-    session && !identity
+    session && !sessionIdentity
       ? "Discord identity is missing required username/id fields. Re-login and retry."
       : ""
   );
@@ -2176,7 +2210,9 @@ export default function PlayPage() {
         announcementDigestRef.current = "";
         setShowAnnouncements(false);
       } else if (
-        digest
+        session
+        && authReady
+        && digest
         && digest !== announcementDigestRef.current
         && !maintenanceRows.length
       ) {
@@ -2187,7 +2223,7 @@ export default function PlayPage() {
     } catch {
       // Fallback mode: keep gameplay available even if app_config polling fails.
     }
-  }, []);
+  }, [authReady, session]);
 
   const syncServerTimeOffset = useCallback(async () => {
     if (typeof window === "undefined") return;
@@ -2292,20 +2328,62 @@ export default function PlayPage() {
       setStateBusy(true);
     }
 
+    let effectiveIdentity = targetIdentity;
+    const existingProfileRes = await fetchProfileMetaDirect(targetIdentity);
+    if (existingProfileRes.ok && isRecord(existingProfileRes.profile)) {
+      const existingUsername = normalizeDiscordUsername(existingProfileRes.profile.username);
+      if (existingUsername) {
+        effectiveIdentity = {
+          username: existingUsername,
+          discordId: targetIdentity.discordId,
+        };
+        setBoundUsername(existingUsername);
+      }
+    }
+
+    const fallbackCandidates = buildBootstrapUsernameCandidates(effectiveIdentity.username, effectiveIdentity.discordId);
+
+    const tryBootstrapWithFallbackUsername = async (): Promise<boolean> => {
+      for (const candidate of fallbackCandidates) {
+        if (candidate.toLowerCase() === effectiveIdentity.username.toLowerCase()) continue;
+        const candidateIdentity: AuthIdentity = {
+          username: candidate,
+          discordId: effectiveIdentity.discordId,
+        };
+        const candidateBootstrap = await bootstrapAuthoritativeProfile(candidateIdentity);
+        if (Boolean(candidateBootstrap.ok)) {
+          effectiveIdentity = candidateIdentity;
+          setBoundUsername(candidateIdentity.username);
+          return true;
+        }
+      }
+      return false;
+    };
+
     const identityPayload = {
-      p_username: targetIdentity.username,
-      p_discord_id: targetIdentity.discordId,
+      p_username: effectiveIdentity.username,
+      p_discord_id: effectiveIdentity.discordId,
     };
 
     let bindRes = await callRpc("bind_profile_identity_bound_auth", identityPayload);
     if (!Boolean(bindRes.ok) && String(bindRes.reason || "") === "profile_missing") {
-      const bootstrapRes = await bootstrapAuthoritativeProfile(targetIdentity);
+      const bootstrapRes = await bootstrapAuthoritativeProfile(effectiveIdentity);
       if (!Boolean(bootstrapRes.ok)) {
-        if (!silent || String(bootstrapRes.reason || "") === "identity_mismatch") {
+        if (String(bootstrapRes.reason || "") === "identity_mismatch") {
+          const fallbackOk = await tryBootstrapWithFallbackUsername();
+          if (!fallbackOk && (!silent || String(bootstrapRes.reason || "") === "identity_mismatch")) {
+            setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
+          }
+        } else if (!silent || String(bootstrapRes.reason || "") === "identity_mismatch") {
           setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
         }
+      } else {
+        setBoundUsername(effectiveIdentity.username);
       }
-      bindRes = await callRpc("bind_profile_identity_bound_auth", identityPayload);
+      bindRes = await callRpc("bind_profile_identity_bound_auth", {
+        p_username: effectiveIdentity.username,
+        p_discord_id: effectiveIdentity.discordId,
+      });
     }
 
     setIdentityLinked(Boolean(bindRes.ok));
@@ -2316,11 +2394,27 @@ export default function PlayPage() {
       return;
     }
 
-    let stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", identityPayload);
+    let stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", {
+      p_username: effectiveIdentity.username,
+      p_discord_id: effectiveIdentity.discordId,
+    });
     if (!Boolean(stateRes.ok) && String(stateRes.reason || "") === "profile_missing") {
-      const bootstrapRes = await bootstrapAuthoritativeProfile(targetIdentity);
+      const bootstrapRes = await bootstrapAuthoritativeProfile(effectiveIdentity);
       if (Boolean(bootstrapRes.ok)) {
-        stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", identityPayload);
+        stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", {
+          p_username: effectiveIdentity.username,
+          p_discord_id: effectiveIdentity.discordId,
+        });
+      } else if (String(bootstrapRes.reason || "") === "identity_mismatch") {
+        const fallbackOk = await tryBootstrapWithFallbackUsername();
+        if (fallbackOk) {
+          stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", {
+            p_username: effectiveIdentity.username,
+            p_discord_id: effectiveIdentity.discordId,
+          });
+        } else if (!silent) {
+          setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
+        }
       } else if (!silent) {
         setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
       }
@@ -2328,10 +2422,16 @@ export default function PlayPage() {
 
     const shouldFetchDirectProfile = !profileMetaHydratedRef.current;
     const [settingsRes, calibrationRes, directProfileRes] = await Promise.all([
-      callRpc("get_profile_settings_bound_auth", identityPayload),
-      callRpc("get_calibration_profile_bound_auth", identityPayload),
+      callRpc("get_profile_settings_bound_auth", {
+        p_username: effectiveIdentity.username,
+        p_discord_id: effectiveIdentity.discordId,
+      }),
+      callRpc("get_calibration_profile_bound_auth", {
+        p_username: effectiveIdentity.username,
+        p_discord_id: effectiveIdentity.discordId,
+      }),
       shouldFetchDirectProfile
-        ? fetchProfileMetaDirect(targetIdentity)
+        ? fetchProfileMetaDirect(effectiveIdentity)
         : Promise.resolve<DirectProfileMetaResult | null>(null),
     ]);
 
@@ -2346,6 +2446,10 @@ export default function PlayPage() {
     }
 
     if (directProfileRes?.ok && isRecord(directProfileRes.profile)) {
+      const canonicalUsername = normalizeDiscordUsername(directProfileRes.profile.username);
+      if (canonicalUsername) {
+        setBoundUsername(canonicalUsername);
+      }
       applyCompetitivePayload({
         ok: true,
         profile: directProfileRes.profile,
@@ -2409,6 +2513,7 @@ export default function PlayPage() {
       if (nextSession) {
         setAuthError("");
         setStateReady(false);
+        setBoundUsername("");
         setIdentityLinked(false);
         setStateError("");
         setQuestNotice("");
@@ -2418,6 +2523,7 @@ export default function PlayPage() {
         setStateReady(false);
         setStateBusy(false);
         setStateError("");
+        setBoundUsername("");
         setActionBusy(false);
         setClaimBusyKey("");
         setIdentityLinked(false);
@@ -2498,6 +2604,11 @@ export default function PlayPage() {
     if (!maintenanceGate && !updateGate) return;
     setShowAnnouncements(false);
   }, [maintenanceGate, updateGate]);
+
+  useEffect(() => {
+    if (session) return;
+    setShowAnnouncements(false);
+  }, [session]);
 
   useEffect(() => {
     if (!session) {
@@ -4828,7 +4939,7 @@ export default function PlayPage() {
         )}
       </main>
 
-      {showAnnouncements && activeAnnouncement && !maintenanceGate && !updateGate && (
+      {showAnnouncements && !!session && activeAnnouncement && !maintenanceGate && !updateGate && (
         <div className="fixed inset-0 z-[59] flex items-center justify-center p-4">
           <button
             type="button"

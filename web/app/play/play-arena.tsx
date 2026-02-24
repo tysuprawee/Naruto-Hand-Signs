@@ -2937,7 +2937,7 @@ export default function PlayArena({
 
           {!isCalibrationMode && (
             <>
-              <div className={`${isViewportFitSession ? "mt-2" : "mt-4"} overflow-x-auto pb-1`}>
+              <div className={`${isViewportFitSession ? "mt-2" : "mt-4"} overflow-x-auto px-1 pb-1`}>
                 <div
                   className="mx-auto flex w-max items-start justify-center"
                   style={{
