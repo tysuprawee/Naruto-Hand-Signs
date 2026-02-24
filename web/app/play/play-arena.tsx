@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Info,
   Loader2,
+  RotateCcw,
 } from "lucide-react";
 
 import { KNNClassifier, normalizeHand } from "@/utils/knn";
@@ -807,6 +808,7 @@ export default function PlayArena({
   const [detectorBackend, setDetectorBackend] = useState("TASKS VIDEO");
   const [detectorError, setDetectorError] = useState("");
   const [datasetChecksumDisplay, setDatasetChecksumDisplay] = useState("--------");
+  const [loadedDatasetLabels, setLoadedDatasetLabels] = useState<string[]>([]);
   const [activeEffect, setActiveEffect] = useState("");
   const [showJutsuEffect, setShowJutsuEffect] = useState(false);
   const [effectAnchor, setEffectAnchor] = useState<EffectAnchor | null>(null);
@@ -833,6 +835,7 @@ export default function PlayArena({
     const requiredLabels = getRequiredDatasetLabels(targetSequence);
     const missingLabels = requiredLabels.filter((label) => !loadedDatasetRowsByLabelRef.current.has(label));
     if (missingLabels.length === 0) {
+      setLoadedDatasetLabels([...loadedDatasetRowsByLabelRef.current.keys()].sort((a, b) => a.localeCompare(b)));
       const existing = [...loadedDatasetRowsByLabelRef.current.values()].flat();
       if (existing.length > 0) {
         knnRef.current = new KNNClassifier(existing, 3, 1.8);
@@ -888,6 +891,7 @@ export default function PlayArena({
         throw new Error("dataset_empty");
       }
       knnRef.current = new KNNClassifier(mergedRows, 3, 1.8);
+      setLoadedDatasetLabels([...loadedDatasetRowsByLabelRef.current.keys()].sort((a, b) => a.localeCompare(b)));
 
       if (datasetChecksumHint) {
         setDatasetChecksumDisplay(datasetChecksumHint.slice(0, 8));
@@ -1094,7 +1098,30 @@ export default function PlayArena({
   useEffect(() => {
     loadedDatasetRowsByLabelRef.current = new Map();
     knnRef.current = null;
+    setLoadedDatasetLabels([]);
   }, [datasetVersionToken]);
+
+  const handleDebugClearSignCache = useCallback(() => {
+    loadedDatasetRowsByLabelRef.current = new Map();
+    knnRef.current = null;
+    DATASET_LABEL_ROWS_CACHE.clear();
+    DATASET_FULL_ROWS_CACHE.clear();
+    setLoadedDatasetLabels([]);
+    setDatasetChecksumDisplay(datasetChecksumHint ? datasetChecksumHint.slice(0, 8) : "--------");
+    setDetectorError((prev) => {
+      const token = "dataset: cache_cleared";
+      if (prev.includes(token)) return prev;
+      return prev ? `${prev} | ${token}` : token;
+    });
+    void ensureDatasetRowsForSequenceRef.current(sequenceRef.current).catch((err) => {
+      const message = String((err as Error)?.message || err || "dataset_reload_failed");
+      setDetectorError((prev) => {
+        const token = `dataset: ${message}`;
+        if (prev.includes(token)) return prev;
+        return prev ? `${prev} | ${token}` : token;
+      });
+    });
+  }, [datasetChecksumHint]);
 
   const resetRunState = useCallback(() => {
     voteWindowRef.current = [];
@@ -2560,6 +2587,16 @@ export default function PlayArena({
       >
         DIAG: {showDetectionPanel ? "ON" : "OFF"}
       </button>
+      {debugHands && (
+        <button
+          type="button"
+          onClick={handleDebugClearSignCache}
+          className="inline-flex h-[30px] min-w-[120px] items-center justify-center gap-1.5 rounded-[8px] border border-amber-300/55 bg-amber-500/10 px-3 text-[10px] font-bold text-amber-200 hover:bg-amber-500/20 sm:min-w-[138px] md:w-[156px] md:text-[11px]"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          CLEAR CACHE
+        </button>
+      )}
       {!isCalibrationMode && (
         <div className="inline-flex h-[30px] min-w-[82px] items-center justify-center rounded-[8px] border border-emerald-300/45 bg-black/72 px-3 text-[10px] font-mono text-emerald-300 md:text-[11px]">
           FPS {fps}
@@ -2684,6 +2721,7 @@ export default function PlayArena({
                 <div>MODEL: MEDIAPIPE</div>
                 <div>DB VER: {datasetVersionLabel}</div>
                 <div>DB CRC: {datasetChecksumDisplay.slice(0, 8)}</div>
+                <div>DB LOADED: {loadedDatasetLabels.length}</div>
                 <div>MP BACKEND: {detectorBackend}</div>
                 <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>
                 <div>CAM: {cameraStatusText}</div>
@@ -2694,6 +2732,9 @@ export default function PlayArena({
                 <div>{diagCalibrationText}</div>
                 <div>RAW: {rawDetectedLabel} {rawDetectedConfidencePct}%</div>
                 <div>STATE: {phaseLabel}</div>
+                <div className="break-words">
+                  LOADED SIGNS: {loadedDatasetLabels.length > 0 ? loadedDatasetLabels.join(", ") : "(none)"}
+                </div>
               </div>
             )}
 

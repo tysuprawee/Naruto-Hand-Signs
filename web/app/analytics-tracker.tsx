@@ -4,6 +4,28 @@ import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/utils/supabase";
 
+function getErrorMessage(err: unknown): string {
+    if (typeof err === "string") return err;
+    if (err && typeof err === "object" && "message" in err) {
+        return String((err as { message?: unknown }).message || "");
+    }
+    return "";
+}
+
+function isTransientAnalyticsError(err: unknown): boolean {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        return true;
+    }
+    const message = getErrorMessage(err).toLowerCase();
+    return (
+        message.includes("failed to fetch")
+        || message.includes("fetch failed")
+        || message.includes("networkerror")
+        || message.includes("network request failed")
+        || message.includes("load failed")
+    );
+}
+
 export default function AnalyticsTracker() {
     const pathname = usePathname();
 
@@ -21,10 +43,14 @@ export default function AnalyticsTracker() {
                 });
 
                 if (error) {
-                    console.error("Supabase analytics error:", error.message);
+                    if (!isTransientAnalyticsError(error) && process.env.NODE_ENV !== "production") {
+                        console.error("Supabase analytics error:", error.message);
+                    }
                 }
             } catch (err) {
-                console.error("Unexpected analytics error:", err);
+                if (!isTransientAnalyticsError(err) && process.env.NODE_ENV !== "production") {
+                    console.error("Unexpected analytics error:", err);
+                }
             }
         };
 
