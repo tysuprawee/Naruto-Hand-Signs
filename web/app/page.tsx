@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Sword, Scroll, ArrowRight, Video, Trophy, UploadCloud, Youtube, Instagram, Shield, Info, Hand } from "lucide-react";
+import { Sword, Scroll, ArrowRight, Video, Trophy, Youtube, Instagram, Shield, Info, Hand } from "lucide-react";
 
 import { ModalProvider, useModal } from "./components/modal-provider";
 import FireShader from "./components/fire-shader";
@@ -65,10 +65,6 @@ export default function Home() {
             <Link href="/leaderboard" className="flex items-center gap-2 text-ninja-accent font-bold hover:text-ninja-accent-glow transition-colors">
               <Trophy className="w-4 h-4" />
               Leaderboard
-            </Link>
-            <Link href="/collect" className="flex items-center gap-2 text-sky-300 font-bold hover:text-sky-200 transition-colors">
-              <UploadCloud className="w-4 h-4" />
-              Dataset Capture
             </Link>
           </nav>
         </div>
@@ -153,14 +149,6 @@ export default function Home() {
               >
                 <Trophy className="w-5 h-5 text-ninja-dim" />
                 VIEW RANKS
-              </Link>
-
-              <Link
-                href="/collect"
-                className="h-14 px-8 bg-sky-500/12 hover:bg-sky-500/20 border border-sky-300/35 text-sky-100 text-lg font-bold rounded-lg flex items-center gap-3 transition-all"
-              >
-                <UploadCloud className="w-5 h-5 text-sky-200" />
-                DATASET CAPTURE
               </Link>
 
               <div className="flex flex-wrap items-center gap-4">
