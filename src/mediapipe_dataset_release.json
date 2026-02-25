@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-02-25T01:38:31Z",
+  "source_path": "/Users/bugatti/Documents/Naruto/src/mediapipe_signs_db.csv",
+  "publish_path": "/Users/bugatti/Documents/Naruto/web/public/mediapipe_signs_db.csv",
+  "skip_polish": false,
+  "polish_summary": {
+    "removed_rows": 382,
+    "malformed_rows": 0,
+    "removed_by_label": {
+      "bird": 12,
+      "dog": 86,
+      "horse": 2,
+      "monkey": 68,
+      "ox": 176,
+      "rat": 38
+    }
+  },
+  "release_sha256": "98A2A2275FCB3E5D441120F1B695C0187A69214FDBCE69B90973FEBCA964A652",
+  "release_size_bytes": 52694069,
+  "release_stats": {
+    "path": "/var/folders/d3/qv_2ls3j4pzd1yptymd_tlzw0000gn/T/mp_dataset_release_oo86teef.csv",
+    "sha256": "98A2A2275FCB3E5D441120F1B695C0187A69214FDBCE69B90973FEBCA964A652",
+    "file_size_bytes": 52694069,
+    "header_cols": 127,
+    "total_rows": 25414,
+    "valid_rows": 25414,
+    "malformed_rows": 0,
+    "two_hand_rows": 25414,
+    "one_hand_rows": 0,
+    "zero_hand_rows": 0,
+    "label_counts": {
+      "bird": 2956,
+      "boar": 3924,
+      "clap": 742,
+      "dog": 3366,
+      "dragon": 1074,
+      "hare": 2066,
+      "horse": 2276,
+      "idle": 530,
+      "monkey": 2804,
+      "ox": 1172,
+      "ram": 1814,
+      "rat": 1130,
+      "snake": 472,
+      "tiger": 1088
+    }
+  },
+  "version": "2026.02.25.1",
+  "dataset_url": "/mediapipe_signs_db.csv",
+  "message": "Web /play MediaPipe dataset",
+  "priority": 900,
+  "dry_run": false
+}

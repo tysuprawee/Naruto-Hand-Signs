@@ -163,6 +163,7 @@ const LIGHTING_INTERVAL_MS = 240;
 const TWO_HANDS_GUIDE_DELAY_MS = 500;
 const EFFECT_DEFAULT_DURATION_MS = 2200;
 const CAMERA_STALL_TIMEOUT_MS = 1400;
+const HAND_FEATURE_LENGTH = 63;
 
 const CALIBRATION_DURATION_S = 12;
 const CALIBRATION_MIN_SAMPLES = 100;
@@ -283,6 +284,18 @@ type DatasetRow = Record<string, string | number>;
 
 const DATASET_LABEL_ROWS_CACHE = new Map<string, DatasetRow[]>();
 const DATASET_FULL_ROWS_CACHE = new Map<string, DatasetRow[]>();
+
+function getCachedDatasetRowsForVersion(versionToken: string): Map<string, DatasetRow[]> {
+  const prefix = `${versionToken}:`;
+  const out = new Map<string, DatasetRow[]>();
+  for (const [cacheKey, rows] of DATASET_LABEL_ROWS_CACHE.entries()) {
+    if (!cacheKey.startsWith(prefix)) continue;
+    const label = cacheKey.slice(prefix.length);
+    if (!label) continue;
+    out.set(label, rows);
+  }
+  return out;
+}
 
 function parseCsv(text: string): DatasetRow[] {
   const lines = text.trim().split(/\r?\n/);
@@ -424,6 +437,76 @@ function buildFeatures(result: HandsResultShape): { features: number[]; numHands
   return { features: [...h1, ...h2], numHands };
 }
 
+function mirrorNormalizedHand(hand: number[]): number[] {
+  if (!Array.isArray(hand) || hand.length === 0) return [];
+  const out = hand.slice();
+  for (let i = 0; i < out.length; i += 3) {
+    out[i] = -out[i];
+  }
+  return out;
+}
+
+function buildOneHandAssistCandidates(result: HandsResultShape, baseFeatures: number[]): number[][] {
+  const landmarks = result.landmarks ?? [];
+  const firstHand = landmarks[0] ?? null;
+  if (!firstHand) return [baseFeatures];
+  const normalized = normalizeHand(firstHand);
+  if (normalized.length !== HAND_FEATURE_LENGTH) return [baseFeatures];
+
+  const zeros = new Array(HAND_FEATURE_LENGTH).fill(0);
+  const mirrored = mirrorNormalizedHand(normalized);
+  const variants: number[][] = [
+    baseFeatures,
+    [...normalized, ...zeros],
+    [...zeros, ...normalized],
+    [...mirrored, ...zeros],
+    [...zeros, ...mirrored],
+  ];
+
+  const seen = new Set<string>();
+  const deduped: number[][] = [];
+  for (const candidate of variants) {
+    const key = candidate.map((value) => Number(value || 0).toFixed(6)).join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(candidate);
+  }
+  return deduped;
+}
+
+function predictWithOneHandAssist(knn: KNNClassifier, result: HandsResultShape, baseFeatures: number[]) {
+  const candidates = buildOneHandAssistCandidates(result, baseFeatures);
+  let best: { label: string; confidence: number; distance: number } | null = null;
+
+  for (const candidate of candidates) {
+    const prediction = knn.predictWithConfidence(candidate);
+    const label = normalizeLabel(prediction.label || "idle");
+    const confidence = Math.max(0, Number(prediction.confidence || 0));
+    const distance = Number.isFinite(prediction.distance) ? Number(prediction.distance) : Number.POSITIVE_INFINITY;
+    const isIdle = label === "idle" || label === "unknown";
+
+    if (!best) {
+      best = { label, confidence, distance };
+      continue;
+    }
+
+    const bestIsIdle = best.label === "idle" || best.label === "unknown";
+    if (bestIsIdle && !isIdle) {
+      best = { label, confidence, distance };
+      continue;
+    }
+    if (bestIsIdle === isIdle && confidence > best.confidence) {
+      best = { label, confidence, distance };
+      continue;
+    }
+    if (bestIsIdle === isIdle && Math.abs(confidence - best.confidence) <= 1e-9 && distance < best.distance) {
+      best = { label, confidence, distance };
+    }
+  }
+
+  return best || { label: "idle", confidence: 0, distance: Number.POSITIVE_INFINITY };
+}
+
 function computeEffectAnchor(landmarks: Landmark[][]): EffectAnchor | null {
   const hand = landmarks[0];
   if (!hand || hand.length < 21) return null;
@@ -557,13 +640,6 @@ function SignTile({
   });
   const activeCandidateIndex = candidateState.sign === sign ? candidateState.index : 0;
   const src = candidates[Math.min(activeCandidateIndex, candidates.length - 1)] || "/pics/placeholder.png";
-  const borderInsetPx = state === "active"
-    ? -4
-    : state === "done"
-      ? -3
-      : state === "casting"
-        ? -4
-        : 0;
   const borderColor = state === "active"
     ? "rgba(245, 140, 40, 0.95)"
     : state === "done"
@@ -571,6 +647,13 @@ function SignTile({
       : state === "casting"
         ? "rgba(255, 206, 120, 0.95)"
         : "rgba(92, 102, 120, 0.9)";
+  const borderGlow = state === "active"
+    ? "0 0 0 2px rgba(245, 140, 40, 0.96), 0 0 18px rgba(245, 140, 40, 0.35)"
+    : state === "done"
+      ? "0 0 0 2px rgba(85, 210, 120, 0.9), 0 0 14px rgba(85, 210, 120, 0.22)"
+      : state === "casting"
+        ? "0 0 0 2px rgba(255, 206, 120, 0.95), 0 0 18px rgba(255, 206, 120, 0.28)"
+        : "0 0 0 1px rgba(92, 102, 120, 0.55)";
 
   return (
     <div
@@ -592,14 +675,11 @@ function SignTile({
       )}
 
       <span
-        className="pointer-events-none absolute rounded-[10px] border"
+        className="pointer-events-none absolute inset-0 rounded-[10px] border"
         style={{
-          left: `${borderInsetPx}px`,
-          top: `${borderInsetPx}px`,
-          width: `${iconSize - (2 * borderInsetPx)}px`,
-          height: `${iconSize - (2 * borderInsetPx)}px`,
           borderColor,
           borderWidth: "2px",
+          boxShadow: borderGlow,
         }}
       />
 
@@ -734,6 +814,7 @@ export default function PlayArena({
   const elapsedRef = useRef(0);
   const lastAcceptedAtRef = useRef(0);
   const oneHandSinceRef = useRef(0);
+  const oneHandAssistUnlockedStepRef = useRef(-1);
   const showTwoHandsGuideRef = useRef(false);
   const lightingStatusRef = useRef<"good" | "low_light" | "overexposed" | "low_contrast">("good");
   const lightingMeanRef = useRef(0);
@@ -1096,7 +1177,16 @@ export default function PlayArena({
   }, [datasetChecksumHint]);
 
   useEffect(() => {
-    loadedDatasetRowsByLabelRef.current = new Map();
+    const hydratedRows = getCachedDatasetRowsForVersion(datasetVersionToken);
+    loadedDatasetRowsByLabelRef.current = hydratedRows;
+
+    const mergedRows = [...hydratedRows.values()].flat();
+    if (mergedRows.length > 0) {
+      knnRef.current = new KNNClassifier(mergedRows, 3, 1.8);
+      setLoadedDatasetLabels([...hydratedRows.keys()].sort((a, b) => a.localeCompare(b)));
+      return;
+    }
+
     knnRef.current = null;
     setLoadedDatasetLabels([]);
   }, [datasetVersionToken]);
@@ -1131,6 +1221,7 @@ export default function PlayArena({
     elapsedRef.current = 0;
     lastAcceptedAtRef.current = 0;
     oneHandSinceRef.current = 0;
+    oneHandAssistUnlockedStepRef.current = -1;
     showTwoHandsGuideRef.current = false;
     calibrationStartedAtRef.current = 0;
     calibrationSamplesRef.current = [];
@@ -2004,6 +2095,7 @@ export default function PlayArena({
         latestLandmarksRef.current = [];
         voteWindowRef.current = [];
         oneHandSinceRef.current = 0;
+        oneHandAssistUnlockedStepRef.current = -1;
         if (showTwoHandsGuideRef.current) {
           showTwoHandsGuideRef.current = false;
           setShowTwoHandsGuide(false);
@@ -2074,12 +2166,17 @@ export default function PlayArena({
       ));
       const { features, numHands } = buildFeatures(result);
       setDetectedHands(numHands);
+      const stepIdxForAssist = currentStepRef.current;
+      const expectedStepSign = stepIdxForAssist < sequence.length ? sequence[stepIdxForAssist] : "";
+      const assistModeEnabled = !restrictedSigns;
+      const assistUnlockedForStep = assistModeEnabled && oneHandAssistUnlockedStepRef.current === stepIdxForAssist;
+      const requiresTwoHandsNow = restrictedSigns || !assistUnlockedForStep;
 
       if (phaseNow !== "active") {
         return;
       }
 
-      if (restrictedSigns && numHands === 1) {
+      if (requiresTwoHandsNow && numHands === 1) {
         if (!oneHandSinceRef.current) {
           oneHandSinceRef.current = nowMs;
         } else if ((nowMs - oneHandSinceRef.current) >= TWO_HANDS_GUIDE_DELAY_MS && !showTwoHandsGuideRef.current) {
@@ -2132,11 +2229,25 @@ export default function PlayArena({
         setDetectedLabel("No hands");
         setDetectedConfidence(0);
       } else {
-        const prediction = knn.predictWithConfidence(features);
+        const prediction = assistModeEnabled && numHands < 2
+          ? predictWithOneHandAssist(knn, result, features)
+          : knn.predictWithConfidence(features);
         rawLabel = normalizeLabel(prediction.label || "idle");
         rawConfidence = Math.max(0, Number(prediction.confidence || 0));
 
-        if (!isCalibrationMode && restrictedSigns && numHands < 2) {
+        if (!isCalibrationMode && requiresTwoHandsNow && numHands < 2) {
+          const matchedExpectedWithOneHand = expectedStepSign
+            ? signsMatch(
+              rawLabel,
+              expectedStepSign,
+              rawLabel,
+              rawConfidence,
+              activeCalibrationProfile.voteMinConfidence,
+            )
+            : false;
+          if (assistModeEnabled && !assistUnlockedForStep && matchedExpectedWithOneHand) {
+            oneHandAssistUnlockedStepRef.current = stepIdxForAssist;
+          }
           voteWindowRef.current = [];
           setRawDetectedLabel("Show both hands");
           setRawDetectedConfidence(0);
@@ -2147,7 +2258,7 @@ export default function PlayArena({
         }
 
         const lightingPass = !isRankMode || lightingStatusRef.current === "good";
-        const allowDetection = lightingPass && (!restrictedSigns || numHands >= 2);
+        const allowDetection = lightingPass && (!requiresTwoHandsNow || numHands >= 2);
         const vote = applyTemporalVote(
           voteWindowRef.current,
           rawLabel,
@@ -2221,6 +2332,7 @@ export default function PlayArena({
 
       const nextStep = stepIdx + 1;
       const nextSigns = signsLandedRef.current + 1;
+      oneHandAssistUnlockedStepRef.current = -1;
       currentStepRef.current = nextStep;
       signsLandedRef.current = nextSigns;
       setCurrentStep(nextStep);

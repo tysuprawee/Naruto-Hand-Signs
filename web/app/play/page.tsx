@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -378,7 +379,7 @@ function sanitizeSettings(raw: Partial<MenuSettingsState> | null | undefined): M
     musicVol: clampVolume(raw?.musicVol, DEFAULT_SETTINGS.musicVol),
     sfxVol: clampVolume(raw?.sfxVol, DEFAULT_SETTINGS.sfxVol),
     debugHands: typeof raw?.debugHands === "boolean" ? raw.debugHands : DEFAULT_SETTINGS.debugHands,
-    restrictedSigns: true,
+    restrictedSigns: typeof raw?.restrictedSigns === "boolean" ? raw.restrictedSigns : DEFAULT_SETTINGS.restrictedSigns,
     cameraIdx: clampInt(raw?.cameraIdx, 0, 16, DEFAULT_SETTINGS.cameraIdx),
     resolutionIdx: clampInt(raw?.resolutionIdx, 0, 2, DEFAULT_SETTINGS.resolutionIdx),
     fullscreen: typeof raw?.fullscreen === "boolean" ? raw.fullscreen : DEFAULT_SETTINGS.fullscreen,
@@ -2289,6 +2290,7 @@ export default function PlayPage() {
         sfx_vol: DEFAULT_SETTINGS.sfxVol,
         camera_idx: DEFAULT_SETTINGS.cameraIdx,
         debug_hands: DEFAULT_SETTINGS.debugHands,
+        restricted_signs: DEFAULT_SETTINGS.restrictedSigns,
         resolution_idx: DEFAULT_SETTINGS.resolutionIdx,
         fullscreen: DEFAULT_SETTINGS.fullscreen,
       },
@@ -2460,11 +2462,13 @@ export default function PlayPage() {
 
     if (Boolean(settingsRes.ok) && isRecord(settingsRes.settings)) {
       const cloud = settingsRes.settings as Record<string, unknown>;
+      const restrictedRaw = cloud.restricted_signs ?? cloud.restrictedSigns;
       const cloudSettings = sanitizeSettings({
         musicVol: Number(cloud.music_vol ?? cloud.musicVol),
         sfxVol: Number(cloud.sfx_vol ?? cloud.sfxVol),
         cameraIdx: Number(cloud.camera_idx ?? cloud.cameraIdx),
         debugHands: Boolean(cloud.debug_hands ?? cloud.debugHands ?? true),
+        restrictedSigns: typeof restrictedRaw === "boolean" ? restrictedRaw : DEFAULT_SETTINGS.restrictedSigns,
         resolutionIdx: Number(cloud.resolution_idx ?? cloud.resolutionIdx),
         fullscreen: Boolean(cloud.fullscreen),
       });
@@ -2770,6 +2774,7 @@ export default function PlayPage() {
           sfx_vol: next.sfxVol,
           camera_idx: next.cameraIdx,
           debug_hands: next.debugHands,
+          restricted_signs: next.restrictedSigns,
           resolution_idx: next.resolutionIdx,
           fullscreen: next.fullscreen,
         },
@@ -3528,7 +3533,7 @@ export default function PlayPage() {
               {authBusy ? (
                 <Loader2 className="h-5 w-5 animate-spin" />
               ) : (
-                <svg className="h-5 w-5 shrink-0 fill-current" viewBox="-6 -4 139.14 104.36" xmlns="http://www.w3.org/2000/svg">
+                <svg className="h-6 w-6 shrink-0 fill-current" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                   <path d="M107.7 8.07C99.71 4.29 91.13 1.51 82.16 0A101.44 101.44 0 0 0 78.73 7c-9.6-1.44-19.14-1.44-28.53 0A101.63 101.63 0 0 0 46.77 0c-8.97 1.51-17.55 4.3-25.54 8.07C4.1 33.56-1.9 58.4.45 82.91a100.95 100.95 0 0 0 30.65 13.45c2-2.73 3.8-5.63 5.4-8.7a46.68 46.68 0 0 1-15.82-7.55c1.23-.9 2.4-1.85 3.55-2.85 18 8.35 37.52 8.35 55.42 0 1.15 1 2.32 1.95 3.55 2.85a46.54 46.54 0 0 1-15.82 7.55c1.6 3.07 3.4 5.97 5.4 8.7a100.9 100.9 0 0 0 30.65-13.45c2.63-28.16-5-52.01-20.73-74.84ZM42.27 63.85c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Zm42.6 0c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Z" />
                 </svg>
               )}
@@ -4111,9 +4116,7 @@ export default function PlayPage() {
                                 }
                               }}
                               onClick={() => {
-                                setSelectedJutsu(name);
-                                if (libraryIntent === "browse") return;
-                                if (!stateReady || !identityLinked || actionBusy) return;
+                                playUiClickSfx();
                                 if (!unlocked) {
                                   openAlertModal(
                                     t("library.skillLocked", "Skill Locked"),
@@ -4122,22 +4125,13 @@ export default function PlayPage() {
                                   );
                                   return;
                                 }
-                                if (needsCalibrationGate) {
-                                  setCalibrationReturnView("jutsu_library");
-                                  setView("calibration_gate");
-                                  return;
-                                }
-                                if (libraryIntent === "rank") {
-                                  setView("rank_session");
-                                  return;
-                                }
-                                setView("free_session");
+                                setSelectedJutsu(name);
                               }}
-                              className={`relative w-full h-full min-h-[148px] overflow-hidden rounded-xl border text-left flex flex-col cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ninja-accent transition ${selected
-                                ? "border-ninja-accent shadow-[0_0_18px_rgba(255,120,50,0.32)]"
+                              className={`relative w-full h-[196px] overflow-hidden rounded-xl border text-left flex flex-col cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ninja-accent transition-all duration-300 ${selected
+                                ? "z-20 border-white scale-[1.02] shadow-[0_0_60px_rgba(255,120,50,0.95)] ring-4 ring-ninja-accent"
                                 : unlocked
-                                  ? "border-ninja-border hover:border-ninja-accent/50"
-                                  : "border-zinc-700"
+                                  ? "border-ninja-border hover:border-ninja-accent/50 hover:scale-[1.01]"
+                                  : "border-zinc-700 opacity-60"
                                 }`}
                             >
                               <div className="absolute inset-0 z-0">
@@ -4147,7 +4141,7 @@ export default function PlayPage() {
                                     alt={name}
                                     fill
                                     sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                                    className={`h-full w-full object-cover ${unlocked ? "opacity-60" : "opacity-30 grayscale"}`}
+                                    className={`h-full w-full object-cover transition-all duration-500 ${(selected && unlocked) ? "opacity-100 scale-110 brightness-[1.15] contrast-110" : unlocked ? "opacity-60" : "opacity-30 grayscale"}`}
                                   />
                                 ) : (
                                   <div className="h-full w-full bg-gradient-to-br from-zinc-700 to-zinc-900" />
@@ -4166,11 +4160,37 @@ export default function PlayPage() {
                                       {t("library.bronzeTarget", "Bronze target")}: {masteryBronzeTarget.toFixed(2)}s
                                     </p>
                                   )}
-                                  <p className={`mt-1 text-[11px] font-bold ${unlocked ? "text-emerald-300" : "text-red-300"}`}>
+                                  <p className={`mt-1 text-[11px] font-black ${unlocked ? "text-emerald-400 drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]" : "text-red-400"}`}>
                                     {unlocked
                                       ? t("library.unlocked", "UNLOCKED")
                                       : `${t("library.locked", "LOCKED")} • LV.${config.minLevel}`}
                                   </p>
+                                </div>
+                                <div className="h-12 flex items-end">
+                                  {selected && unlocked && libraryIntent !== "browse" && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        playUiClickSfx();
+                                        if (!stateReady || !identityLinked || actionBusy) return;
+                                        if (needsCalibrationGate) {
+                                          setCalibrationReturnView("jutsu_library");
+                                          setView("calibration_gate");
+                                          return;
+                                        }
+                                        if (libraryIntent === "rank") {
+                                          setView("rank_session");
+                                          return;
+                                        }
+                                        setView("free_session");
+                                      }}
+                                      className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-white px-3 text-[11px] font-black tracking-widest text-orange-600 shadow-[0_4px_12px_rgba(255,255,255,0.3)] transition-all hover:bg-orange-50 active:scale-95 animate-in fade-in zoom-in duration-300"
+                                    >
+                                      {libraryIntent === "rank" ? "START" : "PLAY"}
+                                      <ArrowRight className="h-3 w-3" />
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -4181,14 +4201,7 @@ export default function PlayPage() {
                   ))}
                 </div>
 
-                {selectedJutsuConfig && (
-                  <div className="mt-6 rounded-2xl border border-ninja-border bg-ninja-bg/45 p-4">
-                    <p className="text-lg font-black text-white">{selectedJutsu}</p>
-                    <p className="mt-1 text-xs text-ninja-dim">{t("library.requiredLevel", "Required Level")}: {selectedJutsuConfig.minLevel}</p>
-                    <p className="mt-2 text-sm text-zinc-200">{selectedJutsuConfig.displayText}</p>
-                    <p className="mt-2 text-xs text-zinc-300">{t("library.sequence", "Sequence")}: {selectedJutsuConfig.sequence.map((s) => s.toUpperCase()).join(" → ")}</p>
-                  </div>
-                )}
+
               </div>
             )}
 
@@ -4778,9 +4791,17 @@ export default function PlayPage() {
                     />
                   </label>
 
-                  <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-400">
-                    <span>{t("settings.restrictedSignsAlwaysOn", "Restricted Signs (Require 2 Hands) - Always On")}</span>
-                    <input type="checkbox" checked readOnly disabled className="h-4 w-4 accent-orange-500" />
+                  <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
+                    <span>{t("settings.accuracyMode", "Accuracy Mode")}</span>
+                    <input
+                      type="checkbox"
+                      checked={draftSettings.restrictedSigns}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setDraftSettings((prev) => ({ ...prev, restrictedSigns: checked }));
+                      }}
+                      className="h-4 w-4 accent-orange-500"
+                    />
                   </label>
 
                   <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">

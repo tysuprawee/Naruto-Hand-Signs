@@ -1,91 +1,83 @@
 # Dataset Version Runbook
 
-Use this every time you update the `/play` dataset to keep caching and DB versioning consistent.
+Use this every time you update the `/play` dataset so caching + app_config stay correct.
 
-## 1. Record Dataset (same process as before)
+## 1) Record New Data
 
-Run recorder and capture samples as usual:
+Run recorder:
 
-```powershell
-python src\mp_trainer.py --camera 0
+```bash
+python3 src/mp_trainer.py --camera 0
 ```
 
-The recorder writes to:
+Recorder writes to:
 
 ```text
 src/mediapipe_signs_db.csv
 ```
 
-## 2. Publish CSV for web
+## 2) Validate (optional quick gate)
 
-Run polish pass first (remove one-hand samples for two-hand-only gameplay):
-
-```powershell
-python src\polish_mediapipe_csv.py --input src\mediapipe_signs_db.csv --inplace
+```bash
+python3 src/validate_mediapipe_csv.py \
+  --input src/mediapipe_signs_db.csv \
+  --expected-labels idle,tiger,ram,snake,horse,rat,boar,dog,bird,monkey,ox,dragon,hare,clap \
+  --min-total-rows 1000
 ```
 
-Then copy recorder output to the deployed static file path:
+## 3) One-command release (polish + publish + checksum + SQL)
 
-```powershell
-Copy-Item src\mediapipe_signs_db.csv web\public\mediapipe_signs_db.csv -Force
+```bash
+python3 src/release_mediapipe_dataset.py \
+  --input src/mediapipe_signs_db.csv \
+  --publish-path web/public/mediapipe_signs_db.csv \
+  --version 2026.02.25.1 \
+  --sql-out sql/dataset_version_commands.generated.sql
 ```
 
-## 3. Verify both files are identical
+What this does:
+- removes one-hand rows (unless `--skip-polish`)
+- validates final dataset
+- writes `web/public/mediapipe_signs_db.csv`
+- writes manifest `src/mediapipe_dataset_release.json`
+- prints SQL + writes SQL file if `--sql-out` is provided
 
-```powershell
-Get-FileHash src\mediapipe_signs_db.csv -Algorithm SHA256
-Get-FileHash web\public\mediapipe_signs_db.csv -Algorithm SHA256
+Preview only (no file changes):
+
+```bash
+python3 src/release_mediapipe_dataset.py --dry-run --version 2026.02.25.1
 ```
 
-Hashes must match.
+## 4) Upload dataset version row to Supabase (optional automation)
 
-## 4. Get checksum for DB row
+If you want the script to update `app_config` automatically:
 
-```powershell
-(Get-FileHash web\public\mediapipe_signs_db.csv -Algorithm SHA256).Hash
+```bash
+python3 src/release_mediapipe_dataset.py \
+  --input src/mediapipe_signs_db.csv \
+  --publish-path web/public/mediapipe_signs_db.csv \
+  --version 2026.02.25.1 \
+  --upload-app-config
 ```
 
-Use this exact hash in SQL.
+Credential resolution used by script:
+- URL: `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL`
+- Key: `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_KEY`
 
-## 5. Bump dataset version in Supabase
+If upload is not used, run generated SQL manually in Supabase SQL editor.
 
-Run this SQL (transaction recommended):
+## 5) Deploy web app
 
-```sql
-begin;
+Deploy so `web/public/mediapipe_signs_db.csv` is live.
 
-update public.app_config
-set is_active = false
-where type = 'dataset';
+## 6) Post-deploy checks
 
-insert into public.app_config (type, message, version, is_active, priority, created_at, url, checksum)
-values (
-  'dataset',
-  'Web /play MediaPipe dataset',
-  'YYYY.MM.DD.N',
-  true,
-  900,
-  now(),
-  '/mediapipe_signs_db.csv',
-  '<SHA256_OF_WEB_PUBLIC_FILE>'
-);
-
-commit;
-```
-
-Version format recommendation:
-
+1. Open:
 ```text
-YYYY.MM.DD.N
+https://<your-domain>/mediapipe_signs_db.csv
 ```
-
-Example:
-
-```text
-2026.02.16.1
-```
-
-## 6. Verify active DB row
+2. Confirm `/play` loads and recognizer works.
+3. Confirm active dataset row:
 
 ```sql
 select type, version, is_active, priority, created_at, url, checksum
@@ -94,28 +86,8 @@ where type = 'dataset'
 order by created_at desc;
 ```
 
-Expected:
-
-- latest row has `is_active = true`
-- `url = '/mediapipe_signs_db.csv'`
-- `checksum` matches Step 4
-
-## 7. Deploy web app
-
-Deploy so `web/public/mediapipe_signs_db.csv` is live.
-
-## 8. Post-deploy quick check
-
-Open:
-
-```text
-https://<your-domain>/mediapipe_signs_db.csv
-```
-
-Confirm file downloads and `/play` loads normally.
-
 ## Notes
 
-- The `/play` client caches dataset by `dataset` version from `app_config`.
-- Browser should re-use cached CSV until version changes.
-- Keep `sql/dataset_version_commands.sql` as your SQL reference template.
+- `/play` cache key is dataset `version` from `app_config`.
+- Change `version` every dataset release.
+- Keep `sql/dataset_version_commands.sql` as base reference template.
