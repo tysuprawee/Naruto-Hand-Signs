@@ -230,8 +230,8 @@ function LeaderboardContent() {
                 setTotalCount(bestRows.length);
             } else {
                 const { data: profileData, error: profileError, count } = await supabase
-                    .from("profiles")
-                    .select("*", { count: "exact" })
+                    .from("profiles_leaderboard_public")
+                    .select("id,username,xp,level,rank", { count: "exact" })
                     .order("level", { ascending: false })
                     .order("xp", { ascending: false })
                     .range(from, to);

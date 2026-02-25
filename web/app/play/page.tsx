@@ -1756,35 +1756,25 @@ export default function PlayPage() {
   }, [session, t, triggerConnectionLost]);
 
   const fetchProfileMetaDirect = useCallback(async (targetIdentity: AuthIdentity): Promise<DirectProfileMetaResult> => {
-    if (!supabase) {
-      return { ok: false, reason: "offline" };
-    }
-    try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("username,discord_id,mastery,tutorial_seen,tutorial_seen_at,tutorial_version,quests,calibration_profile,xp,level,rank,total_signs,total_jutsus,fastest_combo")
-        .eq("discord_id", targetIdentity.discordId)
-        .limit(1);
-      if (error) {
-        return {
-          ok: false,
-          reason: "profile_meta_fetch_failed",
-          detail: String(error.message || ""),
-        };
-      }
-      const row = Array.isArray(data) ? data[0] : null;
-      if (!isRecord(row)) {
-        return { ok: false, reason: "profile_missing" };
-      }
-      return { ok: true, profile: row };
-    } catch (err) {
+    const res = await callRpc("get_profile_meta_self_auth", {});
+    if (!Boolean(res.ok)) {
       return {
         ok: false,
-        reason: "profile_meta_exception",
-        detail: String((err as Error)?.message || err || ""),
+        reason: String(res.reason || "profile_meta_fetch_failed"),
+        detail: String(res.detail || ""),
       };
     }
-  }, []);
+    if (!isRecord(res.profile)) {
+      return { ok: false, reason: "profile_missing" };
+    }
+    const profile = res.profile as Record<string, unknown>;
+    const expectedDiscord = String(targetIdentity.discordId || "").trim();
+    const actualDiscord = String(profile.discord_id || "").trim();
+    if (expectedDiscord && actualDiscord && expectedDiscord !== actualDiscord) {
+      return { ok: false, reason: "profile_identity_mismatch" };
+    }
+    return { ok: true, profile };
+  }, [callRpc]);
 
   const readPendingRankQueue = useCallback((): PendingRankSubmitRecord[] => {
     if (typeof window === "undefined" || !pendingRankQueueStorageKey) return [];
@@ -1931,8 +1921,8 @@ export default function PlayPage() {
       }
 
       const { data: profileData, error: profileError, count: profileCount } = await sb
-        .from("profiles")
-        .select("id,username,xp,level,rank,discord_id", { count: "exact" })
+        .from("profiles_leaderboard_public")
+        .select("id,username,xp,level,rank", { count: "exact" })
         .order("level", { ascending: false })
         .order("xp", { ascending: false })
         .range(from, to);
