@@ -40,8 +40,21 @@ Keeps one header and appends all rows.
 
 ```bash
 cd /Users/bugatti/Documents/Naruto
+first_file="$(ls data/captures/2026-02-25/*.csv | grep -v 'merged_collect\\.csv$' | head -n 1)"
+{ head -n 1 "$first_file"; for f in data/captures/2026-02-25/*.csv; do
+    [ "$f" = "data/captures/2026-02-25/merged_collect.csv" ] && continue
+    tail -n +2 "$f"
+  done; } \
+  > data/captures/2026-02-25/merged_collect.csv
+```
+
+If `merged_collect.csv` already exists and is huge, regenerate cleanly:
+
+```bash
+cd /Users/bugatti/Documents/Naruto
+rm -f data/captures/2026-02-25/merged_collect.csv
 first_file="$(ls data/captures/2026-02-25/*.csv | head -n 1)"
-{ head -n 1 "$first_file"; for f in data/captures/2026-02-25/*.csv; do tail -n +2 "$f"; done; } \
+{ head -n 1 "$first_file"; for f in data/captures/2026-02-25/mediapipe_capture_*.csv; do tail -n +2 "$f"; done; } \
   > data/captures/2026-02-25/merged_collect.csv
 ```
 
