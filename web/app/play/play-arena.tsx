@@ -110,6 +110,7 @@ export interface PlayArenaResult {
   signsLanded: number;
   expectedSigns: number;
   elapsedSeconds: number;
+  effectDurationMs?: number;
   proof?: PlayArenaProof;
 }
 
@@ -632,9 +633,17 @@ function formatElapsed(ms: number): string {
   return `${sec}.${String(cent).padStart(2, "0")}s`;
 }
 
+const SIGN_IMAGE_OVERRIDES: Record<string, string> = {
+  clap: "/pics/clap.jpg",
+};
+
 function signImageCandidates(sign: string): string[] {
   const normalized = normalizeLabel(sign);
   if (!normalized) return ["/pics/placeholder.png"];
+  const overridePath = SIGN_IMAGE_OVERRIDES[normalized];
+  if (overridePath) {
+    return [overridePath, "/pics/placeholder.png"];
+  }
   return [
     `/pics/signs/${normalized}.jpg`,
     "/pics/placeholder.png",
@@ -840,6 +849,7 @@ export default function PlayArena({
   const phaseRef = useRef<ArenaPhase>("loading");
   const runStartRef = useRef(0);
   const elapsedRef = useRef(0);
+  const castEffectDurationRef = useRef(0);
   const lastAcceptedAtRef = useRef(0);
   const oneHandSinceRef = useRef(0);
   const oneHandAssistUnlockedStepRef = useRef(-1);
@@ -881,6 +891,8 @@ export default function PlayArena({
   const comboRasenganTripleRef = useRef(false);
   const effectAnchorRef = useRef<EffectAnchor | null>(null);
   const faceAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const sequenceStripRef = useRef<HTMLDivElement | null>(null);
+  const sequenceTileRefs = useRef<Array<HTMLDivElement | null>>([]);
   const headYawRef = useRef(0);
   const headPitchRef = useRef(0);
   const pendingEffectTimersRef = useRef<number[]>([]);
@@ -1226,6 +1238,7 @@ export default function PlayArena({
     signsLandedRef.current = 0;
     runStartRef.current = 0;
     elapsedRef.current = 0;
+    castEffectDurationRef.current = 0;
     lastAcceptedAtRef.current = 0;
     oneHandSinceRef.current = 0;
     oneHandAssistUnlockedStepRef.current = -1;
@@ -1374,6 +1387,7 @@ export default function PlayArena({
 
     playSfx("/sounds/complete.mp3", 1);
     if (isCalibrationMode) {
+      castEffectDurationRef.current = 0;
       phaseRef.current = "completed";
       setPhase("completed");
       return;
@@ -1389,6 +1403,7 @@ export default function PlayArena({
     }
 
     const effectDurationMs = Math.max(650, Math.round((Number(jutsu?.duration) || 2.2) * 1000));
+    castEffectDurationRef.current = effectDurationMs;
     triggerJutsuSignature(jutsuName, finalEffect, { volume: 1 });
     triggerJutsuEffect(finalEffect, effectDurationMs);
 
@@ -1485,6 +1500,7 @@ export default function PlayArena({
         signsLanded: Math.max(signsLandedRef.current, sequence.length),
         expectedSigns: sequence.length,
         elapsedSeconds: Math.max(0, elapsedRef.current / 1000),
+        effectDurationMs: Math.max(0, Math.floor(castEffectDurationRef.current || 0)),
       };
 
       if (isRankMode) {
@@ -2669,7 +2685,7 @@ export default function PlayArena({
       ? "/effects/rasengan.mp4"
       : "";
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
-  const showSpeedHud = isRankMode && phase === "active";
+  const showSpeedHud = isRankMode && phase !== "loading" && phase !== "error";
   const showSignChip = phase === "active"
     && !isCalibrationMode
     && !["idle", "unknown", "no hands"].includes(normalizeLabel(detectedLabel));
@@ -2706,6 +2722,32 @@ export default function PlayArena({
       ? 520
       : 560;
   const effectSizePx = Math.max(280, Math.min(920, Math.round(effectBaseSize * effectScale)));
+
+  useEffect(() => {
+    if (typeof window === "undefined" || isCalibrationMode) return;
+    const strip = sequenceStripRef.current;
+    if (!strip) return;
+    if (strip.scrollWidth <= strip.clientWidth + 4) return;
+
+    const isMobileViewport = window.matchMedia("(max-width: 900px)").matches || isViewportFitSession;
+    if (!isMobileViewport) return;
+
+    const maxIndex = Math.max(0, sequence.length - 1);
+    const targetIndex = Math.max(0, Math.min(maxIndex, iconProgressStep));
+    const targetEl = sequenceTileRefs.current[targetIndex];
+    if (!targetEl) return;
+
+    const stripRect = strip.getBoundingClientRect();
+    const targetRect = targetEl.getBoundingClientRect();
+    const targetCenter =
+      (targetRect.left - stripRect.left) + strip.scrollLeft + (targetRect.width / 2);
+    const desiredLeft = targetCenter - (strip.clientWidth / 2);
+    const maxScrollLeft = Math.max(0, strip.scrollWidth - strip.clientWidth);
+    const clampedLeft = Math.max(0, Math.min(maxScrollLeft, desiredLeft));
+
+    if (Math.abs(strip.scrollLeft - clampedLeft) < 2) return;
+    strip.scrollTo({ left: clampedLeft, behavior: "smooth" });
+  }, [iconProgressStep, isCalibrationMode, isViewportFitSession, sequence.length, sequenceKey]);
   const tripleOffsets = comboTripleEffect !== "none" ? [-28, 0, 28] : [0];
   const arenaStageMaxWidthClass = isViewportFitSession ? "max-w-[1040px]" : "max-w-[900px] lg:max-w-[680px] xl:max-w-[720px]";
   const topControlChips = (
@@ -2835,9 +2877,9 @@ export default function PlayArena({
             )}
 
             {showSpeedHud && (
-              <div className="absolute left-2 top-[66px] z-30 rounded-[6px] border border-orange-300/55 bg-black/75 px-2 py-1 md:left-[15px] md:top-[15px] md:px-3 md:py-1.5">
+              <div className="absolute left-2 top-[66px] z-50 rounded-[6px] border border-orange-300/55 bg-black/75 px-2 py-1 md:left-[15px] md:top-[15px] md:px-3 md:py-1.5">
                 <p className="text-[10px] font-black uppercase tracking-[0.12em] text-zinc-200 md:text-[11px]">
-                  SPEED: <span className="text-white">{formatElapsed(elapsedMs)}</span>
+                  TIMER: <span className="text-white">{formatElapsed(elapsedMs)}</span>
                 </p>
               </div>
             )}
@@ -3117,7 +3159,10 @@ export default function PlayArena({
 
           {!isCalibrationMode && (
             <>
-              <div className={`${isViewportFitSession ? "mt-2" : "mt-4"} overflow-x-auto px-1 pb-1`}>
+              <div
+                ref={sequenceStripRef}
+                className={`${isViewportFitSession ? "mt-2" : "mt-4"} overflow-x-auto scroll-smooth px-1 pb-1`}
+              >
                 <div
                   className="mx-auto flex w-max items-start justify-center"
                   style={{
@@ -3135,12 +3180,19 @@ export default function PlayArena({
                             ? "active"
                             : "pending";
                     return (
-                      <SignTile
+                      <div
                         key={`${sign}-${index}`}
-                        sign={sign}
-                        state={signState}
-                        iconSize={iconLayout.iconSize}
-                      />
+                        ref={(node) => {
+                          sequenceTileRefs.current[index] = node;
+                        }}
+                        className="shrink-0"
+                      >
+                        <SignTile
+                          sign={sign}
+                          state={signState}
+                          iconSize={iconLayout.iconSize}
+                        />
+                      </div>
                     );
                   })}
                 </div>

@@ -40,6 +40,7 @@ import PlayArena, {
   type PlayArenaResult,
 } from "@/app/play/play-arena";
 import { LANGUAGE_OPTIONS, useLanguage } from "@/app/components/language-provider";
+import { useBackgroundMusic } from "@/app/components/background-music-provider";
 import type { LanguageCode } from "@/utils/i18n";
 
 type PlayView =
@@ -140,6 +141,11 @@ interface MasteryPanelState {
   newBest: number;
   previousTier: "none" | "bronze" | "silver" | "gold";
   newTier: "none" | "bronze" | "silver" | "gold";
+}
+
+interface RunCompletionPanels {
+  masteryPanel: MasteryPanelState | null;
+  levelUpPanel: LevelUpPanelState | null;
 }
 
 interface LeaderboardSpeedRow {
@@ -999,6 +1005,16 @@ function isDuplicateSubmitFailure(reasonRaw: unknown, detailRaw: unknown): boole
   return /(duplicate|already|replay|exists|token_used|already_submitted|already_recorded)/i.test(text);
 }
 
+function shouldFallbackToLegacyBoundRpc(reasonRaw: unknown, detailRaw: unknown): boolean {
+  const text = `${String(reasonRaw || "")} ${String(detailRaw || "")}`.toLowerCase();
+  if (text.includes("session_discord_missing")) return true;
+  if (text.includes("session_identity_mismatch")) return true;
+  if (text.includes("auth_guard_discord_identity")) return true;
+  if ((text.includes("rpc_error") || text.includes("rpc_exception")) && text.includes("does not exist")) return true;
+  if ((text.includes("rpc_error") || text.includes("rpc_exception")) && text.includes("permission denied")) return true;
+  return false;
+}
+
 function sanitizeQueuedRankResult(raw: unknown): PlayArenaResult | null {
   if (!isRecord(raw)) return null;
   if (String(raw.mode || "").trim() !== "rank") return null;
@@ -1388,6 +1404,7 @@ function LockedPanel({
 
 export default function PlayPage() {
   const { language, setLanguage, t } = useLanguage();
+  const { setMusicMuted: setGlobalMusicMuted, setMusicVolume: setGlobalMusicVolume } = useBackgroundMusic();
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(!supabase);
   const [authBusy, setAuthBusy] = useState(false);
@@ -1473,7 +1490,7 @@ export default function PlayPage() {
   const [leaderboardError, setLeaderboardError] = useState("");
   const [leaderboardTotalCount, setLeaderboardTotalCount] = useState(0);
   const [leaderboardHasNext, setLeaderboardHasNext] = useState(false);
-  const menuMusicRef = useRef<HTMLAudioElement | null>(null);
+  const runPanelTimerRef = useRef<number | null>(null);
   const pendingRankReplayBusyRef = useRef(false);
   const profileMetaHydratedRef = useRef(false);
   const [boundUsername, setBoundUsername] = useState("");
@@ -1647,53 +1664,48 @@ export default function PlayPage() {
   }, [menuMusicMuted]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const audio = new Audio("/sounds/music2.mp3");
-    audio.loop = true;
-    audio.preload = "auto";
-    menuMusicRef.current = audio;
-    return () => {
-      audio.pause();
-      audio.src = "";
-      menuMusicRef.current = null;
-    };
+    setGlobalMusicVolume(effectiveMenuMusicVol);
+  }, [effectiveMenuMusicVol, setGlobalMusicVolume]);
+
+  useEffect(() => {
+    setGlobalMusicMuted(menuMusicMuted);
+  }, [menuMusicMuted, setGlobalMusicMuted]);
+
+  const clearQueuedRunPanels = useCallback(() => {
+    if (runPanelTimerRef.current !== null) {
+      window.clearTimeout(runPanelTimerRef.current);
+      runPanelTimerRef.current = null;
+    }
   }, []);
 
-  useEffect(() => {
-    const audio = menuMusicRef.current;
-    if (!audio) return;
-    audio.volume = effectiveMenuMusicVol;
-    audio.muted = menuMusicMuted || audio.volume <= 0.001;
-  }, [effectiveMenuMusicVol, menuMusicMuted]);
+  const showRunCompletionPanels = useCallback((panels: RunCompletionPanels) => {
+    if (panels.masteryPanel) {
+      setMasteryPanel(panels.masteryPanel);
+    }
+    if (panels.levelUpPanel) {
+      setLevelUpPanel(panels.levelUpPanel);
+    }
+  }, []);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const audio = menuMusicRef.current;
-    if (!audio) return;
+  const queueRunCompletionPanels = useCallback((panels: RunCompletionPanels, delayMs: number) => {
+    clearQueuedRunPanels();
+    if (!panels.masteryPanel && !panels.levelUpPanel) return;
 
-    const shouldPlayMenuMusic = Boolean(session) && !["free_session", "rank_session", "calibration_session"].includes(view);
-    if (!shouldPlayMenuMusic) {
-      audio.pause();
+    const safeDelayMs = Math.max(0, Math.floor(delayMs));
+    if (safeDelayMs <= 0) {
+      showRunCompletionPanels(panels);
       return;
     }
 
-    const tryStart = () => {
-      void audio.play().catch(() => { });
-    };
-    tryStart();
+    runPanelTimerRef.current = window.setTimeout(() => {
+      runPanelTimerRef.current = null;
+      showRunCompletionPanels(panels);
+    }, safeDelayMs);
+  }, [clearQueuedRunPanels, showRunCompletionPanels]);
 
-    const onGesture = () => {
-      tryStart();
-      window.removeEventListener("pointerdown", onGesture);
-      window.removeEventListener("keydown", onGesture);
-    };
-    window.addEventListener("pointerdown", onGesture);
-    window.addEventListener("keydown", onGesture);
-    return () => {
-      window.removeEventListener("pointerdown", onGesture);
-      window.removeEventListener("keydown", onGesture);
-    };
-  }, [session, view]);
+  useEffect(() => (() => {
+    clearQueuedRunPanels();
+  }), [clearQueuedRunPanels]);
 
   const openErrorModal = useCallback((title: string, message: string) => {
     setErrorModal({
@@ -1754,6 +1766,43 @@ export default function PlayPage() {
       rpc: rpcName,
     };
   }, [session, t, triggerConnectionLost]);
+
+  const callRpcWithLegacyFallback = useCallback(async (
+    authRpcName: string,
+    legacyRpcName: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ response: Record<string, unknown>; usedLegacy: boolean }> => {
+    const authRes = await callRpc(authRpcName, payload);
+    if (Boolean(authRes.ok)) {
+      return { response: authRes, usedLegacy: false };
+    }
+
+    const reason = String(authRes.reason || "");
+    const detail = String(authRes.detail || "");
+    const shouldFallback = Boolean(legacyRpcName)
+      && legacyRpcName !== authRpcName
+      && shouldFallbackToLegacyBoundRpc(reason, detail);
+    if (!shouldFallback) {
+      return { response: authRes, usedLegacy: false };
+    }
+
+    const legacyRes = await callRpc(legacyRpcName, payload);
+    if (Boolean(legacyRes.ok)) {
+      return { response: legacyRes, usedLegacy: true };
+    }
+
+    const legacyDetail = String(legacyRes.detail || "").trim();
+    if (!legacyDetail && (reason || detail)) {
+      return {
+        response: {
+          ...legacyRes,
+          detail: `auth=${reason || "unknown"}${detail ? ` (${detail})` : ""}`,
+        },
+        usedLegacy: true,
+      };
+    }
+    return { response: legacyRes, usedLegacy: true };
+  }, [callRpc]);
 
   const fetchProfileMetaDirect = useCallback(async (targetIdentity: AuthIdentity): Promise<DirectProfileMetaResult> => {
     const res = await callRpc("get_profile_meta_self_auth", {});
@@ -2516,6 +2565,7 @@ export default function PlayPage() {
         setIdentityLinked(false);
         setStateError("");
         setQuestNotice("");
+        clearQueuedRunPanels();
         setLevelUpPanel(null);
         setMasteryPanel(null);
       } else {
@@ -2535,6 +2585,7 @@ export default function PlayPage() {
           tutorialVersion: "1.0",
         });
         setCalibrationProfile(createDefaultCalibrationProfile());
+        clearQueuedRunPanels();
         setLevelUpPanel(null);
         setMasteryPanel(null);
         setQuestNotice("");
@@ -2545,7 +2596,7 @@ export default function PlayPage() {
       alive = false;
       authListener.subscription.unsubscribe();
     };
-  }, []);
+  }, [clearQueuedRunPanels]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -2860,14 +2911,14 @@ export default function PlayPage() {
       [canonicalJutsu]: { bestTime: clearTime },
     };
     const newTier = getMasteryTier(canonicalJutsu, clearTime);
-    setMastery(nextMastery);
-    setMasteryPanel({
+    const panelPayload: MasteryPanelState = {
       jutsuName: canonicalJutsu,
       previousBest,
       newBest: clearTime,
       previousTier,
       newTier,
-    });
+    };
+    setMastery(nextMastery);
 
     if (identity) {
       const res = await persistProfileMeta(nextMastery);
@@ -2876,21 +2927,42 @@ export default function PlayPage() {
       }
     }
 
-    return { previousBest, newBest: clearTime, previousTier, newTier };
+    return { previousBest, newBest: clearTime, previousTier, newTier, panel: panelPayload };
   }, [identity, mastery, persistProfileMeta]);
 
   const recordTrainingRun = useCallback(async (
     mode: "free" | "rank",
     options?: { signsLanded?: number; jutsuName?: string; xpOverride?: number },
-  ): Promise<{ ok: boolean; xpAwarded: number; previousLevel: number; newLevel: number; reason?: string }> => {
+  ): Promise<{
+    ok: boolean;
+    xpAwarded: number;
+    previousLevel: number;
+    newLevel: number;
+    reason?: string;
+    levelUpPanel: LevelUpPanelState | null;
+  }> => {
     if (actionBusy) {
-      return { ok: false, xpAwarded: 0, previousLevel: progression.level, newLevel: progression.level, reason: "action_busy" };
+      return {
+        ok: false,
+        xpAwarded: 0,
+        previousLevel: progression.level,
+        newLevel: progression.level,
+        reason: "action_busy",
+        levelUpPanel: null,
+      };
     }
     if (!identity) {
       const message = t("run.identityUnavailable", "Discord identity is unavailable. Re-login and retry.");
       setStateError(message);
       openErrorModal(t("run.runErrorTitle", "Run Error"), message);
-      return { ok: false, xpAwarded: 0, previousLevel: progression.level, newLevel: progression.level, reason: "missing_identity" };
+      return {
+        ok: false,
+        xpAwarded: 0,
+        previousLevel: progression.level,
+        newLevel: progression.level,
+        reason: "missing_identity",
+        levelUpPanel: null,
+      };
     }
 
     const runJutsuName = String(options?.jutsuName || selectedJutsu || mode);
@@ -2904,20 +2976,31 @@ export default function PlayPage() {
     setActionBusy(true);
     setStateError("");
     try {
-      const res = await callRpc("award_jutsu_completion_authoritative_bound_auth", {
+      const { response: res } = await callRpcWithLegacyFallback(
+        "award_jutsu_completion_authoritative_bound_auth",
+        "award_jutsu_completion_authoritative_bound",
+        {
         p_username: identity.username,
         p_discord_id: identity.discordId,
         p_xp_gain: xpGain,
         p_signs_landed: signsLanded,
         p_is_challenge: mode === "rank",
         p_mode: runJutsuName.toUpperCase(),
-      });
+      },
+      );
 
       if (!Boolean(res.ok)) {
         const message = toRpcError(t("run.runAwardRejected", "Run award rejected"), res);
         setStateError(message);
         openErrorModal(t("run.runErrorTitle", "Run Error"), message);
-        return { ok: false, xpAwarded: 0, previousLevel, newLevel: previousLevel, reason: String(res.reason || "award_rejected") };
+        return {
+          ok: false,
+          xpAwarded: 0,
+          previousLevel,
+          newLevel: previousLevel,
+          reason: String(res.reason || "award_rejected"),
+          levelUpPanel: null,
+        };
       }
 
       applyCompetitivePayload(res);
@@ -2926,15 +3009,15 @@ export default function PlayPage() {
       const nextProgression = sanitizeProgression(profilePayload);
       const unlocks = getUnlockedJutsusBetweenLevels(previousLevel, nextProgression.level);
 
-      if (nextProgression.level > previousLevel) {
-        setLevelUpPanel({
+      const levelUpPanelPayload: LevelUpPanelState | null = nextProgression.level > previousLevel
+        ? {
           previousLevel,
           newLevel: nextProgression.level,
           rank: nextProgression.rank,
           sourceLabel: t("levelUp.sourceJutsuClear", "Jutsu Clear"),
           unlocked: unlocks,
-        });
-      }
+        }
+        : null;
 
       if (unlocks.length > 0 && nextProgression.level <= previousLevel) {
         setQuestNotice(`${t("run.unlockedPrefix", "Unlocked")}: ${unlocks.join(", ")}`);
@@ -2945,19 +3028,27 @@ export default function PlayPage() {
         xpAwarded: gained,
         previousLevel,
         newLevel: nextProgression.level,
+        levelUpPanel: levelUpPanelPayload,
       };
     } catch (err) {
       const message = String((err as Error)?.message || err || "unknown_error");
       setStateError(`${t("run.runAwardRejected", "Run award rejected")}: ${message}`);
       openErrorModal(t("run.runErrorTitle", "Run Error"), `${t("run.runAwardRejected", "Run award rejected")}: ${message}`);
-      return { ok: false, xpAwarded: 0, previousLevel, newLevel: previousLevel, reason: message };
+      return {
+        ok: false,
+        xpAwarded: 0,
+        previousLevel,
+        newLevel: previousLevel,
+        reason: message,
+        levelUpPanel: null,
+      };
     } finally {
       setActionBusy(false);
     }
   }, [
     actionBusy,
     applyCompetitivePayload,
-    callRpc,
+    callRpcWithLegacyFallback,
     identity,
     progression.level,
     selectedJutsu,
@@ -2972,24 +3063,29 @@ export default function PlayPage() {
     clientStartedAtIso: string;
   }) => {
     if (!identity) return { reason: "missing_identity" };
-    const res = await callRpc("issue_run_token_bound_auth", {
-      p_username: identity.username,
-      p_discord_id: identity.discordId,
-      p_mode: payload.jutsuName.toUpperCase(),
-      p_client_started_at: payload.clientStartedAtIso,
-    });
+    const { response: res, usedLegacy } = await callRpcWithLegacyFallback(
+      "issue_run_token_bound_auth",
+      "issue_run_token_bound",
+      {
+        p_username: identity.username,
+        p_discord_id: identity.discordId,
+        p_mode: payload.jutsuName.toUpperCase(),
+        p_client_started_at: payload.clientStartedAtIso,
+      },
+    );
     if (Boolean(res.ok) && String(res.token || "").trim()) {
       return {
         token: String(res.token),
-        source: String(res.source || "rpc"),
+        source: usedLegacy ? `legacy:${String(res.source || "rpc")}` : String(res.source || "rpc"),
       };
     }
     return {
       token: "",
       source: "none",
       reason: String(res.reason || "token_issue_failed"),
+      detail: String(res.detail || ""),
     };
-  }, [callRpc, identity]);
+  }, [callRpcWithLegacyFallback, identity]);
 
   const attemptRankRunSecureSubmit = useCallback(async (result: PlayArenaResult): Promise<RankSecureSubmitAttemptResult> => {
     if (result.mode !== "rank") {
@@ -3059,7 +3155,7 @@ export default function PlayPage() {
       }
     }
 
-    const submitRes = await callRpc("submit_challenge_run_secure_bound_auth", {
+    const submitPayload = {
       p_username: identity.username,
       p_discord_id: identity.discordId,
       p_mode: modeLabel,
@@ -3090,7 +3186,12 @@ export default function PlayPage() {
         proof_validation: "client_sanity_v1",
       },
       p_avatar_url: avatarUrl,
-    });
+    };
+    const { response: submitRes } = await callRpcWithLegacyFallback(
+      "submit_challenge_run_secure_bound_auth",
+      "submit_challenge_run_secure_bound",
+      submitPayload,
+    );
 
     if (!Boolean(submitRes.ok)) {
       const reason = String(submitRes.reason || "submit_failed");
@@ -3146,7 +3247,7 @@ export default function PlayPage() {
       detailText: "",
       rankText,
     };
-  }, [avatarUrl, callRpc, identity, requestRankRunToken, selectedJutsu]);
+  }, [avatarUrl, callRpcWithLegacyFallback, identity, requestRankRunToken, selectedJutsu]);
 
   const submitRankRunSecure = useCallback(async (result: PlayArenaResult): Promise<PlayArenaCompleteFeedback> => {
     const attempt = await attemptRankRunSecureSubmit(result);
@@ -3246,6 +3347,23 @@ export default function PlayPage() {
       xpOverride: getRunXpGain(result.jutsuName),
     });
 
+    const fallbackEffectDurationMs = Math.max(
+      650,
+      Math.round((Number(OFFICIAL_JUTSUS[result.jutsuName]?.duration) || 2.2) * 1000),
+    );
+    const effectDurationMs = Math.max(
+      0,
+      Math.floor(Number(result.effectDurationMs) || fallbackEffectDurationMs),
+    );
+
+    queueRunCompletionPanels(
+      {
+        masteryPanel: masteryResult?.panel ?? null,
+        levelUpPanel: runRes.levelUpPanel,
+      },
+      effectDurationMs + 120,
+    );
+
     const detailParts: string[] = [];
     if (secureRes.detailText) {
       detailParts.push(secureRes.detailText);
@@ -3257,17 +3375,23 @@ export default function PlayPage() {
           : `Mastery improved ${masteryResult.previousBest.toFixed(2)}s → ${masteryResult.newBest.toFixed(2)}s`,
       );
     }
+    const isRankRun = result.mode === "rank";
+    if (isRankRun && !runRes.ok && runRes.reason) {
+      detailParts.push(`XP sync skipped: ${runRes.reason}`);
+    }
 
     return {
-      ok: runRes.ok,
-      statusText: runRes.ok
-        ? (secureRes.statusText || `+${runRes.xpAwarded} XP applied`)
-        : "Run processing failed",
+      ok: isRankRun ? true : runRes.ok,
+      statusText: isRankRun
+        ? (secureRes.statusText || "Rank run complete")
+        : runRes.ok
+          ? (secureRes.statusText || `+${runRes.xpAwarded} XP applied`)
+          : "Run processing failed",
       detailText: detailParts.join(" • "),
       rankText: secureRes.rankText,
       xpAwarded: runRes.ok ? runRes.xpAwarded : 0,
     };
-  }, [recordMasteryCompletion, recordTrainingRun, submitRankRunSecure]);
+  }, [queueRunCompletionPanels, recordMasteryCompletion, recordTrainingRun, submitRankRunSecure]);
 
   const handleCalibrationComplete = useCallback(async (profile: CalibrationProfile): Promise<boolean> => {
     setCalibrationProfile(profile);
@@ -3295,7 +3419,7 @@ export default function PlayPage() {
       return false;
     }
     return true;
-  }, [callRpc, identity, openAlertModal, openErrorModal, t]);
+  }, [callRpc, identity, openErrorModal, t]);
 
   const markTutorialSeen = useCallback(async () => {
     const seenAt = tutorialMeta.tutorialSeenAt || new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
