@@ -72,6 +72,7 @@ const DETECT_INTERVAL_MS = 70;
 const AUTO_CAPTURE_DEFAULT_MS = 220;
 const AUTO_CAPTURE_MIN_MS = 120;
 const AUTO_CAPTURE_MAX_MS = 1000;
+const AUTO_START_COUNTDOWN_SECONDS = 3;
 const DEDUPE_DISTANCE_THRESHOLD = 0.035;
 
 function getHandednessLabel(result: HandsResultShape, handIndex: number): string {
@@ -211,6 +212,7 @@ export default function CollectPage() {
   const latestFeaturesRef = useRef<number[]>([]);
   const latestHandsRef = useRef(0);
   const lastAutoCaptureAtRef = useRef(0);
+  const autoStartTimerRef = useRef<number | null>(null);
   const lastCapturedFeaturesRef = useRef<number[]>([]);
   const fpsWindowStartRef = useRef(0);
   const fpsFramesRef = useRef(0);
@@ -219,6 +221,7 @@ export default function CollectPage() {
   const [ready, setReady] = useState(false);
   const [selectedLabel, setSelectedLabel] = useState<string>("Ram");
   const [autoCapture, setAutoCapture] = useState(false);
+  const [autoStartCountdown, setAutoStartCountdown] = useState<number | null>(null);
   const [autoIntervalMs, setAutoIntervalMs] = useState(AUTO_CAPTURE_DEFAULT_MS);
   const [minHands, setMinHands] = useState<1 | 2>(1);
   const [detectedHands, setDetectedHands] = useState(0);
@@ -274,6 +277,42 @@ export default function CollectPage() {
   const handleManualCapture = useCallback(() => {
     void appendSample(latestFeaturesRef.current, latestHandsRef.current, "manual");
   }, [appendSample]);
+
+  const clearAutoStartCountdown = useCallback(() => {
+    if (autoStartTimerRef.current !== null) {
+      window.clearInterval(autoStartTimerRef.current);
+      autoStartTimerRef.current = null;
+    }
+    setAutoStartCountdown(null);
+  }, []);
+
+  const handleAutoCaptureToggle = useCallback(() => {
+    if (autoCapture) {
+      setAutoCapture(false);
+      return;
+    }
+    if (autoStartCountdown !== null) {
+      clearAutoStartCountdown();
+      return;
+    }
+
+    let next = AUTO_START_COUNTDOWN_SECONDS;
+    setAutoStartCountdown(next);
+    autoStartTimerRef.current = window.setInterval(() => {
+      next -= 1;
+      if (next <= 0) {
+        if (autoStartTimerRef.current !== null) {
+          window.clearInterval(autoStartTimerRef.current);
+          autoStartTimerRef.current = null;
+        }
+        setAutoStartCountdown(null);
+        lastAutoCaptureAtRef.current = 0;
+        setAutoCapture(true);
+        return;
+      }
+      setAutoStartCountdown(next);
+    }, 1000);
+  }, [autoCapture, autoStartCountdown, clearAutoStartCountdown]);
 
   const handleExportCsv = useCallback(() => {
     if (samples.length === 0) return;
@@ -378,6 +417,15 @@ export default function CollectPage() {
       }
       if (handsRef.current && typeof handsRef.current.close === "function") {
         handsRef.current.close();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (autoStartTimerRef.current !== null) {
+        window.clearInterval(autoStartTimerRef.current);
+        autoStartTimerRef.current = null;
       }
     };
   }, []);
@@ -548,17 +596,25 @@ export default function CollectPage() {
             </button>
             <button
               type="button"
-              onClick={() => setAutoCapture((prev) => !prev)}
+              onClick={handleAutoCaptureToggle}
               className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg border text-sm font-bold ${
                 autoCapture
                   ? "border-amber-400/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+                  : autoStartCountdown !== null
+                    ? "border-yellow-400/40 bg-yellow-500/10 text-yellow-100 hover:bg-yellow-500/20"
                   : "border-sky-400/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20"
               }`}
             >
               {autoCapture ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              {autoCapture ? "Stop Auto" : "Start Auto"}
+              {autoCapture ? "Stop Auto" : autoStartCountdown !== null ? `Cancel (${autoStartCountdown})` : "Start Auto"}
             </button>
           </div>
+
+          {autoStartCountdown !== null ? (
+            <p className="text-[11px] text-yellow-200/90">
+              Auto capture starts in {autoStartCountdown}...
+            </p>
+          ) : null}
 
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -611,4 +667,3 @@ export default function CollectPage() {
     </div>
   );
 }
-
