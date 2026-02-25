@@ -166,6 +166,8 @@ const EFFECT_DEFAULT_DURATION_MS = 2200;
 const CAMERA_STALL_TIMEOUT_MS = 1400;
 const HAND_FEATURE_LENGTH = 63;
 const GAME_MIN_CONFIDENCE = 0.2;
+const LOW_FPS_ASSIST_THRESHOLD = 12;
+const LOW_FPS_VOTE_TTL_MS = 1400;
 
 const CALIBRATION_DURATION_S = 12;
 const CALIBRATION_MIN_SAMPLES = 100;
@@ -331,6 +333,19 @@ function appendDatasetVersion(url: string, versionToken: string): string {
   const base = String(url || "").trim() || "/mediapipe_signs_db.csv";
   const sep = base.includes("?") ? "&" : "?";
   return `${base}${sep}v=${encodeURIComponent(versionToken)}`;
+}
+
+function isLikelyLowPowerMobileDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  const maxTouchPoints = Number((navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints || 0);
+  const isIOS = /iPhone|iPod|iPad/i.test(ua) || (platform === "MacIntel" && maxTouchPoints > 1);
+  if (!isIOS) return false;
+  if (typeof window === "undefined") return true;
+  const smallestEdge = Math.min(window.screen?.width || 0, window.screen?.height || 0);
+  // iPhone-class screen sizes only; keep iPad on standard pipeline.
+  return smallestEdge > 0 && smallestEdge <= 430;
 }
 
 function normalizeLabel(label: string): string {
@@ -716,15 +731,23 @@ function SignTile({
   );
 }
 
-async function getStreamWithPreferences(cameraIdx: number, resolutionIdx: number): Promise<MediaStream> {
-  const res = RESOLUTION_OPTIONS[Math.max(0, Math.min(RESOLUTION_OPTIONS.length - 1, Math.floor(resolutionIdx)))]
+async function getStreamWithPreferences(cameraIdx: number, resolutionIdx: number, preferLowResolution = false): Promise<MediaStream> {
+  const requestedRes = RESOLUTION_OPTIONS[Math.max(0, Math.min(RESOLUTION_OPTIONS.length - 1, Math.floor(resolutionIdx)))]
     || RESOLUTION_OPTIONS[0];
+  const res = preferLowResolution ? RESOLUTION_OPTIONS[0] : requestedRes;
 
-  const baseVideo: MediaTrackConstraints = {
-    width: { ideal: res.width },
-    height: { ideal: res.height },
-    facingMode: "user",
-  };
+  const baseVideo: MediaTrackConstraints = preferLowResolution
+    ? {
+      width: { ideal: 640, max: 960 },
+      height: { ideal: 480, max: 720 },
+      frameRate: { ideal: 24, max: 30 },
+      facingMode: "user",
+    }
+    : {
+      width: { ideal: res.width },
+      height: { ideal: res.height },
+      facingMode: "user",
+    };
 
   const safeIdx = Math.max(0, Math.floor(cameraIdx));
 
@@ -786,6 +809,7 @@ export default function PlayArena({
     () => String(datasetUrl || "").trim() || "/mediapipe_signs_db.csv",
     [datasetUrl],
   );
+  const isLikelyLowPowerMobile = useMemo(() => isLikelyLowPowerMobileDevice(), []);
 
   const activeCalibrationProfile = useMemo(
     () => sanitizeCalibrationProfile(calibrationProfile),
@@ -844,6 +868,7 @@ export default function PlayArena({
   const phoenixLastAtRef = useRef(0);
   const cameraFpsWindowStartRef = useRef(0);
   const cameraFpsFrameCountRef = useRef(0);
+  const fpsRef = useRef(0);
   const xpPopupTimerRef = useRef<number | null>(null);
   const runFinishedRef = useRef(false);
   const cameraFailureRef = useRef<CameraRuntimeFailure>("none");
@@ -1717,12 +1742,19 @@ export default function PlayArena({
         let handLandmarker: HandLandmarkerLike | null = null;
         let backend: "tasks_video" | "tasks_image" | "none" = "none";
         const handModelPath = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-        const candidates: Array<{ runningMode: "VIDEO" | "IMAGE"; delegate: "GPU" | "CPU"; backend: "tasks_video" | "tasks_image" }> = [
-          { runningMode: "VIDEO", delegate: "GPU", backend: "tasks_video" },
-          { runningMode: "VIDEO", delegate: "CPU", backend: "tasks_video" },
-          { runningMode: "IMAGE", delegate: "GPU", backend: "tasks_image" },
-          { runningMode: "IMAGE", delegate: "CPU", backend: "tasks_image" },
-        ];
+        const candidates: Array<{ runningMode: "VIDEO" | "IMAGE"; delegate: "GPU" | "CPU"; backend: "tasks_video" | "tasks_image" }> = isLikelyLowPowerMobile
+          ? [
+            { runningMode: "VIDEO", delegate: "CPU", backend: "tasks_video" },
+            { runningMode: "VIDEO", delegate: "GPU", backend: "tasks_video" },
+            { runningMode: "IMAGE", delegate: "CPU", backend: "tasks_image" },
+            { runningMode: "IMAGE", delegate: "GPU", backend: "tasks_image" },
+          ]
+          : [
+            { runningMode: "VIDEO", delegate: "GPU", backend: "tasks_video" },
+            { runningMode: "VIDEO", delegate: "CPU", backend: "tasks_video" },
+            { runningMode: "IMAGE", delegate: "GPU", backend: "tasks_image" },
+            { runningMode: "IMAGE", delegate: "CPU", backend: "tasks_image" },
+          ];
         for (const candidate of candidates) {
           try {
             handLandmarker = await withSuppressedMediapipeConsoleAsync(() => HandLandmarker.createFromOptions(filesetResolver, {
@@ -1752,7 +1784,7 @@ export default function PlayArena({
         setDetectorError(handErrors.length > 0 ? handErrors.slice(0, 2).join(" | ") : "");
         if (cancelled) return;
 
-        if (FaceLandmarker?.createFromOptions) {
+        if (!isLikelyLowPowerMobile && FaceLandmarker?.createFromOptions) {
           const faceModelPath = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
           const faceCandidates: Array<"GPU" | "CPU"> = ["GPU", "CPU"];
           for (const delegate of faceCandidates) {
@@ -1777,7 +1809,7 @@ export default function PlayArena({
         }
 
         setLoadingMessage("Starting camera...");
-        const stream = await getStreamWithPreferences(cameraIdx, resolutionIdx);
+        const stream = await getStreamWithPreferences(cameraIdx, resolutionIdx, isLikelyLowPowerMobile);
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
           return;
@@ -1792,6 +1824,7 @@ export default function PlayArena({
         lastVideoMediaTimeRef.current = -1;
         cameraFpsWindowStartRef.current = 0;
         cameraFpsFrameCountRef.current = 0;
+        fpsRef.current = 0;
         setFps(0);
         clearCameraFailure();
 
@@ -1897,13 +1930,14 @@ export default function PlayArena({
       setCameraFailure("none");
       cameraFpsWindowStartRef.current = 0;
       cameraFpsFrameCountRef.current = 0;
+      fpsRef.current = 0;
       setFps(0);
       voteWindowRef.current = [];
       latestLandmarksRef.current = [];
       sampleCtxRef.current = null;
       sampleCanvasRef.current = null;
     };
-  }, [cameraIdx, clearCameraFailure, markCameraFailure, resolutionIdx]);
+  }, [cameraIdx, clearCameraFailure, isLikelyLowPowerMobile, markCameraFailure, resolutionIdx]);
 
   useEffect(() => {
     if (phaseRef.current === "loading" || phaseRef.current === "error") return;
@@ -1980,6 +2014,7 @@ export default function PlayArena({
       const track = stream?.getVideoTracks?.()[0] ?? null;
       if (!stream || !track || track.readyState === "ended") {
         markCameraFailure("disconnected", "camera_track_unavailable");
+        fpsRef.current = 0;
         setFps(0);
         return;
       }
@@ -1990,6 +2025,7 @@ export default function PlayArena({
         }
         if ((nowMs - videoStallSinceRef.current) >= CAMERA_STALL_TIMEOUT_MS) {
           markCameraFailure("blocked", "video_not_ready");
+          fpsRef.current = 0;
           setFps(0);
         }
         return;
@@ -2007,7 +2043,8 @@ export default function PlayArena({
         const fpsWindowMs = nowMs - cameraFpsWindowStartRef.current;
         if (fpsWindowMs >= 1000) {
           const measured = Math.round((cameraFpsFrameCountRef.current * 1000) / fpsWindowMs);
-          setFps(Math.max(0, measured));
+          fpsRef.current = Math.max(0, measured);
+          setFps(fpsRef.current);
           cameraFpsFrameCountRef.current = 0;
           cameraFpsWindowStartRef.current = nowMs;
         }
@@ -2017,6 +2054,7 @@ export default function PlayArena({
         }
         if ((nowMs - videoStallSinceRef.current) >= CAMERA_STALL_TIMEOUT_MS) {
           markCameraFailure(track.muted ? "blocked" : "disconnected", "video_frame_stalled");
+          fpsRef.current = 0;
           setFps(0);
         }
       }
@@ -2116,7 +2154,8 @@ export default function PlayArena({
       latestLandmarksRef.current = result.landmarks ?? [];
       const face = faceRef.current;
       let faceMotion: FaceMotionState = { anchor: null, yaw: 0, pitch: 0 };
-      if (face) {
+      const shouldUseFaceTracking = phaseNow === "casting";
+      if (shouldUseFaceTracking && face) {
         try {
           let faceResult: FaceResultShape = { faceLandmarks: [] };
           if (typeof face.detectForVideo === "function") {
@@ -2151,8 +2190,9 @@ export default function PlayArena({
       const stepIdxForAssist = currentStepRef.current;
       const expectedStepSign = stepIdxForAssist < sequence.length ? sequence[stepIdxForAssist] : "";
       const assistModeEnabled = !restrictedSigns;
+      const lowFpsAssistActive = isLikelyLowPowerMobile && fpsRef.current > 0 && fpsRef.current < LOW_FPS_ASSIST_THRESHOLD;
       const assistUnlockedForStep = assistModeEnabled && oneHandAssistUnlockedStepRef.current === stepIdxForAssist;
-      const requiresTwoHandsNow = restrictedSigns || !assistUnlockedForStep;
+      const requiresTwoHandsNow = restrictedSigns || (!assistUnlockedForStep && !(lowFpsAssistActive && !isRankMode));
       const effectiveVoteMinConfidence = GAME_MIN_CONFIDENCE;
 
       if (phaseNow !== "active") {
@@ -2242,6 +2282,7 @@ export default function PlayArena({
 
         const lightingPass = !isRankMode || lightingStatusRef.current === "good";
         const allowDetection = lightingPass && (!requiresTwoHandsNow || numHands >= 2);
+        const voteTtlMs = lowFpsAssistActive ? LOW_FPS_VOTE_TTL_MS : VOTE_TTL_MS;
         const vote = applyTemporalVote(
           voteWindowRef.current,
           rawLabel,
@@ -2249,7 +2290,7 @@ export default function PlayArena({
           nowMs,
           allowDetection,
           VOTE_WINDOW_SIZE,
-          VOTE_TTL_MS,
+          voteTtlMs,
           activeCalibrationProfile.voteRequiredHits,
           effectiveVoteMinConfidence,
         );
@@ -2393,6 +2434,7 @@ export default function PlayArena({
     queueEffect,
     restrictedSigns,
     sequence,
+    isLikelyLowPowerMobile,
     triggerJutsuSignature,
     triggerJutsuEffect,
   ]);
@@ -2656,6 +2698,7 @@ export default function PlayArena({
   const detectorErrorShort = detectorError
     ? `${detectorError.slice(0, 120)}${detectorError.length > 120 ? "..." : ""}`
     : "none";
+  const lowFpsAssistActive = isLikelyLowPowerMobile && fps > 0 && fps < LOW_FPS_ASSIST_THRESHOLD;
   const effectScale = effectAnchor?.scale ?? 1;
   const effectBaseSize = effectLabel === "lightning"
     ? 620
@@ -2818,6 +2861,8 @@ export default function PlayArena({
                 <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>
                 <div>CAM: {cameraStatusText}</div>
                 <div>HANDS: {detectedHands}</div>
+                <div>DEVICE: {isLikelyLowPowerMobile ? "LOW-POWER MOBILE" : "STANDARD"}</div>
+                <div>LOW FPS ASSIST: {(!isRankMode && lowFpsAssistActive) ? "ON" : "OFF"}</div>
                 <div>STRICT 2H: {restrictedSigns ? "ON" : "OFF"}</div>
                 <div>LIGHT: {lightingStatus.toUpperCase().replace("_", " ")}</div>
                 <div>VOTE {voteHits}/{VOTE_WINDOW_SIZE} • {detectedConfidencePct}%</div>
