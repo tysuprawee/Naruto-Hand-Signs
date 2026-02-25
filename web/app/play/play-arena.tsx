@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   Info,
   Loader2,
-  RotateCcw,
 } from "lucide-react";
 
 import { KNNClassifier, normalizeHand } from "@/utils/knn";
@@ -126,6 +125,7 @@ interface PlayArenaProps {
   jutsuName: string;
   mode: PlayMode;
   restrictedSigns: boolean;
+  easyMode: boolean;
   debugHands: boolean;
   viewportFit?: boolean;
   busy?: boolean;
@@ -164,6 +164,7 @@ const TWO_HANDS_GUIDE_DELAY_MS = 500;
 const EFFECT_DEFAULT_DURATION_MS = 2200;
 const CAMERA_STALL_TIMEOUT_MS = 1400;
 const HAND_FEATURE_LENGTH = 63;
+const GAME_MIN_CONFIDENCE = 0.2;
 
 const CALIBRATION_DURATION_S = 12;
 const CALIBRATION_MIN_SAMPLES = 100;
@@ -748,6 +749,7 @@ export default function PlayArena({
   jutsuName,
   mode,
   restrictedSigns,
+  easyMode,
   debugHands,
   viewportFit = false,
   busy = false,
@@ -1190,28 +1192,6 @@ export default function PlayArena({
     knnRef.current = null;
     setLoadedDatasetLabels([]);
   }, [datasetVersionToken]);
-
-  const handleDebugClearSignCache = useCallback(() => {
-    loadedDatasetRowsByLabelRef.current = new Map();
-    knnRef.current = null;
-    DATASET_LABEL_ROWS_CACHE.clear();
-    DATASET_FULL_ROWS_CACHE.clear();
-    setLoadedDatasetLabels([]);
-    setDatasetChecksumDisplay(datasetChecksumHint ? datasetChecksumHint.slice(0, 8) : "--------");
-    setDetectorError((prev) => {
-      const token = "dataset: cache_cleared";
-      if (prev.includes(token)) return prev;
-      return prev ? `${prev} | ${token}` : token;
-    });
-    void ensureDatasetRowsForSequenceRef.current(sequenceRef.current).catch((err) => {
-      const message = String((err as Error)?.message || err || "dataset_reload_failed");
-      setDetectorError((prev) => {
-        const token = `dataset: ${message}`;
-        if (prev.includes(token)) return prev;
-        return prev ? `${prev} | ${token}` : token;
-      });
-    });
-  }, [datasetChecksumHint]);
 
   const resetRunState = useCallback(() => {
     voteWindowRef.current = [];
@@ -2171,6 +2151,7 @@ export default function PlayArena({
       const assistModeEnabled = !restrictedSigns;
       const assistUnlockedForStep = assistModeEnabled && oneHandAssistUnlockedStepRef.current === stepIdxForAssist;
       const requiresTwoHandsNow = restrictedSigns || !assistUnlockedForStep;
+      const effectiveVoteMinConfidence = GAME_MIN_CONFIDENCE;
 
       if (phaseNow !== "active") {
         return;
@@ -2242,7 +2223,7 @@ export default function PlayArena({
               expectedStepSign,
               rawLabel,
               rawConfidence,
-              activeCalibrationProfile.voteMinConfidence,
+              effectiveVoteMinConfidence,
             )
             : false;
           if (assistModeEnabled && !assistUnlockedForStep && matchedExpectedWithOneHand) {
@@ -2268,7 +2249,7 @@ export default function PlayArena({
           VOTE_WINDOW_SIZE,
           VOTE_TTL_MS,
           activeCalibrationProfile.voteRequiredHits,
-          activeCalibrationProfile.voteMinConfidence,
+          effectiveVoteMinConfidence,
         );
 
         voteWindowRef.current = vote.nextWindow;
@@ -2324,7 +2305,7 @@ export default function PlayArena({
         expected,
         rawLabel,
         rawConfidence,
-        activeCalibrationProfile.voteMinConfidence,
+        effectiveVoteMinConfidence,
       )) return;
 
       playSfx("/sounds/each.mp3", 0.9);
@@ -2400,6 +2381,7 @@ export default function PlayArena({
     appendProofEvent,
     finalizeCalibrationRun,
     finishRun,
+    easyMode,
     isCalibrationMode,
     isRankMode,
     jutsu?.comboParts,
@@ -2650,6 +2632,8 @@ export default function PlayArena({
     : "top-[102px] md:top-[56px]";
   const detectedConfidencePct = Math.round(detectedConfidence * 100);
   const rawDetectedConfidencePct = Math.round(rawDetectedConfidence * 100);
+  const effectiveVoteMinConfidence = GAME_MIN_CONFIDENCE;
+  const voteMinConfidencePct = Math.round(effectiveVoteMinConfidence * 100);
   const diagCalibrationText = isCalibrationMode && phase === "active"
     ? `CALIBRATING ${calibrationProgressPct}%`
     : "PRESS C TO CALIBRATE";
@@ -2699,16 +2683,6 @@ export default function PlayArena({
       >
         DIAG: {showDetectionPanel ? "ON" : "OFF"}
       </button>
-      {debugHands && (
-        <button
-          type="button"
-          onClick={handleDebugClearSignCache}
-          className="inline-flex h-[30px] min-w-[120px] items-center justify-center gap-1.5 rounded-[8px] border border-amber-300/55 bg-amber-500/10 px-3 text-[10px] font-bold text-amber-200 hover:bg-amber-500/20 sm:min-w-[138px] md:w-[156px] md:text-[11px]"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          CLEAR CACHE
-        </button>
-      )}
       {!isCalibrationMode && (
         <div className="inline-flex h-[30px] min-w-[82px] items-center justify-center rounded-[8px] border border-emerald-300/45 bg-black/72 px-3 text-[10px] font-mono text-emerald-300 md:text-[11px]">
           FPS {fps}
@@ -2841,6 +2815,8 @@ export default function PlayArena({
                 <div>STRICT 2H: {restrictedSigns ? "ON" : "OFF"}</div>
                 <div>LIGHT: {lightingStatus.toUpperCase().replace("_", " ")}</div>
                 <div>VOTE {voteHits}/{VOTE_WINDOW_SIZE} • {detectedConfidencePct}%</div>
+                <div>PASS GATE: {activeCalibrationProfile.voteRequiredHits}/{VOTE_WINDOW_SIZE} @ {voteMinConfidencePct}%</div>
+                <div>AUTO IDLE DIST: ON (thr=1.8)</div>
                 <div>{diagCalibrationText}</div>
                 <div>RAW: {rawDetectedLabel} {rawDetectedConfidencePct}%</div>
                 <div>STATE: {phaseLabel}</div>

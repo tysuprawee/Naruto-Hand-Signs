@@ -108,6 +108,7 @@ interface MenuSettingsState {
   sfxVol: number;
   debugHands: boolean;
   restrictedSigns: boolean;
+  easyMode: boolean;
   cameraIdx: number;
   resolutionIdx: number;
   fullscreen: boolean;
@@ -230,7 +231,8 @@ const DEFAULT_SETTINGS: MenuSettingsState = {
   musicVol: 0.5,
   sfxVol: 0.7,
   debugHands: true,
-  restrictedSigns: true,
+  restrictedSigns: false,
+  easyMode: false,
   cameraIdx: 0,
   resolutionIdx: 0,
   fullscreen: false,
@@ -379,7 +381,8 @@ function sanitizeSettings(raw: Partial<MenuSettingsState> | null | undefined): M
     musicVol: clampVolume(raw?.musicVol, DEFAULT_SETTINGS.musicVol),
     sfxVol: clampVolume(raw?.sfxVol, DEFAULT_SETTINGS.sfxVol),
     debugHands: typeof raw?.debugHands === "boolean" ? raw.debugHands : DEFAULT_SETTINGS.debugHands,
-    restrictedSigns: typeof raw?.restrictedSigns === "boolean" ? raw.restrictedSigns : DEFAULT_SETTINGS.restrictedSigns,
+    restrictedSigns: false,
+    easyMode: false,
     cameraIdx: clampInt(raw?.cameraIdx, 0, 16, DEFAULT_SETTINGS.cameraIdx),
     resolutionIdx: clampInt(raw?.resolutionIdx, 0, 2, DEFAULT_SETTINGS.resolutionIdx),
     fullscreen: typeof raw?.fullscreen === "boolean" ? raw.fullscreen : DEFAULT_SETTINGS.fullscreen,
@@ -2291,6 +2294,7 @@ export default function PlayPage() {
         camera_idx: DEFAULT_SETTINGS.cameraIdx,
         debug_hands: DEFAULT_SETTINGS.debugHands,
         restricted_signs: DEFAULT_SETTINGS.restrictedSigns,
+        easy_mode: DEFAULT_SETTINGS.easyMode,
         resolution_idx: DEFAULT_SETTINGS.resolutionIdx,
         fullscreen: DEFAULT_SETTINGS.fullscreen,
       },
@@ -2462,13 +2466,11 @@ export default function PlayPage() {
 
     if (Boolean(settingsRes.ok) && isRecord(settingsRes.settings)) {
       const cloud = settingsRes.settings as Record<string, unknown>;
-      const restrictedRaw = cloud.restricted_signs ?? cloud.restrictedSigns;
       const cloudSettings = sanitizeSettings({
         musicVol: Number(cloud.music_vol ?? cloud.musicVol),
         sfxVol: Number(cloud.sfx_vol ?? cloud.sfxVol),
         cameraIdx: Number(cloud.camera_idx ?? cloud.cameraIdx),
         debugHands: Boolean(cloud.debug_hands ?? cloud.debugHands ?? true),
-        restrictedSigns: typeof restrictedRaw === "boolean" ? restrictedRaw : DEFAULT_SETTINGS.restrictedSigns,
         resolutionIdx: Number(cloud.resolution_idx ?? cloud.resolutionIdx),
         fullscreen: Boolean(cloud.fullscreen),
       });
@@ -2774,7 +2776,8 @@ export default function PlayPage() {
           sfx_vol: next.sfxVol,
           camera_idx: next.cameraIdx,
           debug_hands: next.debugHands,
-          restricted_signs: next.restrictedSigns,
+          restricted_signs: false,
+          easy_mode: false,
           resolution_idx: next.resolutionIdx,
           fullscreen: next.fullscreen,
         },
@@ -3973,7 +3976,8 @@ export default function PlayPage() {
               <PlayArena
                 jutsuName={selectedJutsu}
                 mode="calibration"
-                restrictedSigns={savedSettings.restrictedSigns}
+                restrictedSigns={false}
+                easyMode={false}
                 debugHands={savedSettings.debugHands}
                 sfxVolume={savedSettings.sfxVol}
                 cameraIdx={savedSettings.cameraIdx}
@@ -3992,7 +3996,8 @@ export default function PlayPage() {
                 <PlayArena
                   jutsuName={selectedJutsu}
                   mode="free"
-                  restrictedSigns={savedSettings.restrictedSigns}
+                  restrictedSigns={false}
+                  easyMode={false}
                   debugHands={savedSettings.debugHands}
                   sfxVolume={savedSettings.sfxVol}
                   cameraIdx={savedSettings.cameraIdx}
@@ -4026,7 +4031,8 @@ export default function PlayPage() {
                 <PlayArena
                   jutsuName={selectedJutsu}
                   mode="rank"
-                  restrictedSigns={savedSettings.restrictedSigns}
+                  restrictedSigns={false}
+                  easyMode={false}
                   debugHands={savedSettings.debugHands}
                   sfxVolume={savedSettings.sfxVol}
                   cameraIdx={savedSettings.cameraIdx}
@@ -4786,19 +4792,6 @@ export default function PlayPage() {
                       onChange={(event) => {
                         const checked = event.target.checked;
                         setDraftSettings((prev) => ({ ...prev, debugHands: checked }));
-                      }}
-                      className="h-4 w-4 accent-orange-500"
-                    />
-                  </label>
-
-                  <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
-                    <span>{t("settings.accuracyMode", "Accuracy Mode")}</span>
-                    <input
-                      type="checkbox"
-                      checked={draftSettings.restrictedSigns}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        setDraftSettings((prev) => ({ ...prev, restrictedSigns: checked }));
                       }}
                       className="h-4 w-4 accent-orange-500"
                     />
