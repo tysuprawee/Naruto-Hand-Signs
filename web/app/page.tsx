@@ -11,10 +11,9 @@ import AshParticles from "./components/ash-particles";
 export default function Home() {
   const { openModal, trackClick } = useModal();
   const targetDate = useMemo(() => new Date(2026, 1, 21, 21, 0, 0), []);
-  const [timeLeft, setTimeLeft] = useState<ReturnType<typeof getTimeLeft> | null>(null);
+  const [timeLeft, setTimeLeft] = useState<ReturnType<typeof getTimeLeft>>(() => getTimeLeft(targetDate));
 
   useEffect(() => {
-    setTimeLeft(getTimeLeft(targetDate));
     const timer = window.setInterval(() => {
       setTimeLeft(getTimeLeft(targetDate));
     }, 1000);
@@ -22,9 +21,7 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [targetDate]);
 
-  const countdownLabel = !timeLeft
-    ? "LOADING…"
-    : timeLeft.expired
+  const countdownLabel = timeLeft.expired
       ? "LIVE NOW"
       : `${pad(timeLeft.days)}D ${pad(timeLeft.hours)}H ${pad(timeLeft.minutes)}M ${pad(timeLeft.seconds)}S`;
 
@@ -48,12 +45,12 @@ export default function Home() {
       {/* Header */}
       <header className="fixed top-0 w-full z-50 bg-ninja-bg/80 backdrop-blur-md border-b border-ninja-border">
         <div className="container mx-auto flex h-16 items-center justify-between px-6">
-          <a href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+          <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
             <div className="h-10 w-10 relative">
               <img src="/logo2.png" alt="Shinobi Academy" className="object-contain w-full h-full" />
             </div>
             <span className="font-bold tracking-tight text-lg text-zinc-100 drop-shadow-[0_1px_8px_rgba(0,0,0,0.85)]">Jutsu Academy</span>
-          </a>
+          </Link>
           <nav className="hidden md:flex gap-8 text-sm font-medium text-zinc-200/90">
             <Link href="#showcase" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Features</Link>
             <Link href="#dev" className="hover:text-ninja-accent transition-colors drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">Dev</Link>
@@ -68,6 +65,10 @@ export default function Home() {
             <Link href="/leaderboard" className="flex items-center gap-2 text-ninja-accent font-bold hover:text-ninja-accent-glow transition-colors">
               <Trophy className="w-4 h-4" />
               Leaderboard
+            </Link>
+            <Link href="/collect" className="flex items-center gap-2 text-sky-300 font-bold hover:text-sky-200 transition-colors">
+              <UploadCloud className="w-4 h-4" />
+              Dataset Capture
             </Link>
           </nav>
         </div>
@@ -152,6 +153,14 @@ export default function Home() {
               >
                 <Trophy className="w-5 h-5 text-ninja-dim" />
                 VIEW RANKS
+              </Link>
+
+              <Link
+                href="/collect"
+                className="h-14 px-8 bg-sky-500/12 hover:bg-sky-500/20 border border-sky-300/35 text-sky-100 text-lg font-bold rounded-lg flex items-center gap-3 transition-all"
+              >
+                <UploadCloud className="w-5 h-5 text-sky-200" />
+                DATASET CAPTURE
               </Link>
 
               <div className="flex flex-wrap items-center gap-4">
