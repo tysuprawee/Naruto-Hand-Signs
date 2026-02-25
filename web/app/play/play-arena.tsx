@@ -135,6 +135,7 @@ interface PlayArenaProps {
   datasetVersion?: string;
   datasetChecksum?: string;
   datasetUrl?: string;
+  datasetSyncedAt?: number;
   calibrationProfile?: Partial<CalibrationProfile> | null;
   progressionHud?: {
     xp: number;
@@ -759,6 +760,7 @@ export default function PlayArena({
   datasetVersion = "",
   datasetChecksum = "",
   datasetUrl = "/mediapipe_signs_db.csv",
+  datasetSyncedAt = 0,
   calibrationProfile,
   progressionHud,
   onBack,
@@ -2614,6 +2616,9 @@ export default function PlayArena({
   const hudProgressPct = Math.max(0, Math.min(100, ((hudXpIntoLevel / hudXpRequired) * 100)));
   const showNavArrows = !isCalibrationMode && canSwitchJutsuNow() && Boolean(onPrevJutsu || onNextJutsu);
   const datasetVersionLabel = datasetVersionToken === "local" ? "LOCAL" : datasetVersionToken;
+  const datasetSyncLabel = datasetSyncedAt > 0
+    ? new Date(datasetSyncedAt).toLocaleTimeString([], { hour12: false })
+    : "--:--:--";
 
   const effectLabel = String(activeEffect || jutsu?.effect || "").toLowerCase();
   const effectVideoSrc = effectLabel === "lightning"
@@ -2807,6 +2812,7 @@ export default function PlayArena({
                 <div>MODEL: MEDIAPIPE</div>
                 <div>DB VER: {datasetVersionLabel}</div>
                 <div>DB CRC: {datasetChecksumDisplay.slice(0, 8)}</div>
+                <div>DB SYNC: {datasetSyncLabel}</div>
                 <div>DB LOADED: {loadedDatasetLabels.length}</div>
                 <div>MP BACKEND: {detectorBackend}</div>
                 <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>

@@ -1409,6 +1409,7 @@ export default function PlayPage() {
   const [maintenanceGate, setMaintenanceGate] = useState<RuntimeGateState | null>(null);
   const [updateGate, setUpdateGate] = useState<RuntimeGateState | null>(null);
   const [runtimeDataset, setRuntimeDataset] = useState<RuntimeDatasetState>(DEFAULT_RUNTIME_DATASET);
+  const [runtimeDatasetSyncedAt, setRuntimeDatasetSyncedAt] = useState(0);
   const [connectionLostState, setConnectionLostState] = useState<ConnectionLostState | null>(null);
   const [errorModal, setErrorModal] = useState<ErrorModalState | null>(null);
   const [alertModal, setAlertModal] = useState<AlertModalState | null>(null);
@@ -2187,12 +2188,14 @@ export default function PlayPage() {
           url: String(latestDataset.url || "/mediapipe_signs_db.csv").trim() || "/mediapipe_signs_db.csv",
           checksum: String(latestDataset.checksum || "").trim().toUpperCase(),
         });
+        setRuntimeDatasetSyncedAt(Date.now());
       } else {
         setRuntimeDataset({
           version: DEFAULT_RUNTIME_DATASET.version,
           url: DEFAULT_RUNTIME_DATASET.url,
           checksum: DEFAULT_RUNTIME_DATASET.checksum,
         });
+        setRuntimeDatasetSyncedAt(Date.now());
       }
 
       const flattened: AnnouncementRow[] = [];
@@ -3986,6 +3989,7 @@ export default function PlayPage() {
                 datasetVersion={runtimeDataset.version}
                 datasetChecksum={runtimeDataset.checksum}
                 datasetUrl={runtimeDataset.url}
+                datasetSyncedAt={runtimeDatasetSyncedAt}
                 onCalibrationComplete={handleCalibrationComplete}
                 onBack={() => setView(calibrationReturnView)}
               />
@@ -4006,6 +4010,7 @@ export default function PlayPage() {
                   datasetVersion={runtimeDataset.version}
                   datasetChecksum={runtimeDataset.checksum}
                   datasetUrl={runtimeDataset.url}
+                  datasetSyncedAt={runtimeDatasetSyncedAt}
                   busy={actionBusy}
                   viewportFit
                   onComplete={handleArenaComplete}
@@ -4041,6 +4046,7 @@ export default function PlayPage() {
                   datasetVersion={runtimeDataset.version}
                   datasetChecksum={runtimeDataset.checksum}
                   datasetUrl={runtimeDataset.url}
+                  datasetSyncedAt={runtimeDatasetSyncedAt}
                   busy={actionBusy}
                   viewportFit
                   onComplete={handleArenaComplete}

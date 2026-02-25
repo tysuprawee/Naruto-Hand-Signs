@@ -129,7 +129,10 @@ export function applyTemporalVote(
         }
     }
 
-    if (bestHits >= requiredHits && bestAvgConf >= minConfidence) {
+    // Keep challenge-style behavior: if the full vote window agrees,
+    // accept to avoid stalls on weaker/mobile devices.
+    const hasHardConsensus = bestHits >= voteWindowSize;
+    if ((bestHits >= requiredHits && bestAvgConf >= minConfidence) || hasHardConsensus) {
         return { label: bestLabel, confidence: bestAvgConf, hits: bestHits, nextWindow: next };
     }
 
