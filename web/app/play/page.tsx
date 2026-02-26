@@ -1611,7 +1611,6 @@ function PlayPageInner() {
   const dailyResetAt = startOfTomorrowUtc(now);
   const weeklyResetAt = nextWeeklyResetUtc(now);
   const calibrationReady = hasCalibrationProfile(calibrationProfile);
-  const needsCalibrationGate = Boolean(session && identityLinked && !calibrationReady && !calibrationGateSkipped);
 
   const jutsuTiers = useMemo(() => {
     const entries = Object.entries(OFFICIAL_JUTSUS).sort((a, b) => a[1].minLevel - b[1].minLevel || a[0].localeCompare(b[0]));
@@ -2270,11 +2269,6 @@ function PlayPageInner() {
     playUiClickSfx();
     if (!stateReady || !identityLinked || actionBusy) return;
     setJutsuInfoModal(null);
-    if (needsCalibrationGate) {
-      setCalibrationReturnView("jutsu_library");
-      setView("calibration_gate");
-      return;
-    }
     if (libraryIntent === "rank") {
       setView("rank_session");
       return;
@@ -2284,7 +2278,6 @@ function PlayPageInner() {
     actionBusy,
     identityLinked,
     libraryIntent,
-    needsCalibrationGate,
     playUiClickSfx,
     stateReady,
   ]);
@@ -4212,11 +4205,6 @@ function PlayPageInner() {
                     type="button"
                     onClick={() => {
                       setLibraryIntent("free");
-                      if (needsCalibrationGate) {
-                        setCalibrationReturnView("jutsu_library");
-                        setView("calibration_gate");
-                        return;
-                      }
                       setView("jutsu_library");
                     }}
                     className="flex h-14 w-full items-center justify-center rounded-2xl border border-zinc-400/40 bg-zinc-500/70 text-xl font-black tracking-wide text-zinc-100 transition hover:bg-zinc-400/80"
@@ -4228,11 +4216,6 @@ function PlayPageInner() {
                     type="button"
                     onClick={() => {
                       setLibraryIntent("rank");
-                      if (needsCalibrationGate) {
-                        setCalibrationReturnView("jutsu_library");
-                        setView("calibration_gate");
-                        return;
-                      }
                       setView("jutsu_library");
                     }}
                     className="flex h-14 w-full items-center justify-center rounded-2xl border border-red-300/35 bg-gradient-to-r from-orange-600 to-red-600 text-xl font-black tracking-wide text-white transition hover:from-orange-500 hover:to-red-500"
@@ -4291,9 +4274,9 @@ function PlayPageInner() {
                   <ArrowLeft className="h-4 w-4" />
                   {t("common.back", "BACK")}
                 </button>
-                <h2 className="text-3xl font-black tracking-tight text-white">{t("calibration.requiredTitle", "CALIBRATION REQUIRED")}</h2>
+                <h2 className="text-3xl font-black tracking-tight text-white">{t("calibration.optionalTitle", "CALIBRATION (OPTIONAL)")}</h2>
                 <p className="mt-2 text-sm leading-relaxed text-ninja-dim">
-                  {t("calibration.requiredSubtitle", "Complete one calibration to unlock Free Play and Rank Mode.")}
+                  {t("calibration.optionalSubtitle", "Calibration is optional. Run it any time to improve detection quality on your device.")}
                 </p>
 
                 <div className="mt-5 grid gap-4 lg:grid-cols-[540px,1fr]">
