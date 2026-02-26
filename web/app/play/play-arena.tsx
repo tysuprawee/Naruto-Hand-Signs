@@ -54,6 +54,14 @@ interface HandLandmarkerLike {
 
 interface FaceResultShape {
   faceLandmarks?: Landmark[][];
+  faceBlendshapes?: Array<{
+    categories?: Array<{
+      categoryName?: string;
+      displayName?: string;
+      category_name?: string;
+      score?: number;
+    }>;
+  }>;
 }
 
 interface FaceLandmarkerLike {
@@ -93,6 +101,14 @@ interface FaceMotionState {
   anchor: { x: number; y: number } | null;
   yaw: number;
   pitch: number;
+}
+
+interface SharinganVisualPose {
+  angleDeg: number;
+  leftEye: { x: number; y: number; sizePct: number };
+  rightEye: { x: number; y: number; sizePct: number };
+  leftBlood: { x: number; y: number; widthPct: number; heightPct: number };
+  rightBlood: { x: number; y: number; widthPct: number; heightPct: number };
 }
 
 export interface PlayArenaProofEvent {
@@ -184,6 +200,12 @@ const LOW_FPS_ASSIST_THRESHOLD = 12;
 const LOW_FPS_VOTE_TTL_MS = 1400;
 const CLONE_SEGMENTATION_INTERVAL_MS = 33;
 const CLONE_SPAWN_DELAY_MS = 1500;
+const SHARINGAN_BLINK_THRESHOLD = 0.4;
+const SHARINGAN_BLINK_HOLD_MS = 1500;
+const SHARINGAN_BLOOD_BASE_NAME = "/eyeblood/f4aa41aa-86ca-4142-a969-2024f75bdf7b-";
+const SHARINGAN_BLOOD_FRAME_START = 11;
+const SHARINGAN_BLOOD_FRAME_END = 199;
+const SHARINGAN_BLOOD_FRAME_RATE = 24;
 
 const SHADOW_CLONE_OFFSET_RATIO = 0.3;
 const SHADOW_CLONE_SCALE = 1.0;
@@ -631,6 +653,95 @@ function computeFaceMotion(landmarks: Landmark[]): FaceMotionState {
   };
 }
 
+function getFaceBlendshapeScore(faceResult: FaceResultShape, targetName: string): number {
+  const blendshapes = faceResult.faceBlendshapes ?? [];
+  if (!Array.isArray(blendshapes) || blendshapes.length <= 0) return 0;
+  const normalize = (value: string) => String(value || "").toLowerCase().replace(/[\s_-]+/g, "");
+  const wanted = normalize(targetName);
+  for (const entry of blendshapes) {
+    const categories = entry?.categories ?? [];
+    if (!Array.isArray(categories)) continue;
+    for (const category of categories) {
+      const rawName = String(category?.categoryName ?? category?.displayName ?? category?.category_name ?? "");
+      if (!rawName) continue;
+      if (normalize(rawName) !== wanted) continue;
+      return clamp(Number(category?.score || 0), 0, 1);
+    }
+  }
+  return 0;
+}
+
+function buildSharinganVisualPose(landmarks: Landmark[]): SharinganVisualPose | null {
+  if (!Array.isArray(landmarks) || landmarks.length < 474) return null;
+
+  const leftIris = landmarks[468];
+  const rightIris = landmarks[473];
+  const leftOuter = landmarks[33];
+  const leftInner = landmarks[133];
+  const rightOuter = landmarks[362];
+  const rightInner = landmarks[263];
+  if (!leftIris || !rightIris || !leftOuter || !leftInner || !rightOuter || !rightInner) return null;
+
+  const mirrorX = (x: number) => clamp(1 - x, 0.02, 0.98);
+  const clampY = (y: number) => clamp(y, 0.04, 0.96);
+
+  const leftSocketCenter = {
+    x: mirrorX((leftOuter.x + leftInner.x) * 0.5),
+    y: clampY((leftOuter.y + leftInner.y) * 0.5),
+  };
+  const rightSocketCenter = {
+    x: mirrorX((rightOuter.x + rightInner.x) * 0.5),
+    y: clampY((rightOuter.y + rightInner.y) * 0.5),
+  };
+
+  const leftIrisPos = { x: mirrorX(leftIris.x), y: clampY(leftIris.y) };
+  const rightIrisPos = { x: mirrorX(rightIris.x), y: clampY(rightIris.y) };
+
+  const leftSpan = Math.hypot(leftOuter.x - leftInner.x, leftOuter.y - leftInner.y);
+  const rightSpan = Math.hypot(rightOuter.x - rightInner.x, rightOuter.y - rightInner.y);
+  const leftEyeSizePct = clamp(leftSpan * 42, 5, 24);
+  const rightEyeSizePct = clamp(rightSpan * 42, 5, 24);
+
+  const bloodYOffsetLeft = leftSpan * 0.2016;
+  const bloodYOffsetRight = rightSpan * 0.2016;
+
+  const leftBloodWidthPct = clamp(leftEyeSizePct * 2.5, 8, 36);
+  const leftBloodHeightPct = clamp(leftEyeSizePct * 7.0, 18, 70);
+  const rightBloodWidthPct = clamp(rightEyeSizePct * 2.5, 8, 36);
+  const rightBloodHeightPct = clamp(rightEyeSizePct * 7.0, 18, 70);
+
+  const angleDeg = Math.atan2(
+    rightSocketCenter.y - leftSocketCenter.y,
+    rightSocketCenter.x - leftSocketCenter.x,
+  ) * (180 / Math.PI);
+
+  return {
+    angleDeg,
+    leftEye: {
+      x: leftIrisPos.x,
+      y: leftIrisPos.y,
+      sizePct: leftEyeSizePct,
+    },
+    rightEye: {
+      x: rightIrisPos.x,
+      y: rightIrisPos.y,
+      sizePct: rightEyeSizePct,
+    },
+    leftBlood: {
+      x: leftSocketCenter.x,
+      y: clampY(leftSocketCenter.y + bloodYOffsetLeft),
+      widthPct: leftBloodWidthPct,
+      heightPct: leftBloodHeightPct,
+    },
+    rightBlood: {
+      x: rightSocketCenter.x,
+      y: clampY(rightSocketCenter.y + bloodYOffsetRight),
+      widthPct: rightBloodWidthPct,
+      heightPct: rightBloodHeightPct,
+    },
+  };
+}
+
 function drawLandmarks(ctx: CanvasRenderingContext2D, landmarks: Landmark[], width: number, height: number): void {
   const connections = [
     [0, 1], [1, 2], [2, 3], [3, 4],
@@ -848,6 +959,12 @@ export default function PlayArena({
   const isCalibrationMode = mode === "calibration";
   const isViewportFitSession = viewportFit && !isCalibrationMode;
   const jutsu = OFFICIAL_JUTSUS[jutsuName];
+  const isSharinganChargedMode = useMemo(
+    () => !isCalibrationMode
+      && normalizeLabel(jutsuName).includes("sharingan")
+      && normalizeLabel(String(jutsu?.effect || "")) === "eye",
+    [isCalibrationMode, jutsu?.effect, jutsuName],
+  );
   const sequence = useMemo(() => (jutsu?.sequence ?? []).map((s) => normalizeLabel(s)), [jutsu]);
   const sequenceKey = useMemo(() => sequence.join("|"), [sequence]);
   const datasetVersionToken = useMemo(() => buildDatasetVersionToken(datasetVersion), [datasetVersion]);
@@ -909,6 +1026,9 @@ export default function PlayArena({
   const oneHandSinceRef = useRef(0);
   const oneHandAssistUnlockedStepRef = useRef(-1);
   const showTwoHandsGuideRef = useRef(false);
+  const sharinganBlinkHoldStartedAtRef = useRef(0);
+  const sharinganBloodAnimStartAtRef = useRef(0);
+  const sharinganBloodAnimRafRef = useRef(0);
   const lightingStatusRef = useRef<"good" | "low_light" | "overexposed" | "low_contrast">("good");
   const lightingMeanRef = useRef(0);
   const lightingContrastRef = useRef(0);
@@ -977,6 +1097,9 @@ export default function PlayArena({
   const [rankInfo, setRankInfo] = useState("");
   const [comboCue, setComboCue] = useState("");
   const [showTwoHandsGuide, setShowTwoHandsGuide] = useState(false);
+  const [sharinganBlinkHoldMs, setSharinganBlinkHoldMs] = useState(0);
+  const [sharinganVisualPose, setSharinganVisualPose] = useState<SharinganVisualPose | null>(null);
+  const [sharinganBloodFrame, setSharinganBloodFrame] = useState(SHARINGAN_BLOOD_FRAME_START);
   const [calibrationSecondsLeft, setCalibrationSecondsLeft] = useState(CALIBRATION_DURATION_S);
   const [calibrationSamples, setCalibrationSamples] = useState(0);
   const [showDetectionPanel, setShowDetectionPanel] = useState(false);
@@ -1581,6 +1704,8 @@ export default function PlayArena({
     oneHandSinceRef.current = 0;
     oneHandAssistUnlockedStepRef.current = -1;
     showTwoHandsGuideRef.current = false;
+    sharinganBlinkHoldStartedAtRef.current = 0;
+    sharinganBloodAnimStartAtRef.current = 0;
     calibrationStartedAtRef.current = 0;
     calibrationSamplesRef.current = [];
     calibrationFinalizeBusyRef.current = false;
@@ -1622,6 +1747,10 @@ export default function PlayArena({
       window.clearTimeout(xpPopupTimerRef.current);
       xpPopupTimerRef.current = null;
     }
+    if (sharinganBloodAnimRafRef.current) {
+      cancelAnimationFrame(sharinganBloodAnimRafRef.current);
+      sharinganBloodAnimRafRef.current = 0;
+    }
     for (const timer of pendingEffectTimersRef.current) {
       window.clearTimeout(timer);
     }
@@ -1645,6 +1774,9 @@ export default function PlayArena({
     setRankInfo("");
     setComboCue("");
     setShowTwoHandsGuide(false);
+    setSharinganBlinkHoldMs(0);
+    setSharinganVisualPose(null);
+    setSharinganBloodFrame(SHARINGAN_BLOOD_FRAME_START);
     setCalibrationSecondsLeft(CALIBRATION_DURATION_S);
     setCalibrationSamples(0);
     setRawDetectedLabel("Idle");
@@ -2247,7 +2379,7 @@ export default function PlayArena({
         setDetectorError(handErrors.length > 0 ? handErrors.slice(0, 2).join(" | ") : "");
         if (cancelled) return;
 
-        if (!isLikelyLowPowerMobile && FaceLandmarker?.createFromOptions) {
+        if ((isSharinganChargedMode || !isLikelyLowPowerMobile) && FaceLandmarker?.createFromOptions) {
           const faceModelPath = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
           const faceCandidates: Array<"GPU" | "CPU"> = ["GPU", "CPU"];
           for (const delegate of faceCandidates) {
@@ -2262,6 +2394,7 @@ export default function PlayArena({
                 minFaceDetectionConfidence: 0.35,
                 minFacePresenceConfidence: 0.35,
                 minTrackingConfidence: 0.35,
+                outputFaceBlendshapes: isSharinganChargedMode,
               }));
               break;
             } catch (err) {
@@ -2380,6 +2513,11 @@ export default function PlayArena({
         cancelAnimationFrame(phoenixRafRef.current);
         phoenixRafRef.current = 0;
       }
+      if (sharinganBloodAnimRafRef.current) {
+        cancelAnimationFrame(sharinganBloodAnimRafRef.current);
+        sharinganBloodAnimRafRef.current = 0;
+      }
+      sharinganBloodAnimStartAtRef.current = 0;
       phoenixLastAtRef.current = 0;
       if (xpPopupTimerRef.current) {
         window.clearTimeout(xpPopupTimerRef.current);
@@ -2410,7 +2548,7 @@ export default function PlayArena({
       sampleCtxRef.current = null;
       sampleCanvasRef.current = null;
     };
-  }, [cameraIdx, clearCameraFailure, clearShadowCloneOverlay, isLikelyLowPowerMobile, markCameraFailure, resolutionIdx]);
+  }, [cameraIdx, clearCameraFailure, clearShadowCloneOverlay, isLikelyLowPowerMobile, isSharinganChargedMode, markCameraFailure, resolutionIdx]);
 
   useEffect(() => {
     if (phaseRef.current === "loading" || phaseRef.current === "error") return;
@@ -2589,9 +2727,14 @@ export default function PlayArena({
         voteWindowRef.current = [];
         oneHandSinceRef.current = 0;
         oneHandAssistUnlockedStepRef.current = -1;
+        sharinganBlinkHoldStartedAtRef.current = 0;
         if (showTwoHandsGuideRef.current) {
           showTwoHandsGuideRef.current = false;
           setShowTwoHandsGuide(false);
+        }
+        if (isSharinganChargedMode) {
+          setSharinganVisualPose(null);
+          setSharinganBlinkHoldMs(0);
         }
         setDetectedHands(0);
         setRawDetectedLabel("Idle");
@@ -2627,10 +2770,13 @@ export default function PlayArena({
       latestLandmarksRef.current = result.landmarks ?? [];
       const face = faceRef.current;
       let faceMotion: FaceMotionState = { anchor: null, yaw: 0, pitch: 0 };
-      const shouldUseFaceTracking = phaseNow === "casting";
+      let faceResult: FaceResultShape = { faceLandmarks: [], faceBlendshapes: [] };
+      let blinkLeftScore = 0;
+      let blinkRightScore = 0;
+      const shouldUseFaceTracking = phaseNow === "casting" || (isSharinganChargedMode && phaseNow === "active");
       if (shouldUseFaceTracking && face) {
         try {
-          let faceResult: FaceResultShape = { faceLandmarks: [] };
+          faceResult = { faceLandmarks: [], faceBlendshapes: [] };
           if (typeof face.detectForVideo === "function") {
             faceResult = withSuppressedMediapipeConsole(() => (face.detectForVideo!(video, nowMs) as FaceResultShape) || faceResult);
           } else if (typeof face.detect === "function") {
@@ -2639,8 +2785,20 @@ export default function PlayArena({
           const firstFace = faceResult.faceLandmarks?.[0];
           if (Array.isArray(firstFace) && firstFace.length > 0) {
             faceMotion = computeFaceMotion(firstFace);
+            if (isSharinganChargedMode) {
+              setSharinganVisualPose(buildSharinganVisualPose(firstFace));
+            }
+          } else if (isSharinganChargedMode) {
+            setSharinganVisualPose(null);
+          }
+          if (isSharinganChargedMode && phaseNow === "active") {
+            blinkLeftScore = getFaceBlendshapeScore(faceResult, "eyeBlinkLeft");
+            blinkRightScore = getFaceBlendshapeScore(faceResult, "eyeBlinkRight");
           }
         } catch (err) {
+          if (isSharinganChargedMode) {
+            setSharinganVisualPose(null);
+          }
           const message = String((err as Error)?.message || err || "face_detect_failed");
           setDetectorError((prev) => {
             const token = `face: ${message}`;
@@ -2667,8 +2825,77 @@ export default function PlayArena({
       const assistUnlockedForStep = assistModeEnabled && oneHandAssistUnlockedStepRef.current === stepIdxForAssist;
       const requiresTwoHandsNow = restrictedSigns || (!assistUnlockedForStep && !(lowFpsAssistActive && !isRankMode));
       const effectiveVoteMinConfidence = GAME_MIN_CONFIDENCE;
+      const sharinganBlinkClosed = blinkLeftScore > SHARINGAN_BLINK_THRESHOLD && blinkRightScore > SHARINGAN_BLINK_THRESHOLD;
 
       if (phaseNow !== "active") {
+        return;
+      }
+
+      if (isSharinganChargedMode) {
+        oneHandSinceRef.current = 0;
+        oneHandAssistUnlockedStepRef.current = -1;
+        if (showTwoHandsGuideRef.current) {
+          showTwoHandsGuideRef.current = false;
+          setShowTwoHandsGuide(false);
+        }
+
+        const faceTracked = faceMotion.anchor !== null;
+        if (!faceTracked) {
+          sharinganBlinkHoldStartedAtRef.current = 0;
+          setSharinganBlinkHoldMs(0);
+          setRawDetectedLabel("Face not found");
+          setRawDetectedConfidence(0);
+          setVoteHits(0);
+          setDetectedLabel("Center your face");
+          setDetectedConfidence(0);
+          return;
+        }
+
+        if (!sharinganBlinkClosed) {
+          sharinganBlinkHoldStartedAtRef.current = 0;
+          setSharinganBlinkHoldMs(0);
+          setRawDetectedLabel("Open eyes");
+          setRawDetectedConfidence(0);
+          setVoteHits(0);
+          setDetectedLabel("Close both eyes");
+          setDetectedConfidence(0);
+          return;
+        }
+
+        if (!sharinganBlinkHoldStartedAtRef.current) {
+          sharinganBlinkHoldStartedAtRef.current = nowMs;
+        }
+        const holdMs = Math.max(0, nowMs - sharinganBlinkHoldStartedAtRef.current);
+        const holdClamped = Math.min(SHARINGAN_BLINK_HOLD_MS, holdMs);
+        const holdRatio = SHARINGAN_BLINK_HOLD_MS > 0 ? (holdClamped / SHARINGAN_BLINK_HOLD_MS) : 0;
+        setSharinganBlinkHoldMs(holdClamped);
+        setRawDetectedLabel("Eyes closed");
+        setRawDetectedConfidence(holdRatio);
+        setVoteHits(Math.min(VOTE_WINDOW_SIZE, Math.ceil(holdRatio * VOTE_WINDOW_SIZE)));
+        setDetectedLabel("Sharingan charge");
+        setDetectedConfidence(holdRatio);
+
+        if (holdMs < SHARINGAN_BLINK_HOLD_MS) {
+          return;
+        }
+        if ((nowMs - lastAcceptedAtRef.current) < SIGN_ACCEPT_COOLDOWN_MS) {
+          return;
+        }
+
+        lastAcceptedAtRef.current = nowMs;
+        currentStepRef.current = sequence.length;
+        signsLandedRef.current = sequence.length;
+        setCurrentStep(sequence.length);
+        setSignsLanded(sequence.length);
+        if (isRankMode) {
+          appendProofEvent("sharingan_blink_trigger", nowMs, {
+            left: Number(blinkLeftScore.toFixed(3)),
+            right: Number(blinkRightScore.toFixed(3)),
+            hold_ms: Math.round(holdMs),
+            threshold: SHARINGAN_BLINK_THRESHOLD,
+          });
+        }
+        finishRun(nowMs);
         return;
       }
 
@@ -2907,6 +3134,7 @@ export default function PlayArena({
     queueEffect,
     restrictedSigns,
     sequence,
+    isSharinganChargedMode,
     isLikelyLowPowerMobile,
     triggerJutsuSignature,
     triggerJutsuEffect,
@@ -3063,6 +3291,10 @@ export default function PlayArena({
   const sequenceProgressPct = sequence.length > 0
     ? Math.min(100, Math.round((sequenceProgressStep / sequence.length) * 100))
     : 0;
+  const sharinganBlinkProgressPct = Math.min(
+    100,
+    Math.round((Math.max(0, Math.min(SHARINGAN_BLINK_HOLD_MS, sharinganBlinkHoldMs)) / SHARINGAN_BLINK_HOLD_MS) * 100),
+  );
   const iconLayout = useMemo(() => {
     const n = Math.max(1, sequence.length);
     const maxIconSize = isViewportFitSession ? 68 : 80;
@@ -3082,7 +3314,11 @@ export default function PlayArena({
     100,
     Math.round((1 - (calibrationSecondsLeft / CALIBRATION_DURATION_S)) * 100),
   );
-  const progressPct = isCalibrationMode ? calibrationProgressPct : sequenceProgressPct;
+  const progressPct = isCalibrationMode
+    ? calibrationProgressPct
+    : isSharinganChargedMode
+      ? sharinganBlinkProgressPct
+      : sequenceProgressPct;
 
   const phaseLabel = phase === "active"
     ? "RUNNING"
@@ -3100,6 +3336,8 @@ export default function PlayArena({
 
   const iconProgressStep = phase === "casting" ? sequence.length : currentStep;
   const nextSign = currentStep < sequence.length ? toDisplayLabel(sequence[currentStep]).toUpperCase() : "COMPLETE";
+  const sharinganHoldSeconds = `${(Math.max(0, Math.min(SHARINGAN_BLINK_HOLD_MS, sharinganBlinkHoldMs)) / 1000).toFixed(1)}S`;
+  const sharinganTargetSeconds = `${(SHARINGAN_BLINK_HOLD_MS / 1000).toFixed(1)}S`;
 
   const iconBarStatus = isCalibrationMode
     ? phase === "active"
@@ -3107,6 +3345,14 @@ export default function PlayArena({
       : phase === "completed"
         ? "CALIBRATION COMPLETE"
         : "CAPTURE LIGHTING + CONFIDENCE PROFILE"
+    : isSharinganChargedMode
+      ? phase === "casting"
+        ? `CASTING • ${String(jutsu?.displayText || "JUTSU").toUpperCase()}`
+        : phase === "countdown"
+          ? "GET READY..."
+          : phase === "active"
+            ? `CLOSE BOTH EYES • ${sharinganHoldSeconds} / ${sharinganTargetSeconds}`
+            : `TRIGGER: CLOSE BOTH EYES FOR ${sharinganTargetSeconds}`
     : phase === "casting"
       ? `CASTING • ${String(jutsu?.displayText || "JUTSU").toUpperCase()}`
       : phase === "countdown"
@@ -3116,7 +3362,9 @@ export default function PlayArena({
     ? "text-ninja-accent"
     : phase === "casting"
       ? "text-orange-200"
-      : "text-white";
+      : isSharinganChargedMode
+        ? "text-rose-100"
+        : "text-white";
 
   const hudLevel = Math.max(0, Math.floor(Number(progressionHud?.level) || 0));
   const hudXp = Math.max(0, Math.floor(Number(progressionHud?.xp) || 0));
@@ -3148,6 +3396,26 @@ export default function PlayArena({
       }
       : null;
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
+  const sharinganBloodFramePath = `${SHARINGAN_BLOOD_BASE_NAME}${sharinganBloodFrame}.png`;
+  const sharinganSparks = useMemo(() => {
+    // Deterministic pseudo-random spark layout for Sharingan FX.
+    let seed = 1337;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    return Array.from({ length: 26 }, (_, idx) => ({
+      id: idx,
+      left: `${(8 + (rand() * 84)).toFixed(2)}%`,
+      top: `${(8 + (rand() * 84)).toFixed(2)}%`,
+      size: `${(2 + rand() * 6).toFixed(2)}px`,
+      delay: `${(rand() * 1.1).toFixed(2)}s`,
+      duration: `${(1.9 + rand() * 1.8).toFixed(2)}s`,
+      driftX: `${(-18 + rand() * 36).toFixed(2)}px`,
+      driftY: `${(-22 + rand() * 30).toFixed(2)}px`,
+      alpha: Number((0.28 + rand() * 0.42).toFixed(2)),
+    }));
+  }, []);
   const showSpeedHud = isRankMode && phase !== "loading" && phase !== "error";
   const showSignChip = phase === "active"
     && !isCalibrationMode
@@ -3185,6 +3453,43 @@ export default function PlayArena({
       ? 520
       : 560;
   const effectSizePx = Math.max(280, Math.min(920, Math.round(effectBaseSize * effectScale)));
+
+  useEffect(() => {
+    const isSharinganEffectActive = showJutsuEffect && effectLabel === "eye";
+    if (!isSharinganEffectActive) {
+      if (sharinganBloodAnimRafRef.current) {
+        cancelAnimationFrame(sharinganBloodAnimRafRef.current);
+        sharinganBloodAnimRafRef.current = 0;
+      }
+      sharinganBloodAnimStartAtRef.current = 0;
+      setSharinganBloodFrame(SHARINGAN_BLOOD_FRAME_START);
+      return;
+    }
+
+    sharinganBloodAnimStartAtRef.current = performance.now();
+    setSharinganBloodFrame(SHARINGAN_BLOOD_FRAME_START);
+
+    const tick = () => {
+      if (!sharinganBloodAnimStartAtRef.current) return;
+      const elapsedMs = Math.max(0, performance.now() - sharinganBloodAnimStartAtRef.current);
+      const frameAdvance = Math.floor((elapsedMs / 1000) * SHARINGAN_BLOOD_FRAME_RATE);
+      const frame = Math.min(SHARINGAN_BLOOD_FRAME_END, SHARINGAN_BLOOD_FRAME_START + frameAdvance);
+      setSharinganBloodFrame(frame);
+      if (frame >= SHARINGAN_BLOOD_FRAME_END) {
+        sharinganBloodAnimRafRef.current = 0;
+        return;
+      }
+      sharinganBloodAnimRafRef.current = requestAnimationFrame(tick);
+    };
+
+    sharinganBloodAnimRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (sharinganBloodAnimRafRef.current) {
+        cancelAnimationFrame(sharinganBloodAnimRafRef.current);
+        sharinganBloodAnimRafRef.current = 0;
+      }
+    };
+  }, [effectLabel, showJutsuEffect]);
 
   useEffect(() => {
     if (typeof window === "undefined" || isCalibrationMode) return;
@@ -3314,7 +3619,7 @@ export default function PlayArena({
                 </div>
               )}
 
-              {showTwoHandsGuide && (
+              {showTwoHandsGuide && !isSharinganChargedMode && (
                 <div className="absolute inset-0 z-10">
                   <Image
                     src="/pics/hands_layout.png"
@@ -3387,13 +3692,101 @@ export default function PlayArena({
 
               {showJutsuEffect && (
                 <div className="pointer-events-none absolute inset-0 z-20">
-                  {(effectLabel === "water" || effectLabel === "eye") && (
+                  {effectLabel === "water" && (
                     <div
-                      className={`absolute inset-0 ${effectLabel === "water"
-                        ? "bg-gradient-to-t from-sky-800/35 via-cyan-500/15 to-transparent"
-                        : "bg-gradient-to-br from-red-700/20 via-fuchsia-500/15 to-transparent"
-                        }`}
+                      className="absolute inset-0 bg-gradient-to-t from-sky-800/35 via-cyan-500/15 to-transparent"
                     />
+                  )}
+                  {effectLabel === "eye" && (
+                    <div className="absolute inset-0 animate-[sharinganFadeIn_650ms_ease-out]">
+                      <Image
+                        src="/red.jpg"
+                        alt="Sharingan red background"
+                        fill
+                        sizes="(max-width: 1024px) 100vw, 900px"
+                        className="object-cover opacity-85"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-br from-red-900/45 via-rose-600/18 to-transparent" />
+                      <div className="absolute inset-0 bg-black/34" />
+                      {sharinganSparks.map((spark) => (
+                        <span
+                          key={`sharingan-spark-${spark.id}`}
+                          className="absolute rounded-full bg-red-300/80 blur-[1px]"
+                          style={{
+                            left: spark.left,
+                            top: spark.top,
+                            width: spark.size,
+                            height: spark.size,
+                            opacity: spark.alpha,
+                            animationName: "sharinganSparkDrift",
+                            animationDuration: spark.duration,
+                            animationDelay: spark.delay,
+                            animationIterationCount: "infinite",
+                            animationTimingFunction: "ease-in-out",
+                          }}
+                        />
+                      ))}
+                      {sharinganVisualPose && (
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src="/eyes.png"
+                            alt=""
+                            className="absolute opacity-95 mix-blend-screen"
+                            style={{
+                              left: `${sharinganVisualPose.leftEye.x * 100}%`,
+                              top: `${sharinganVisualPose.leftEye.y * 100}%`,
+                              width: `${sharinganVisualPose.leftEye.sizePct}%`,
+                              height: `${sharinganVisualPose.leftEye.sizePct}%`,
+                              transform: `translate(-50%, -50%) rotate(${sharinganVisualPose.angleDeg}deg)`,
+                              filter: "drop-shadow(0 0 14px rgba(255, 35, 35, 0.72)) saturate(1.25)",
+                            }}
+                          />
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src="/eyes.png"
+                            alt=""
+                            className="absolute opacity-95 mix-blend-screen"
+                            style={{
+                              left: `${sharinganVisualPose.rightEye.x * 100}%`,
+                              top: `${sharinganVisualPose.rightEye.y * 100}%`,
+                              width: `${sharinganVisualPose.rightEye.sizePct}%`,
+                              height: `${sharinganVisualPose.rightEye.sizePct}%`,
+                              transform: `translate(-50%, -50%) rotate(${sharinganVisualPose.angleDeg}deg)`,
+                              filter: "drop-shadow(0 0 14px rgba(255, 35, 35, 0.72)) saturate(1.25)",
+                            }}
+                          />
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={sharinganBloodFramePath}
+                            alt=""
+                            className="absolute opacity-95"
+                            style={{
+                              left: `${sharinganVisualPose.leftBlood.x * 100}%`,
+                              top: `${sharinganVisualPose.leftBlood.y * 100}%`,
+                              width: `${sharinganVisualPose.leftBlood.widthPct}%`,
+                              height: `${sharinganVisualPose.leftBlood.heightPct}%`,
+                              transform: `translate(-50%, -5%) rotate(${sharinganVisualPose.angleDeg}deg)`,
+                              filter: "saturate(1.35) contrast(1.15)",
+                            }}
+                          />
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={sharinganBloodFramePath}
+                            alt=""
+                            className="absolute opacity-95"
+                            style={{
+                              left: `${sharinganVisualPose.rightBlood.x * 100}%`,
+                              top: `${sharinganVisualPose.rightBlood.y * 100}%`,
+                              width: `${sharinganVisualPose.rightBlood.widthPct}%`,
+                              height: `${sharinganVisualPose.rightBlood.heightPct}%`,
+                              transform: `translate(-50%, -5%) rotate(${sharinganVisualPose.angleDeg}deg)`,
+                              filter: "saturate(1.35) contrast(1.15)",
+                            }}
+                          />
+                        </>
+                      )}
+                    </div>
                   )}
                   {effectLabel === "clone" && (
                     <canvas
@@ -3537,11 +3930,24 @@ export default function PlayArena({
                 <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/58 px-4">
                   <div className="w-full max-w-md rounded-2xl border border-orange-300/45 bg-zinc-950/80 p-5 text-center shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
                     <p className="text-2xl font-black text-orange-200">PRESS [SPACE] TO START</p>
-                    <p className="mt-2 text-sm text-zinc-200">Perform the sequence as fast as possible.</p>
+                    <p className="mt-2 text-sm text-zinc-200">
+                      {isSharinganChargedMode
+                        ? "Close both eyes and hold to trigger Sharingan."
+                        : "Perform the sequence as fast as possible."}
+                    </p>
                     <div className="mt-3 text-left text-xs text-zinc-300">
                       <p>1. Timer starts on GO.</p>
-                      <p>2. Detect all signs in order.</p>
-                      <p>3. Timer stops on final sign.</p>
+                      {isSharinganChargedMode ? (
+                        <>
+                          <p>2. Close both eyes and hold for 1.5 seconds.</p>
+                          <p>3. Timer stops when Sharingan triggers.</p>
+                        </>
+                      ) : (
+                        <>
+                          <p>2. Detect all signs in order.</p>
+                          <p>3. Timer stops on final sign.</p>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -3580,7 +3986,11 @@ export default function PlayArena({
                     {!isCalibrationMode && (
                       <>
                         <p className="mt-2 text-3xl font-black text-emerald-200">{formatElapsed(elapsedMs)}</p>
-                        <p className="mt-1 text-sm text-zinc-200">Signs: {signsLanded}/{sequence.length}</p>
+                        {isSharinganChargedMode ? (
+                          <p className="mt-1 text-sm text-zinc-200">Trigger: Eyes closed for {sharinganTargetSeconds}</p>
+                        ) : (
+                          <p className="mt-1 text-sm text-zinc-200">Signs: {signsLanded}/{sequence.length}</p>
+                        )}
                       </>
                     )}
                     {!!submitStatus && <p className="mt-3 text-sm font-bold text-emerald-200">{submitStatus}</p>}
@@ -3627,7 +4037,7 @@ export default function PlayArena({
             </div>
           )}
 
-          {!isCalibrationMode && (
+          {!isCalibrationMode && !isSharinganChargedMode && (
             <>
               <div
                 ref={sequenceStripRef}
@@ -3674,6 +4084,14 @@ export default function PlayArena({
                 </div>
               )}
             </>
+          )}
+
+          {!isCalibrationMode && isSharinganChargedMode && (
+            <div className="mt-3 flex items-center justify-center">
+              <div className="rounded-lg border border-rose-300/45 bg-black/35 px-4 py-2 text-xs font-bold uppercase tracking-[0.08em] text-rose-100">
+                Keep your face centered, then close both eyes for {sharinganTargetSeconds}
+              </div>
+            </div>
           )}
 
           {isCalibrationMode && (
@@ -3748,6 +4166,15 @@ export default function PlayArena({
           0% { transform: translateY(0px); opacity: 1; }
           75% { opacity: 1; }
           100% { transform: translateY(-38px); opacity: 0; }
+        }
+        @keyframes sharinganFadeIn {
+          0% { opacity: 0; filter: brightness(0.65) saturate(0.85); }
+          100% { opacity: 1; filter: brightness(1) saturate(1.1); }
+        }
+        @keyframes sharinganSparkDrift {
+          0% { transform: translate(0px, 0px) scale(0.8); opacity: 0.18; }
+          45% { opacity: 0.7; }
+          100% { transform: translate(0px, -26px) scale(1.12); opacity: 0.1; }
         }
       `}</style>
     </div>
