@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "@mediapipe/tasks-vision": "^0.10.32",
     "@supabase/supabase-js": "^2.93.3",
     "lucide-react": "^0.563.0",

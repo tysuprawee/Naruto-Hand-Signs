@@ -50,6 +50,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         soundPath: "/sounds/clone.mp3",
         videoPath: null,
         effect: "clone",
+        duration: 6.0,
         minLevel: 0,
     },
     "Reaper Death Seal": {
@@ -76,6 +77,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         soundPath: "/sounds/fireball.mp3",
         videoPath: null,
         effect: "fire",
+        duration: 5.0,
         minLevel: 2,
     },
     Chidori: {
@@ -84,7 +86,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         soundPath: "/sounds/chidori.mp3",
         videoPath: "/effects/chidori.mp4",
         effect: "lightning",
-        duration: 6.0,
+        duration: 8.0,
         minLevel: 5,
     },
     "Water Dragon": {
@@ -93,6 +95,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         soundPath: null,
         videoPath: null,
         effect: "water",
+        duration: 8.0,
         minLevel: 8,
     },
     "Phoenix Flower": {
@@ -101,6 +104,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         soundPath: "/sounds/phoenix_flowers.mp3",
         videoPath: null,
         effect: "fire",
+        duration: 5.0,
         minLevel: 3,
     },
     Sharingan: {
@@ -109,6 +113,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         soundPath: null,
         videoPath: null,
         effect: "eye",
+        duration: 10.0,
         minLevel: 10,
     },
 };

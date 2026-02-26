@@ -3427,7 +3427,7 @@ function PlayPageInner() {
 
     const fallbackEffectDurationMs = Math.max(
       650,
-      Math.round((Number(OFFICIAL_JUTSUS[result.jutsuName]?.duration) || 2.2) * 1000),
+      Math.round((Number(OFFICIAL_JUTSUS[result.jutsuName]?.duration) || 5.0) * 1000),
     );
     const effectDurationMs = Math.max(
       0,

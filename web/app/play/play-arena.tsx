@@ -62,6 +62,18 @@ interface FaceLandmarkerLike {
   close?: () => void;
 }
 
+interface SelfieSegmentationResultShape {
+  segmentationMask: CanvasImageSource;
+  image: CanvasImageSource;
+}
+
+interface SelfieSegmentationLike {
+  setOptions?: (options: Record<string, unknown>) => void;
+  onResults: (listener: (results: SelfieSegmentationResultShape) => void) => void;
+  send: (options: { image: HTMLVideoElement }) => Promise<void> | void;
+  close?: () => void;
+}
+
 interface EffectAnchor {
   x: number;
   y: number;
@@ -164,12 +176,29 @@ const VOTE_TTL_MS = 700;
 const SIGN_ACCEPT_COOLDOWN_MS = 500;
 const LIGHTING_INTERVAL_MS = 240;
 const TWO_HANDS_GUIDE_DELAY_MS = 500;
-const EFFECT_DEFAULT_DURATION_MS = 2200;
+const EFFECT_DEFAULT_DURATION_MS = 5000;
 const CAMERA_STALL_TIMEOUT_MS = 1400;
 const HAND_FEATURE_LENGTH = 63;
 const GAME_MIN_CONFIDENCE = 0.2;
 const LOW_FPS_ASSIST_THRESHOLD = 12;
 const LOW_FPS_VOTE_TTL_MS = 1400;
+const CLONE_SEGMENTATION_INTERVAL_MS = 33;
+const CLONE_SPAWN_DELAY_MS = 1500;
+
+const SHADOW_CLONE_OFFSET_RATIO = 0.3;
+const SHADOW_CLONE_SCALE = 1.0;
+const SHADOW_CLONE_OPACITY = 0.92;
+const SHADOW_CLONE_ENTER_DURATION_MS = 650;
+const SHADOW_CLONE_BLINK_SPEED = 24.0;
+const SHADOW_CLONE_BLINK_DEPTH = 0.5;
+const SHADOW_CLONE_SMOKE_ENABLED = true;
+const SHADOW_CLONE_SMOKE_OPACITY = 0.65;
+const SHADOW_CLONE_SMOKE_SCALE = 1.2;
+const SHADOW_CLONE_SMOKE_RISE = 0.14;
+const SHADOW_CLONE_SMOKE_MASK_TO_CLONE = false;
+const SHADOW_CLONE_SMOKE_BASE_NAME = "/smoke/cf7378e5-58a9-4967-af50-904b2d11ecdd-";
+const SHADOW_CLONE_SMOKE_FRAME_START = 0;
+const SHADOW_CLONE_SMOKE_FRAME_END = 55;
 
 const CALIBRATION_DURATION_S = 12;
 const CALIBRATION_MIN_SAMPLES = 100;
@@ -257,6 +286,14 @@ async function withSuppressedMediapipeConsoleAsync<T>(run: () => Promise<T>): Pr
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function didPassPhase(prevPhase: number | null, currentPhase: number, targetPhase: number): boolean {
+  if (prevPhase === null || prevPhase === undefined) return false;
+  if (prevPhase <= currentPhase) {
+    return prevPhase <= targetPhase && targetPhase <= currentPhase;
+  }
+  return prevPhase <= targetPhase || targetPhase <= currentPhase;
 }
 
 function toNumber(value: unknown, fallback: number): number {
@@ -829,11 +866,25 @@ export default function PlayArena({
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const shadowCloneCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const knnRef = useRef<KNNClassifier | null>(null);
   const handsRef = useRef<HandLandmarkerLike | null>(null);
   const faceRef = useRef<FaceLandmarkerLike | null>(null);
+  const selfieSegmentationRef = useRef<SelfieSegmentationLike | null>(null);
   const handBackendRef = useRef<"tasks_video" | "tasks_image" | "none">("none");
+  const shadowCloneLayerCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const shadowCloneLayerCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const shadowCloneSmokeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const shadowCloneSmokeCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const shadowCloneSmokeFramesRef = useRef<HTMLImageElement[]>([]);
+  const shadowCloneSegmentationBusyRef = useRef(false);
+  const shadowCloneLastSendAtRef = useRef(0);
+  const shadowCloneStartAtRef = useRef(0);
+  const shadowCloneBlinkSettlePendingRef = useRef(false);
+  const shadowCloneBlinkPhasePrevRef = useRef<number | null>(null);
+  const showJutsuEffectRef = useRef(false);
+  const activeEffectRef = useRef("");
   const renderRafRef = useRef(0);
   const detectRafRef = useRef(0);
   const lastDetectRef = useRef(0);
@@ -1059,7 +1110,7 @@ export default function PlayArena({
     const baseDelay = Math.max(0, Math.floor(options?.delayMs ?? (effectNorm === "reaper" ? 0 : 500)));
     const volume = options?.volume ?? 1;
     queueSfx(path, baseDelay, volume);
-  }, [getJutsuSfxPath, queueSfx]);
+  }, [getJutsuSfxPath, noEffects, queueSfx]);
 
   const pushComboCue = useCallback((message: string) => {
     setComboCue(message);
@@ -1106,9 +1157,225 @@ export default function PlayArena({
     calibrationDiagRestoreRef.current = null;
   }, [isCalibrationMode]);
 
+  const clearShadowCloneOverlay = useCallback((resetState = false) => {
+    const canvas = shadowCloneCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+    if (resetState) {
+      shadowCloneStartAtRef.current = 0;
+      shadowCloneBlinkSettlePendingRef.current = false;
+      shadowCloneBlinkPhasePrevRef.current = null;
+      shadowCloneLastSendAtRef.current = 0;
+      shadowCloneSegmentationBusyRef.current = false;
+    }
+  }, []);
+
+  const ensureShadowCloneSmokeFrames = useCallback(() => {
+    if (shadowCloneSmokeFramesRef.current.length > 0) return;
+    const frames: HTMLImageElement[] = [];
+    for (let i = SHADOW_CLONE_SMOKE_FRAME_START; i <= SHADOW_CLONE_SMOKE_FRAME_END; i += 1) {
+      const image = new window.Image();
+      image.src = `${SHADOW_CLONE_SMOKE_BASE_NAME}${i}.png`;
+      frames.push(image);
+    }
+    shadowCloneSmokeFramesRef.current = frames;
+  }, []);
+
+  const drawShadowCloneFrame = useCallback((results: SelfieSegmentationResultShape) => {
+    if (!showJutsuEffectRef.current || normalizeLabel(activeEffectRef.current) !== "clone") {
+      clearShadowCloneOverlay(false);
+      return;
+    }
+
+    const overlayCanvas = shadowCloneCanvasRef.current;
+    if (!overlayCanvas || overlayCanvas.width <= 0 || overlayCanvas.height <= 0) return;
+    const overlayCtx = overlayCanvas.getContext("2d");
+    if (!overlayCtx) return;
+
+    let cloneLayerCanvas = shadowCloneLayerCanvasRef.current;
+    let cloneLayerCtx = shadowCloneLayerCtxRef.current;
+    if (!cloneLayerCanvas || !cloneLayerCtx) {
+      cloneLayerCanvas = document.createElement("canvas");
+      cloneLayerCtx = cloneLayerCanvas.getContext("2d");
+      shadowCloneLayerCanvasRef.current = cloneLayerCanvas;
+      shadowCloneLayerCtxRef.current = cloneLayerCtx;
+    }
+
+    let smokeCanvas = shadowCloneSmokeCanvasRef.current;
+    let smokeCtx = shadowCloneSmokeCtxRef.current;
+    if (!smokeCanvas || !smokeCtx) {
+      smokeCanvas = document.createElement("canvas");
+      smokeCtx = smokeCanvas.getContext("2d");
+      shadowCloneSmokeCanvasRef.current = smokeCanvas;
+      shadowCloneSmokeCtxRef.current = smokeCtx;
+    }
+
+    if (!cloneLayerCanvas || !cloneLayerCtx || !smokeCanvas || !smokeCtx) return;
+
+    if (cloneLayerCanvas.width !== overlayCanvas.width || cloneLayerCanvas.height !== overlayCanvas.height) {
+      cloneLayerCanvas.width = overlayCanvas.width;
+      cloneLayerCanvas.height = overlayCanvas.height;
+    }
+    if (smokeCanvas.width !== overlayCanvas.width || smokeCanvas.height !== overlayCanvas.height) {
+      smokeCanvas.width = overlayCanvas.width;
+      smokeCanvas.height = overlayCanvas.height;
+    }
+
+    cloneLayerCtx.save();
+    cloneLayerCtx.clearRect(0, 0, cloneLayerCanvas.width, cloneLayerCanvas.height);
+    cloneLayerCtx.translate(cloneLayerCanvas.width, 0);
+    cloneLayerCtx.scale(-1, 1);
+    cloneLayerCtx.drawImage(results.segmentationMask, 0, 0, cloneLayerCanvas.width, cloneLayerCanvas.height);
+    cloneLayerCtx.globalCompositeOperation = "source-in";
+    cloneLayerCtx.drawImage(results.image, 0, 0, cloneLayerCanvas.width, cloneLayerCanvas.height);
+    cloneLayerCtx.restore();
+    cloneLayerCtx.globalCompositeOperation = "source-over";
+
+    const cloneOffset = SHADOW_CLONE_OFFSET_RATIO;
+    const cloneScale = SHADOW_CLONE_SCALE;
+    const cloneOpacity = SHADOW_CLONE_OPACITY;
+    const cloneEnterDurationMs = SHADOW_CLONE_ENTER_DURATION_MS;
+    const cloneBlinkSpeed = SHADOW_CLONE_BLINK_SPEED;
+    const cloneBlinkDepth = clamp(SHADOW_CLONE_BLINK_DEPTH, 0, 0.95);
+
+    const drawWidth = overlayCanvas.width * cloneScale;
+    const drawHeight = overlayCanvas.height * cloneScale;
+    const centeredX = (overlayCanvas.width - drawWidth) * 0.5;
+    const centeredY = (overlayCanvas.height - drawHeight) * 0.5;
+    const sideOffsetPx = overlayCanvas.width * cloneOffset;
+
+    const now = performance.now();
+    const triggerStart = shadowCloneStartAtRef.current > 0 ? shadowCloneStartAtRef.current : now;
+    if (!shadowCloneStartAtRef.current) {
+      shadowCloneStartAtRef.current = now;
+    }
+    const elapsedSinceTrigger = Math.max(0, now - triggerStart);
+    const entranceT = Math.min(1, elapsedSinceTrigger / cloneEnterDurationMs);
+    const entranceEaseOut = 1 - Math.pow(1 - entranceT, 3);
+    const animatedOffset = sideOffsetPx * entranceEaseOut;
+
+    let smokeFrame: HTMLImageElement | null = null;
+    const smokeFrames = shadowCloneSmokeFramesRef.current;
+    if (SHADOW_CLONE_SMOKE_ENABLED && entranceT < 1 && smokeFrames.length > 0) {
+      const targetFrameIndex = Math.max(
+        0,
+        Math.min(smokeFrames.length - 1, Math.floor(entranceT * (smokeFrames.length - 1))),
+      );
+      for (let i = targetFrameIndex; i >= 0; i -= 1) {
+        const candidate = smokeFrames[i];
+        if (candidate.complete && candidate.naturalWidth > 0) {
+          smokeFrame = candidate;
+          break;
+        }
+      }
+    }
+
+    const blinkPhase = (now * 0.001 * cloneBlinkSpeed) % (Math.PI * 2);
+    const blinkPulse = (Math.sin(blinkPhase) + 1) * 0.5;
+    const blinkOpacity = cloneOpacity * (1 - cloneBlinkDepth * blinkPulse);
+
+    let leftAlpha = cloneOpacity;
+    let rightAlpha = cloneOpacity;
+
+    if (entranceT < 1) {
+      shadowCloneBlinkSettlePendingRef.current = true;
+      leftAlpha = blinkOpacity;
+      rightAlpha = blinkOpacity;
+    } else if (shadowCloneBlinkSettlePendingRef.current) {
+      leftAlpha = blinkOpacity;
+      rightAlpha = blinkOpacity;
+      const fullOpacityPhase = (Math.PI * 3) / 2;
+      if (didPassPhase(shadowCloneBlinkPhasePrevRef.current, blinkPhase, fullOpacityPhase)) {
+        shadowCloneBlinkSettlePendingRef.current = false;
+        shadowCloneBlinkPhasePrevRef.current = null;
+        leftAlpha = cloneOpacity;
+        rightAlpha = cloneOpacity;
+      }
+    }
+
+    if (entranceT < 1 || shadowCloneBlinkSettlePendingRef.current) {
+      shadowCloneBlinkPhasePrevRef.current = blinkPhase;
+    }
+
+    const drawCloneWithSmoke = (x: number, alpha: number) => {
+      overlayCtx.globalCompositeOperation = "source-over";
+      overlayCtx.globalAlpha = alpha;
+      overlayCtx.drawImage(cloneLayerCanvas, x, centeredY, drawWidth, drawHeight);
+
+      if (!SHADOW_CLONE_SMOKE_ENABLED || !smokeFrame) return;
+
+      const smokeW = drawWidth * SHADOW_CLONE_SMOKE_SCALE;
+      const smokeH = drawHeight * SHADOW_CLONE_SMOKE_SCALE;
+      const smokeX = x - ((smokeW - drawWidth) * 0.5);
+      const smokeY = centeredY - (smokeH * SHADOW_CLONE_SMOKE_RISE);
+
+      if (SHADOW_CLONE_SMOKE_MASK_TO_CLONE) {
+        smokeCtx.clearRect(0, 0, smokeCanvas.width, smokeCanvas.height);
+        smokeCtx.globalCompositeOperation = "source-over";
+        smokeCtx.drawImage(smokeFrame, smokeX, smokeY, smokeW, smokeH);
+        smokeCtx.globalCompositeOperation = "destination-in";
+        smokeCtx.drawImage(cloneLayerCanvas, x, centeredY, drawWidth, drawHeight);
+        smokeCtx.globalCompositeOperation = "source-over";
+      }
+
+      overlayCtx.globalCompositeOperation = "source-over";
+      overlayCtx.globalAlpha = Math.min(1, alpha * SHADOW_CLONE_SMOKE_OPACITY);
+      if (SHADOW_CLONE_SMOKE_MASK_TO_CLONE) {
+        overlayCtx.drawImage(smokeCanvas, 0, 0);
+      } else {
+        overlayCtx.drawImage(smokeFrame, smokeX, smokeY, smokeW, smokeH);
+      }
+    };
+
+    overlayCtx.save();
+    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    drawCloneWithSmoke(centeredX - animatedOffset, leftAlpha);
+    drawCloneWithSmoke(centeredX + animatedOffset, rightAlpha);
+    overlayCtx.restore();
+  }, [clearShadowCloneOverlay]);
+
+  const ensureSelfieSegmentation = useCallback(async (): Promise<SelfieSegmentationLike | null> => {
+    if (selfieSegmentationRef.current) return selfieSegmentationRef.current;
+    try {
+      const mp = await import("@mediapipe/selfie_segmentation");
+      const SelfieSegmentationCtor = mp.SelfieSegmentation as unknown as new (options: {
+        locateFile: (file: string) => string;
+      }) => SelfieSegmentationLike;
+      const segmenter = new SelfieSegmentationCtor({
+        locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+      });
+      segmenter.setOptions?.({ modelSelection: 1 });
+      segmenter.onResults(drawShadowCloneFrame);
+      selfieSegmentationRef.current = segmenter;
+      return segmenter;
+    } catch (err) {
+      const message = String((err as Error)?.message || err || "clone_segmentation_unavailable");
+      setDetectorError((prev) => {
+        const token = `clone_seg: ${message}`;
+        if (prev.includes(token)) return prev;
+        return prev ? `${prev} | ${token}` : token;
+      });
+      return null;
+    }
+  }, [drawShadowCloneFrame]);
+
   const triggerJutsuEffect = useCallback((effectName: string, durationMs = EFFECT_DEFAULT_DURATION_MS) => {
     if (noEffects || !effectName) return;
-    setActiveEffect(String(effectName).toLowerCase());
+    const effectToken = normalizeLabel(effectName);
+    if (effectToken === "clone") {
+      shadowCloneStartAtRef.current = performance.now();
+      shadowCloneBlinkSettlePendingRef.current = true;
+      shadowCloneBlinkPhasePrevRef.current = null;
+      ensureShadowCloneSmokeFrames();
+      void ensureSelfieSegmentation();
+    } else {
+      clearShadowCloneOverlay(true);
+    }
+    setActiveEffect(effectToken);
     setShowJutsuEffect(true);
     if (effectTimerRef.current) {
       window.clearTimeout(effectTimerRef.current);
@@ -1116,13 +1383,14 @@ export default function PlayArena({
     effectTimerRef.current = window.setTimeout(() => {
       setShowJutsuEffect(false);
       setActiveEffect("");
+      clearShadowCloneOverlay(true);
       setComboTripleEffect("none");
       comboCloneHoldRef.current = false;
       comboChidoriTripleRef.current = false;
       comboRasenganTripleRef.current = false;
       effectTimerRef.current = null;
     }, Math.max(600, durationMs));
-  }, []);
+  }, [clearShadowCloneOverlay, ensureSelfieSegmentation, ensureShadowCloneSmokeFrames, noEffects]);
 
   const queueEffect = useCallback((effectName: string, delayMs: number, durationMs: number) => {
     const timer = window.setTimeout(() => {
@@ -1309,6 +1577,7 @@ export default function PlayArena({
     setShowModelInfo(false);
     setShowJutsuEffect(false);
     setActiveEffect("");
+    clearShadowCloneOverlay(true);
     setPhoenixFireballs([]);
     setXpPopupText("");
     setFaceAnchor(null);
@@ -1317,7 +1586,7 @@ export default function PlayArena({
     clearCameraFailure();
     videoStallSinceRef.current = 0;
     lastVideoMediaTimeRef.current = -1;
-  }, [clearCameraFailure, resetProofState]);
+  }, [clearCameraFailure, clearShadowCloneOverlay, resetProofState]);
 
   const finalizeCalibrationRun = useCallback(async () => {
     if (!isCalibrationMode) return;
@@ -1396,10 +1665,19 @@ export default function PlayArena({
       setComboTripleEffect("none");
     }
 
-    const effectDurationMs = Math.max(650, Math.round((Number(jutsu?.duration) || 2.2) * 1000));
+    const effectDurationMs = Math.max(650, Math.round((Number(jutsu?.duration) || 5.0) * 1000));
     castEffectDurationRef.current = effectDurationMs;
     triggerJutsuSignature(jutsuName, finalEffect, { volume: 1 });
-    triggerJutsuEffect(finalEffect, effectDurationMs);
+    if (normalizeLabel(finalEffect) === "clone") {
+      const cloneSpawnDelayMs = Math.min(
+        CLONE_SPAWN_DELAY_MS,
+        Math.max(0, effectDurationMs - 650),
+      );
+      const cloneVisibleDurationMs = Math.max(650, effectDurationMs - cloneSpawnDelayMs);
+      queueEffect(finalEffect, cloneSpawnDelayMs, cloneVisibleDurationMs);
+    } else {
+      triggerJutsuEffect(finalEffect, effectDurationMs);
+    }
 
     if (castResultTimerRef.current) {
       window.clearTimeout(castResultTimerRef.current);
@@ -1430,6 +1708,7 @@ export default function PlayArena({
     jutsuName,
     playSfx,
     resetRunState,
+    queueEffect,
     triggerJutsuEffect,
     triggerJutsuSignature,
   ]);
@@ -1611,6 +1890,14 @@ export default function PlayArena({
   }, [effectAnchor]);
 
   useEffect(() => {
+    showJutsuEffectRef.current = showJutsuEffect;
+  }, [showJutsuEffect]);
+
+  useEffect(() => {
+    activeEffectRef.current = String(activeEffect || "").toLowerCase();
+  }, [activeEffect]);
+
+  useEffect(() => {
     faceAnchorRef.current = faceAnchor;
   }, [faceAnchor]);
 
@@ -1618,6 +1905,76 @@ export default function PlayArena({
     headYawRef.current = headYaw;
     headPitchRef.current = headPitch;
   }, [headYaw, headPitch]);
+
+  useEffect(() => {
+    const effectNow = normalizeLabel(String(activeEffect || jutsu?.effect || ""));
+    const cloneEffectActive = showJutsuEffect && !noEffects && effectNow === "clone";
+    if (!cloneEffectActive) {
+      clearShadowCloneOverlay(true);
+      return;
+    }
+
+    ensureShadowCloneSmokeFrames();
+    void ensureSelfieSegmentation();
+
+    let cancelled = false;
+    let raf = 0;
+
+    const tick = (ts: number) => {
+      raf = requestAnimationFrame(tick);
+      if (cancelled) return;
+      const video = videoRef.current;
+      const overlayCanvas = shadowCloneCanvasRef.current;
+      if (!video || !overlayCanvas || video.readyState < 2) return;
+
+      if (overlayCanvas.width !== video.videoWidth || overlayCanvas.height !== video.videoHeight) {
+        overlayCanvas.width = video.videoWidth;
+        overlayCanvas.height = video.videoHeight;
+        clearShadowCloneOverlay(false);
+      }
+
+      if (shadowCloneSegmentationBusyRef.current) return;
+      if (ts - shadowCloneLastSendAtRef.current < CLONE_SEGMENTATION_INTERVAL_MS) return;
+      shadowCloneLastSendAtRef.current = ts;
+      shadowCloneSegmentationBusyRef.current = true;
+
+      void (async () => {
+        try {
+          const segmenter = await ensureSelfieSegmentation();
+          if (!segmenter || cancelled || video.readyState < 2) return;
+          await withSuppressedMediapipeConsoleAsync(async () => {
+            await Promise.resolve(segmenter.send({ image: video }));
+          });
+        } catch (err) {
+          const message = String((err as Error)?.message || err || "clone_segmentation_send_failed");
+          setDetectorError((prev) => {
+            const token = `clone_send: ${message}`;
+            if (prev.includes(token)) return prev;
+            return prev ? `${prev} | ${token}` : token;
+          });
+        } finally {
+          shadowCloneSegmentationBusyRef.current = false;
+        }
+      })();
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      shadowCloneSegmentationBusyRef.current = false;
+      shadowCloneLastSendAtRef.current = 0;
+      clearShadowCloneOverlay(false);
+    };
+  }, [
+    activeEffect,
+    clearShadowCloneOverlay,
+    ensureSelfieSegmentation,
+    ensureShadowCloneSmokeFrames,
+    jutsu?.effect,
+    noEffects,
+    showJutsuEffect,
+  ]);
 
   const handleResetRun = useCallback(() => {
     if (isRankMode) {
@@ -1897,6 +2254,16 @@ export default function PlayArena({
         faceRef.current.close();
       }
       faceRef.current = null;
+      if (selfieSegmentationRef.current && typeof selfieSegmentationRef.current.close === "function") {
+        selfieSegmentationRef.current.close();
+      }
+      selfieSegmentationRef.current = null;
+      shadowCloneLayerCanvasRef.current = null;
+      shadowCloneLayerCtxRef.current = null;
+      shadowCloneSmokeCanvasRef.current = null;
+      shadowCloneSmokeCtxRef.current = null;
+      shadowCloneSmokeFramesRef.current = [];
+      clearShadowCloneOverlay(true);
       if (comboCueTimerRef.current) {
         window.clearTimeout(comboCueTimerRef.current);
         comboCueTimerRef.current = null;
@@ -1947,7 +2314,7 @@ export default function PlayArena({
       sampleCtxRef.current = null;
       sampleCanvasRef.current = null;
     };
-  }, [cameraIdx, clearCameraFailure, isLikelyLowPowerMobile, markCameraFailure, resolutionIdx]);
+  }, [cameraIdx, clearCameraFailure, clearShadowCloneOverlay, isLikelyLowPowerMobile, markCameraFailure, resolutionIdx]);
 
   useEffect(() => {
     if (phaseRef.current === "loading" || phaseRef.current === "error") return;
@@ -2407,7 +2774,7 @@ export default function PlayArena({
             const partEffectName = String(part.effect || "").toLowerCase();
             triggerJutsuSignature(partName, partEffectName, { volume: 0.95 });
             if (normalizeLabel(partEffectName) === "clone") {
-              queueEffect(partEffectName, 900, 1700);
+              queueEffect(partEffectName, CLONE_SPAWN_DELAY_MS, 1700);
             } else {
               triggerJutsuEffect(partEffectName, 1700);
             }
@@ -2673,11 +3040,17 @@ export default function PlayArena({
     : "--:--:--";
 
   const effectLabel = String(activeEffect || jutsu?.effect || "").toLowerCase();
-  const effectVideoSrc = effectLabel === "lightning"
-    ? "/effects/chidori.mp4"
+  const effectVideo = effectLabel === "lightning"
+    ? {
+      webm: "/effects/chidori-alpha.webm",
+      mp4: "/effects/chidori.mp4",
+    }
     : effectLabel === "rasengan"
-      ? "/effects/rasengan.mp4"
-      : "";
+      ? {
+        webm: "/effects/rasengan-alpha.webm",
+        mp4: "/effects/rasengan.mp4",
+      }
+      : null;
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
   const showSpeedHud = isRankMode && phase !== "loading" && phase !== "error";
   const showSignChip = phase === "active"
@@ -2918,14 +3291,18 @@ export default function PlayArena({
 
               {showJutsuEffect && (
                 <div className="pointer-events-none absolute inset-0 z-20">
-                  {(effectLabel === "water" || effectLabel === "clone" || effectLabel === "eye") && (
+                  {(effectLabel === "water" || effectLabel === "eye") && (
                     <div
                       className={`absolute inset-0 ${effectLabel === "water"
                         ? "bg-gradient-to-t from-sky-800/35 via-cyan-500/15 to-transparent"
-                        : effectLabel === "clone"
-                          ? "bg-gradient-to-r from-violet-500/15 via-indigo-400/15 to-violet-500/15"
-                          : "bg-gradient-to-br from-red-700/20 via-fuchsia-500/15 to-transparent"
+                        : "bg-gradient-to-br from-red-700/20 via-fuchsia-500/15 to-transparent"
                         }`}
+                    />
+                  )}
+                  {effectLabel === "clone" && (
+                    <canvas
+                      ref={shadowCloneCanvasRef}
+                      className="absolute inset-0 h-full w-full object-cover"
                     />
                   )}
                   {effectLabel === "fire" && !isPhoenixFireEffect && (
@@ -2999,25 +3376,28 @@ export default function PlayArena({
                       />
                     </div>
                   )}
-                  {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideoSrc && (
+                  {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideo && (
                     <div className="absolute inset-0">
                       {tripleOffsets.map((offsetPct, idx) => (
                         <video
-                          key={`effect-${effectVideoSrc}-${idx}-${offsetPct}`}
-                          src={effectVideoSrc}
+                          key={`effect-${effectLabel}-${idx}-${offsetPct}`}
                           autoPlay
                           muted
                           loop
                           playsInline
-                          className="absolute object-contain opacity-70 mix-blend-screen"
+                          className="absolute object-contain opacity-80 mix-blend-screen"
                           style={{
                             width: `${effectSizePx}px`,
                             height: `${effectSizePx}px`,
                             left: `calc(${effectAnchorX}% + ${offsetPct}%)`,
                             top: `${effectAnchorY}%`,
                             transform: "translate(-50%, -50%)",
+                            filter: "brightness(1.15) contrast(1.3) saturate(1.2)",
                           }}
-                        />
+                        >
+                          <source src={effectVideo.webm} type="video/webm" />
+                          <source src={effectVideo.mp4} type="video/mp4" />
+                        </video>
                       ))}
                     </div>
                   )}
