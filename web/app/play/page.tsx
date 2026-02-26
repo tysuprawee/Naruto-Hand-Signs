@@ -4,7 +4,7 @@ import type { Session } from "@supabase/supabase-js";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -526,7 +526,7 @@ function pickDiscordId(...values: unknown[]): string {
     .map((raw) => String(raw || "").trim())
     .filter(Boolean);
   const snowflake = cleaned.find((value) => looksLikeDiscordSnowflake(value));
-  return snowflake || cleaned[0] || "";
+  return snowflake || "";
 }
 
 function resolveSessionIdentity(session: Session | null): AuthIdentity | null {
@@ -534,12 +534,17 @@ function resolveSessionIdentity(session: Session | null): AuthIdentity | null {
   if (!user) return null;
 
   const metadata = isRecord(user.user_metadata) ? user.user_metadata : {};
+  const appMetadata = isRecord(user.app_metadata) ? user.app_metadata : {};
   const identities = Array.isArray(user.identities) ? user.identities : [];
   const discordIdentity = identities.find((entry) => String(entry?.provider || "").toLowerCase() === "discord");
   const identityData = isRecord(discordIdentity?.identity_data) ? discordIdentity.identity_data : {};
 
   const username = pickDiscordUsername(
     identityData.username,
+    identityData.preferred_username,
+    identityData.user_name,
+    identityData.name,
+    identityData.full_name,
     metadata.username,
     metadata.preferred_username,
     metadata.user_name,
@@ -548,11 +553,17 @@ function resolveSessionIdentity(session: Session | null): AuthIdentity | null {
     String(user.email || "").split("@")[0],
   );
   const discordId = pickDiscordId(
+    identityData.provider_id,
     identityData.user_id,
     identityData.id,
     metadata.provider_id,
+    metadata.user_id,
+    metadata.id,
+    appMetadata.provider_id,
+    appMetadata.discord_id,
     identityData.sub,
     metadata.sub,
+    appMetadata.sub,
     discordIdentity?.id,
   );
 
@@ -1406,7 +1417,7 @@ function LockedPanel({
   );
 }
 
-export default function PlayPage() {
+function PlayPageInner() {
   const { language, setLanguage, t } = useLanguage();
   const { setMusicMuted: setGlobalMusicMuted, setMusicVolume: setGlobalMusicVolume } = useBackgroundMusic();
   const [session, setSession] = useState<Session | null>(null);
@@ -1817,6 +1828,15 @@ export default function PlayPage() {
     return { response: legacyRes, usedLegacy: true };
   }, [callRpc]);
 
+  const callBoundRpc = useCallback(async (
+    authRpcName: string,
+    legacyRpcName: string,
+    payload: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const { response } = await callRpcWithLegacyFallback(authRpcName, legacyRpcName, payload);
+    return response;
+  }, [callRpcWithLegacyFallback]);
+
   const fetchProfileMetaDirect = useCallback(async (targetIdentity: AuthIdentity): Promise<DirectProfileMetaResult> => {
     const res = await callRpc("get_profile_meta_self_auth", {});
     if (!Boolean(res.ok)) {
@@ -1837,6 +1857,42 @@ export default function PlayPage() {
     }
     return { ok: true, profile };
   }, [callRpc]);
+
+  const findExistingUsernameByDiscordId = useCallback(async (discordId: string): Promise<string> => {
+    const dId = String(discordId || "").trim();
+    if (!supabase || !dId) return "";
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("username,updated_at")
+        .eq("discord_id", dId)
+        .order("updated_at", { ascending: false })
+        .limit(1);
+      if (!error && Array.isArray(data) && data.length > 0) {
+        const username = normalizeDiscordUsername(data[0]?.username);
+        if (username) return username;
+      }
+    } catch {
+      // Ignore and fallback to leaderboard lookup.
+    }
+    try {
+      const { data, error } = await supabase
+        .from("leaderboard")
+        .select("username,created_at")
+        .eq("discord_id", dId)
+        .order("created_at", { ascending: false })
+        .limit(8);
+      if (!error && Array.isArray(data) && data.length > 0) {
+        for (const row of data as Array<Record<string, unknown>>) {
+          const username = normalizeDiscordUsername(row.username);
+          if (username) return username;
+        }
+      }
+    } catch {
+      // Ignore fallback lookup failures.
+    }
+    return "";
+  }, []);
 
   const readPendingRankQueue = useCallback((): PendingRankSubmitRecord[] => {
     if (typeof window === "undefined" || !pendingRankQueueStorageKey) return [];
@@ -2320,7 +2376,7 @@ export default function PlayPage() {
   }, []);
 
   const bootstrapAuthoritativeProfile = useCallback(async (targetIdentity: AuthIdentity) => {
-    const guardedRes = await callRpc("upsert_profile_guarded_bound_auth", {
+    const guardedRes = await callBoundRpc("upsert_profile_guarded_bound_auth", "upsert_profile_guarded_bound", {
       p_username: targetIdentity.username,
       p_discord_id: targetIdentity.discordId,
       p_xp: 0,
@@ -2340,7 +2396,7 @@ export default function PlayPage() {
       return guardedRes;
     }
 
-    const settingsRes = await callRpc("upsert_profile_settings_bound_auth", {
+    const settingsRes = await callBoundRpc("upsert_profile_settings_bound_auth", "upsert_profile_settings_bound", {
       p_username: targetIdentity.username,
       p_discord_id: targetIdentity.discordId,
       p_user_settings: {
@@ -2361,7 +2417,7 @@ export default function PlayPage() {
       return settingsRes;
     }
 
-    const calibrationRes = await callRpc("upsert_calibration_profile_bound_auth", {
+    const calibrationRes = await callBoundRpc("upsert_calibration_profile_bound_auth", "upsert_calibration_profile_bound", {
       p_username: targetIdentity.username,
       p_discord_id: targetIdentity.discordId,
       p_calibration_profile: createDefaultCalibrationProfile(),
@@ -2382,7 +2438,7 @@ export default function PlayPage() {
         `calibration=${String(calibrationRes.reason || "unknown")}`,
       ].join("; "),
     };
-  }, [callRpc]);
+  }, [callBoundRpc]);
 
   const syncAuthoritativeState = useCallback(async (targetIdentity: AuthIdentity, silent: boolean) => {
     if (!silent) {
@@ -2393,6 +2449,15 @@ export default function PlayPage() {
     const existingProfileRes = await fetchProfileMetaDirect(targetIdentity);
     if (existingProfileRes.ok && isRecord(existingProfileRes.profile)) {
       const existingUsername = normalizeDiscordUsername(existingProfileRes.profile.username);
+      if (existingUsername) {
+        effectiveIdentity = {
+          username: existingUsername,
+          discordId: targetIdentity.discordId,
+        };
+        setBoundUsername(existingUsername);
+      }
+    } else {
+      const existingUsername = await findExistingUsernameByDiscordId(targetIdentity.discordId);
       if (existingUsername) {
         effectiveIdentity = {
           username: existingUsername,
@@ -2426,7 +2491,7 @@ export default function PlayPage() {
       p_discord_id: effectiveIdentity.discordId,
     };
 
-    let bindRes = await callRpc("bind_profile_identity_bound_auth", identityPayload);
+    let bindRes = await callBoundRpc("bind_profile_identity_bound_auth", "bind_profile_identity_bound", identityPayload);
     if (!Boolean(bindRes.ok) && String(bindRes.reason || "") === "profile_missing") {
       const bootstrapRes = await bootstrapAuthoritativeProfile(effectiveIdentity);
       if (!Boolean(bootstrapRes.ok)) {
@@ -2441,7 +2506,7 @@ export default function PlayPage() {
       } else {
         setBoundUsername(effectiveIdentity.username);
       }
-      bindRes = await callRpc("bind_profile_identity_bound_auth", {
+      bindRes = await callBoundRpc("bind_profile_identity_bound_auth", "bind_profile_identity_bound", {
         p_username: effectiveIdentity.username,
         p_discord_id: effectiveIdentity.discordId,
       });
@@ -2455,21 +2520,21 @@ export default function PlayPage() {
       return;
     }
 
-    let stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", {
+    let stateRes = await callBoundRpc("get_competitive_state_authoritative_bound_auth", "get_competitive_state_authoritative_bound", {
       p_username: effectiveIdentity.username,
       p_discord_id: effectiveIdentity.discordId,
     });
     if (!Boolean(stateRes.ok) && String(stateRes.reason || "") === "profile_missing") {
       const bootstrapRes = await bootstrapAuthoritativeProfile(effectiveIdentity);
       if (Boolean(bootstrapRes.ok)) {
-        stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", {
+        stateRes = await callBoundRpc("get_competitive_state_authoritative_bound_auth", "get_competitive_state_authoritative_bound", {
           p_username: effectiveIdentity.username,
           p_discord_id: effectiveIdentity.discordId,
         });
       } else if (String(bootstrapRes.reason || "") === "identity_mismatch") {
         const fallbackOk = await tryBootstrapWithFallbackUsername();
         if (fallbackOk) {
-          stateRes = await callRpc("get_competitive_state_authoritative_bound_auth", {
+          stateRes = await callBoundRpc("get_competitive_state_authoritative_bound_auth", "get_competitive_state_authoritative_bound", {
             p_username: effectiveIdentity.username,
             p_discord_id: effectiveIdentity.discordId,
           });
@@ -2483,11 +2548,11 @@ export default function PlayPage() {
 
     const shouldFetchDirectProfile = !profileMetaHydratedRef.current;
     const [settingsRes, calibrationRes, directProfileRes] = await Promise.all([
-      callRpc("get_profile_settings_bound_auth", {
+      callBoundRpc("get_profile_settings_bound_auth", "get_profile_settings_bound", {
         p_username: effectiveIdentity.username,
         p_discord_id: effectiveIdentity.discordId,
       }),
-      callRpc("get_calibration_profile_bound_auth", {
+      callBoundRpc("get_calibration_profile_bound_auth", "get_calibration_profile_bound", {
         p_username: effectiveIdentity.username,
         p_discord_id: effectiveIdentity.discordId,
       }),
@@ -2544,7 +2609,7 @@ export default function PlayPage() {
     if (!silent) {
       setStateBusy(false);
     }
-  }, [applyCompetitivePayload, bootstrapAuthoritativeProfile, callRpc, fetchProfileMetaDirect]);
+  }, [applyCompetitivePayload, bootstrapAuthoritativeProfile, callBoundRpc, fetchProfileMetaDirect, findExistingUsernameByDiscordId]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -2825,7 +2890,7 @@ export default function PlayPage() {
     }
 
     if (identity) {
-      const res = await callRpc("upsert_profile_settings_bound_auth", {
+      const res = await callBoundRpc("upsert_profile_settings_bound_auth", "upsert_profile_settings_bound", {
         p_username: identity.username,
         p_discord_id: identity.discordId,
         p_user_settings: {
@@ -2892,7 +2957,7 @@ export default function PlayPage() {
       Object.entries(safeMastery).map(([name, info]) => [name, { best_time: info.bestTime }]),
     );
     const tutorialState = tutorialOverride || tutorialMeta;
-    const res = await callRpc("upsert_profile_meta_guarded_bound_auth", {
+    const res = await callBoundRpc("upsert_profile_meta_guarded_bound_auth", "upsert_profile_meta_guarded_bound", {
       p_username: identity.username,
       p_discord_id: identity.discordId,
       p_tutorial_seen: tutorialState.tutorialSeen,
@@ -2907,7 +2972,7 @@ export default function PlayPage() {
     }
 
     return res;
-  }, [callRpc, fetchProfileMetaDirect, identity, questState, tutorialMeta]);
+  }, [callBoundRpc, fetchProfileMetaDirect, identity, questState, tutorialMeta]);
 
   const recordMasteryCompletion = useCallback(async (jutsuName: string, clearTime: number) => {
     if (!Number.isFinite(clearTime) || clearTime <= 0) return null;
@@ -3410,7 +3475,7 @@ export default function PlayPage() {
     setCalibrationProfile(profile);
     if (!identity) return false;
 
-    const res = await callRpc("upsert_calibration_profile_bound_auth", {
+    const res = await callBoundRpc("upsert_calibration_profile_bound_auth", "upsert_calibration_profile_bound", {
       p_username: identity.username,
       p_discord_id: identity.discordId,
       p_calibration_profile: {
@@ -3432,7 +3497,7 @@ export default function PlayPage() {
       return false;
     }
     return true;
-  }, [callRpc, identity, openErrorModal, t]);
+  }, [callBoundRpc, identity, openErrorModal, t]);
 
   const markTutorialSeen = useCallback(async () => {
     const seenAt = tutorialMeta.tutorialSeenAt || new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -3465,7 +3530,7 @@ export default function PlayPage() {
     setStateError("");
     try {
       const previousLevel = progression.level;
-      const res = await callRpc("claim_quest_authoritative_bound_auth", {
+      const res = await callBoundRpc("claim_quest_authoritative_bound_auth", "claim_quest_authoritative_bound", {
         p_username: identity.username,
         p_discord_id: identity.discordId,
         p_scope: def.scope,
@@ -5565,6 +5630,14 @@ export default function PlayPage() {
           </div>
         )
       }
-    </div >
+    </div>
+  );
+}
+
+export default function PlayPage() {
+  return (
+    <Suspense>
+      <PlayPageInner />
+    </Suspense>
   );
 }
