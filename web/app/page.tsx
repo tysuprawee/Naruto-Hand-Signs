@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Sword, Scroll, ArrowRight, Video, Trophy, Youtube, Instagram, Shield, Info, Hand, Sparkles } from "lucide-react";
+import { Sword, Scroll, ArrowRight, Video, Trophy, Youtube, Instagram, Shield, Info, Hand } from "lucide-react";
 
 import { ModalProvider, useModal } from "./components/modal-provider";
 import FireShader from "./components/fire-shader";
@@ -126,19 +126,11 @@ export default function Home() {
 
             <div className="flex flex-wrap items-center gap-4 pt-4">
               <Link
-                href="/play"
+                href="/play?noEffects=true"
                 className="group h-14 px-8 bg-ninja-accent hover:bg-ninja-accent-glow text-white text-lg font-bold rounded-lg flex items-center gap-3 transition-all shadow-[0_0_20px_rgba(255,120,50,0.3)] hover:shadow-[0_0_30px_rgba(255,120,50,0.5)] hover:-translate-y-1"
               >
-                PLAY NOW
+                PLAY NOW (NO EFFECTS)
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </Link>
-
-              <Link
-                href="/play?noEffects=true"
-                className="group h-14 px-6 bg-zinc-800/50 hover:bg-zinc-700/70 border border-zinc-700/50 text-zinc-400 hover:text-zinc-200 text-sm font-bold rounded-lg flex items-center gap-2 transition-all"
-              >
-                <Sparkles className="w-4 h-4 opacity-50" />
-                PLAY (NO EFFECTS)
               </Link>
 
               {/* <Link
