@@ -22,8 +22,8 @@ export default function Home() {
   }, [targetDate]);
 
   const countdownLabel = timeLeft.expired
-      ? "LIVE NOW"
-      : `${pad(timeLeft.days)}D ${pad(timeLeft.hours)}H ${pad(timeLeft.minutes)}M ${pad(timeLeft.seconds)}S`;
+    ? "LIVE NOW"
+    : `${pad(timeLeft.days)}D ${pad(timeLeft.hours)}H ${pad(timeLeft.minutes)}M ${pad(timeLeft.seconds)}S`;
 
   return (
     <div className="min-h-screen bg-ninja-bg text-ninja-text font-sans selection:bg-ninja-accent selection:text-white">
@@ -125,14 +125,13 @@ export default function Home() {
             </p>
 
             <div className="flex flex-wrap items-center gap-4 pt-4">
-              {/* Play Button Removed for now */}
-              {/* <Link
+              <Link
                 href="/play"
                 className="group h-14 px-8 bg-ninja-accent hover:bg-ninja-accent-glow text-white text-lg font-bold rounded-lg flex items-center gap-3 transition-all shadow-[0_0_20px_rgba(255,120,50,0.3)] hover:shadow-[0_0_30px_rgba(255,120,50,0.5)] hover:-translate-y-1"
               >
                 PLAY NOW
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </Link> */}
+              </Link>
 
               {/* <Link
                 href="/challenge"

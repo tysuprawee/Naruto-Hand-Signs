@@ -98,7 +98,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
     "Phoenix Flower": {
         sequence: ["rat", "tiger", "dog", "ox", "hare", "tiger"],
         displayText: "PHOENIX SAGE FIRE!",
-        soundPath: null,
+        soundPath: "/sounds/phoenix_flowers.mp3",
         videoPath: null,
         effect: "fire",
         minLevel: 3,
