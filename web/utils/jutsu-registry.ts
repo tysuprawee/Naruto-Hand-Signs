@@ -7,6 +7,7 @@ export interface ComboPart {
 }
 
 export interface JutsuConfig {
+    displayName?: string;
     sequence: string[];
     displayText: string;
     soundPath?: string | null;
@@ -25,7 +26,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         videoPath: null,
         effect: "lightning",
         duration: 6.0,
-        minLevel: 5,
+        minLevel: 7,
         comboParts: [
             { name: "Shadow Clone", atStep: 3, effect: "clone" },
             { name: "Chidori", atStep: 6, effect: "lightning" },
@@ -38,7 +39,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         videoPath: null,
         effect: "rasengan",
         duration: 8.0,
-        minLevel: 5,
+        minLevel: 6,
         comboParts: [
             { name: "Shadow Clone", atStep: 3, effect: "clone" },
             { name: "Rasengan", atStep: 4, effect: "rasengan" },
@@ -60,7 +61,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         videoPath: null,
         effect: "reaper",
         duration: 7.0,
-        minLevel: 10,
+        minLevel: 12,
     },
     "Rasengan": {
         sequence: ["ram"],
@@ -87,7 +88,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         videoPath: "/effects/chidori.mp4",
         effect: "lightning",
         duration: 8.0,
-        minLevel: 5,
+        minLevel: 4,
     },
     "Water Dragon": {
         sequence: ["ox", "monkey", "hare", "rat", "boar", "bird", "ox", "horse", "bird"],
@@ -96,7 +97,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         videoPath: null,
         effect: "water",
         duration: 8.0,
-        minLevel: 8,
+        minLevel: 10,
     },
     "Phoenix Flower": {
         sequence: ["rat", "tiger", "dog", "ox", "hare", "tiger"],
@@ -108,13 +109,22 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         minLevel: 3,
     },
     Sharingan: {
-        sequence: ["snake", "ram", "monkey", "boar", "horse", "tiger"],
+        sequence: [],
         displayText: "SHARINGAN!",
         soundPath: null,
         videoPath: null,
         effect: "eye",
         duration: 10.0,
-        minLevel: 10,
+        minLevel: 8,
+    },
+    "Mangekyou Sharingan": {
+        sequence: [],
+        displayText: "MANGEKYOU SHARINGAN!",
+        soundPath: null,
+        videoPath: null,
+        effect: "eye",
+        duration: 10.0,
+        minLevel: 15,
     },
 };
 

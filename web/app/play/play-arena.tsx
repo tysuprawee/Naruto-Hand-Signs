@@ -14,6 +14,8 @@ import {
 import { KNNClassifier, normalizeHand } from "@/utils/knn";
 import { OFFICIAL_JUTSUS } from "@/utils/jutsu-registry";
 import { getXpForLevel } from "@/utils/progression";
+import FireballThreeOverlay from "@/app/play/effects/fireball-three-overlay";
+import SharinganCrowOverlay from "@/app/play/effects/sharingan-crow-overlay";
 import {
   applyTemporalVote,
   DEFAULT_FILTERS,
@@ -198,8 +200,14 @@ const HAND_FEATURE_LENGTH = 63;
 const GAME_MIN_CONFIDENCE = 0.2;
 const LOW_FPS_ASSIST_THRESHOLD = 12;
 const LOW_FPS_VOTE_TTL_MS = 1400;
+const FACE_ANCHOR_STICKY_MS = 2000;
+const DEFAULT_MOUTH_ANCHOR = { x: 0.5, y: 0.5 };
+const FIRE_MOUTH_OFFSET_X_PCT = -40.5;
+const FIRE_MOUTH_OFFSET_Y_PCT = -35;
 const CLONE_SEGMENTATION_INTERVAL_MS = 33;
 const CLONE_SPAWN_DELAY_MS = 1500;
+const COMBO_PART_EFFECT_DURATION_MS = 1700;
+const COMBO_CLONE_HOLD_DURATION_MS = 120000;
 const SHARINGAN_BLINK_THRESHOLD = 0.4;
 const SHARINGAN_BLINK_HOLD_MS = 1500;
 const SHARINGAN_BLOOD_BASE_NAME = "/eyeblood/f4aa41aa-86ca-4142-a969-2024f75bdf7b-";
@@ -959,11 +967,22 @@ export default function PlayArena({
   const isCalibrationMode = mode === "calibration";
   const isViewportFitSession = viewportFit && !isCalibrationMode;
   const jutsu = OFFICIAL_JUTSUS[jutsuName];
+  const jutsuTitle = String(jutsu?.displayName || jutsuName || "");
+  const sharinganModeName = useMemo(
+    () => normalizeLabel(jutsuTitle).includes("mangekyou") ? "Mangekyou Sharingan" : "Sharingan",
+    [jutsuTitle],
+  );
+  const sharinganChargeLabel = sharinganModeName === "Mangekyou Sharingan" ? "Mangekyou charge" : "Sharingan charge";
   const isSharinganChargedMode = useMemo(
     () => !isCalibrationMode
       && normalizeLabel(jutsuName).includes("sharingan")
       && normalizeLabel(String(jutsu?.effect || "")) === "eye",
     [isCalibrationMode, jutsu?.effect, jutsuName],
+  );
+  const shouldPrioritizeFaceAnchor = useMemo(
+    () => !isCalibrationMode
+      && normalizeLabel(String(jutsu?.effect || "")) === "fire",
+    [isCalibrationMode, jutsu?.effect],
   );
   const sequence = useMemo(() => (jutsu?.sequence ?? []).map((s) => normalizeLabel(s)), [jutsu]);
   const sequenceKey = useMemo(() => sequence.join("|"), [sequence]);
@@ -986,6 +1005,7 @@ export default function PlayArena({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const shadowCloneCanvasRef = useRef<HTMLCanvasElement>(null);
+  const sharinganForegroundCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const knnRef = useRef<KNNClassifier | null>(null);
   const handsRef = useRef<HandLandmarkerLike | null>(null);
@@ -996,6 +1016,8 @@ export default function PlayArena({
   const shadowCloneLayerCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const shadowCloneSmokeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const shadowCloneSmokeCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const sharinganForegroundLayerCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sharinganForegroundLayerCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const shadowCloneSmokeFramesRef = useRef<HTMLImageElement[]>([]);
   const shadowCloneSegmentationBusyRef = useRef(false);
   const shadowCloneLastSendAtRef = useRef(0);
@@ -1066,6 +1088,9 @@ export default function PlayArena({
   const comboRasenganTripleRef = useRef(false);
   const effectAnchorRef = useRef<EffectAnchor | null>(null);
   const faceAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const lastGoodFaceAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const lastGoodFaceAnchorAtRef = useRef(0);
+  const videoAspectRef = useRef(4 / 3);
   const sequenceStripRef = useRef<HTMLDivElement | null>(null);
   const sequenceTileRefs = useRef<Array<HTMLDivElement | null>>([]);
   const headYawRef = useRef(0);
@@ -1121,6 +1146,7 @@ export default function PlayArena({
   const [xpPopupNonce, setXpPopupNonce] = useState(0);
   const [cameraFailure, setCameraFailure] = useState<CameraRuntimeFailure>("none");
   const [sfxReady, setSfxReady] = useState(false);
+  const [videoAspect, setVideoAspect] = useState(4 / 3);
 
   const preloadSfx = useCallback((src: string): Promise<void> => {
     const path = String(src || "").trim();
@@ -1370,6 +1396,14 @@ export default function PlayArena({
     }
   }, []);
 
+  const clearSharinganForegroundOverlay = useCallback(() => {
+    const canvas = sharinganForegroundCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
   const ensureShadowCloneSmokeFrames = useCallback(() => {
     if (shadowCloneSmokeFramesRef.current.length > 0) return;
     const frames: HTMLImageElement[] = [];
@@ -1382,7 +1416,72 @@ export default function PlayArena({
   }, []);
 
   const drawShadowCloneFrame = useCallback((results: SelfieSegmentationResultShape) => {
-    if (!showJutsuEffectRef.current || normalizeLabel(activeEffectRef.current) !== "clone") {
+    const effectToken = normalizeLabel(activeEffectRef.current);
+    const comboClonePersistActive = showJutsuEffectRef.current
+      && comboCloneHoldRef.current
+      && (effectToken === "lightning" || effectToken === "rasengan");
+    const cloneEffectActive = showJutsuEffectRef.current && (effectToken === "clone" || comboClonePersistActive);
+    const sharinganEffectActive = showJutsuEffectRef.current && effectToken === "eye";
+    if (!cloneEffectActive && !sharinganEffectActive) {
+      clearShadowCloneOverlay(false);
+      clearSharinganForegroundOverlay();
+      return;
+    }
+
+    if (sharinganEffectActive) {
+      const foregroundCanvas = sharinganForegroundCanvasRef.current;
+      const foregroundCtx = foregroundCanvas?.getContext("2d") ?? null;
+      if (foregroundCanvas && foregroundCtx && foregroundCanvas.width > 0 && foregroundCanvas.height > 0) {
+        let foregroundLayerCanvas = sharinganForegroundLayerCanvasRef.current;
+        let foregroundLayerCtx = sharinganForegroundLayerCtxRef.current;
+        if (!foregroundLayerCanvas || !foregroundLayerCtx) {
+          foregroundLayerCanvas = document.createElement("canvas");
+          foregroundLayerCtx = foregroundLayerCanvas.getContext("2d");
+          sharinganForegroundLayerCanvasRef.current = foregroundLayerCanvas;
+          sharinganForegroundLayerCtxRef.current = foregroundLayerCtx;
+        }
+        if (foregroundLayerCanvas && foregroundLayerCtx) {
+          if (
+            foregroundLayerCanvas.width !== foregroundCanvas.width
+            || foregroundLayerCanvas.height !== foregroundCanvas.height
+          ) {
+            foregroundLayerCanvas.width = foregroundCanvas.width;
+            foregroundLayerCanvas.height = foregroundCanvas.height;
+          }
+
+          foregroundLayerCtx.save();
+          foregroundLayerCtx.clearRect(0, 0, foregroundLayerCanvas.width, foregroundLayerCanvas.height);
+          foregroundLayerCtx.translate(foregroundLayerCanvas.width, 0);
+          foregroundLayerCtx.scale(-1, 1);
+          foregroundLayerCtx.drawImage(
+            results.segmentationMask,
+            0,
+            0,
+            foregroundLayerCanvas.width,
+            foregroundLayerCanvas.height,
+          );
+          foregroundLayerCtx.globalCompositeOperation = "source-in";
+          foregroundLayerCtx.drawImage(
+            results.image,
+            0,
+            0,
+            foregroundLayerCanvas.width,
+            foregroundLayerCanvas.height,
+          );
+          foregroundLayerCtx.restore();
+          foregroundLayerCtx.globalCompositeOperation = "source-over";
+
+          foregroundCtx.save();
+          foregroundCtx.clearRect(0, 0, foregroundCanvas.width, foregroundCanvas.height);
+          foregroundCtx.drawImage(foregroundLayerCanvas, 0, 0, foregroundCanvas.width, foregroundCanvas.height);
+          foregroundCtx.restore();
+        }
+      }
+    } else {
+      clearSharinganForegroundOverlay();
+    }
+
+    if (!cloneEffectActive) {
       clearShadowCloneOverlay(false);
       return;
     }
@@ -1535,7 +1634,7 @@ export default function PlayArena({
     drawCloneWithSmoke(centeredX - animatedOffset, leftAlpha);
     drawCloneWithSmoke(centeredX + animatedOffset, rightAlpha);
     overlayCtx.restore();
-  }, [clearShadowCloneOverlay]);
+  }, [clearShadowCloneOverlay, clearSharinganForegroundOverlay]);
 
   const ensureSelfieSegmentation = useCallback(async (): Promise<SelfieSegmentationLike | null> => {
     if (selfieSegmentationRef.current) return selfieSegmentationRef.current;
@@ -1571,8 +1670,16 @@ export default function PlayArena({
       shadowCloneBlinkPhasePrevRef.current = null;
       ensureShadowCloneSmokeFrames();
       void ensureSelfieSegmentation();
-    } else {
+      clearSharinganForegroundOverlay();
+    } else if (effectToken === "eye") {
       clearShadowCloneOverlay(true);
+      void ensureSelfieSegmentation();
+    } else {
+      const keepCloneVisible = comboCloneHoldRef.current && (effectToken === "lightning" || effectToken === "rasengan");
+      if (!keepCloneVisible) {
+        clearShadowCloneOverlay(true);
+      }
+      clearSharinganForegroundOverlay();
     }
     setActiveEffect(effectToken);
     setShowJutsuEffect(true);
@@ -1583,13 +1690,20 @@ export default function PlayArena({
       setShowJutsuEffect(false);
       setActiveEffect("");
       clearShadowCloneOverlay(true);
+      clearSharinganForegroundOverlay();
       setComboTripleEffect("none");
       comboCloneHoldRef.current = false;
       comboChidoriTripleRef.current = false;
       comboRasenganTripleRef.current = false;
       effectTimerRef.current = null;
     }, Math.max(600, durationMs));
-  }, [clearShadowCloneOverlay, ensureSelfieSegmentation, ensureShadowCloneSmokeFrames, noEffects]);
+  }, [
+    clearShadowCloneOverlay,
+    clearSharinganForegroundOverlay,
+    ensureSelfieSegmentation,
+    ensureShadowCloneSmokeFrames,
+    noEffects,
+  ]);
 
   const queueEffect = useCallback((effectName: string, delayMs: number, durationMs: number) => {
     const timer = window.setTimeout(() => {
@@ -1786,15 +1900,18 @@ export default function PlayArena({
     setShowJutsuEffect(false);
     setActiveEffect("");
     clearShadowCloneOverlay(true);
+    clearSharinganForegroundOverlay();
     setPhoenixFireballs([]);
     setXpPopupText("");
     setFaceAnchor(null);
+    lastGoodFaceAnchorRef.current = null;
+    lastGoodFaceAnchorAtRef.current = 0;
     setHeadYaw(0);
     setHeadPitch(0);
     clearCameraFailure();
     videoStallSinceRef.current = 0;
     lastVideoMediaTimeRef.current = -1;
-  }, [clearCameraFailure, clearShadowCloneOverlay, resetProofState]);
+  }, [clearCameraFailure, clearShadowCloneOverlay, clearSharinganForegroundOverlay, resetProofState]);
 
   const finalizeCalibrationRun = useCallback(async () => {
     if (!isCalibrationMode) return;
@@ -2137,12 +2254,21 @@ export default function PlayArena({
   useEffect(() => {
     const effectNow = normalizeLabel(String(activeEffect || jutsu?.effect || ""));
     const cloneEffectActive = showJutsuEffect && !noEffects && effectNow === "clone";
-    if (!cloneEffectActive) {
+    const comboClonePersistActive = showJutsuEffect
+      && !noEffects
+      && comboCloneHoldRef.current
+      && (effectNow === "lightning" || effectNow === "rasengan");
+    const sharinganEffectActive = showJutsuEffect && !noEffects && effectNow === "eye";
+    const needsSegmentation = cloneEffectActive || comboClonePersistActive || sharinganEffectActive;
+    if (!needsSegmentation) {
       clearShadowCloneOverlay(true);
+      clearSharinganForegroundOverlay();
       return;
     }
 
-    ensureShadowCloneSmokeFrames();
+    if (cloneEffectActive || comboClonePersistActive) {
+      ensureShadowCloneSmokeFrames();
+    }
     void ensureSelfieSegmentation();
 
     let cancelled = false;
@@ -2152,13 +2278,26 @@ export default function PlayArena({
       raf = requestAnimationFrame(tick);
       if (cancelled) return;
       const video = videoRef.current;
-      const overlayCanvas = shadowCloneCanvasRef.current;
-      if (!video || !overlayCanvas || video.readyState < 2) return;
+      if (!video || video.readyState < 2) return;
 
-      if (overlayCanvas.width !== video.videoWidth || overlayCanvas.height !== video.videoHeight) {
-        overlayCanvas.width = video.videoWidth;
-        overlayCanvas.height = video.videoHeight;
-        clearShadowCloneOverlay(false);
+      if (cloneEffectActive || comboClonePersistActive) {
+        const overlayCanvas = shadowCloneCanvasRef.current;
+        if (!overlayCanvas) return;
+        if (overlayCanvas.width !== video.videoWidth || overlayCanvas.height !== video.videoHeight) {
+          overlayCanvas.width = video.videoWidth;
+          overlayCanvas.height = video.videoHeight;
+          clearShadowCloneOverlay(false);
+        }
+      }
+
+      if (sharinganEffectActive) {
+        const foregroundCanvas = sharinganForegroundCanvasRef.current;
+        if (!foregroundCanvas) return;
+        if (foregroundCanvas.width !== video.videoWidth || foregroundCanvas.height !== video.videoHeight) {
+          foregroundCanvas.width = video.videoWidth;
+          foregroundCanvas.height = video.videoHeight;
+          clearSharinganForegroundOverlay();
+        }
       }
 
       if (shadowCloneSegmentationBusyRef.current) return;
@@ -2193,10 +2332,12 @@ export default function PlayArena({
       shadowCloneSegmentationBusyRef.current = false;
       shadowCloneLastSendAtRef.current = 0;
       clearShadowCloneOverlay(false);
+      clearSharinganForegroundOverlay();
     };
   }, [
     activeEffect,
     clearShadowCloneOverlay,
+    clearSharinganForegroundOverlay,
     ensureSelfieSegmentation,
     ensureShadowCloneSmokeFrames,
     jutsu?.effect,
@@ -2379,7 +2520,7 @@ export default function PlayArena({
         setDetectorError(handErrors.length > 0 ? handErrors.slice(0, 2).join(" | ") : "");
         if (cancelled) return;
 
-        if ((isSharinganChargedMode || !isLikelyLowPowerMobile) && FaceLandmarker?.createFromOptions) {
+        if ((isSharinganChargedMode || shouldPrioritizeFaceAnchor || !isLikelyLowPowerMobile) && FaceLandmarker?.createFromOptions) {
           const faceModelPath = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
           const faceCandidates: Array<"GPU" | "CPU"> = ["GPU", "CPU"];
           for (const delegate of faceCandidates) {
@@ -2491,8 +2632,11 @@ export default function PlayArena({
       shadowCloneLayerCtxRef.current = null;
       shadowCloneSmokeCanvasRef.current = null;
       shadowCloneSmokeCtxRef.current = null;
+      sharinganForegroundLayerCanvasRef.current = null;
+      sharinganForegroundLayerCtxRef.current = null;
       shadowCloneSmokeFramesRef.current = [];
       clearShadowCloneOverlay(true);
+      clearSharinganForegroundOverlay();
       if (comboCueTimerRef.current) {
         window.clearTimeout(comboCueTimerRef.current);
         comboCueTimerRef.current = null;
@@ -2548,7 +2692,17 @@ export default function PlayArena({
       sampleCtxRef.current = null;
       sampleCanvasRef.current = null;
     };
-  }, [cameraIdx, clearCameraFailure, clearShadowCloneOverlay, isLikelyLowPowerMobile, isSharinganChargedMode, markCameraFailure, resolutionIdx]);
+  }, [
+    cameraIdx,
+    clearCameraFailure,
+    clearShadowCloneOverlay,
+    clearSharinganForegroundOverlay,
+    isLikelyLowPowerMobile,
+    isSharinganChargedMode,
+    shouldPrioritizeFaceAnchor,
+    markCameraFailure,
+    resolutionIdx,
+  ]);
 
   useEffect(() => {
     if (phaseRef.current === "loading" || phaseRef.current === "error") return;
@@ -2674,6 +2828,13 @@ export default function PlayArena({
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
       }
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        const nextAspect = video.videoWidth / video.videoHeight;
+        if (Number.isFinite(nextAspect) && Math.abs(nextAspect - videoAspectRef.current) > 0.01) {
+          videoAspectRef.current = nextAspect;
+          setVideoAspect(nextAspect);
+        }
+      }
 
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
@@ -2715,6 +2876,8 @@ export default function PlayArena({
         setDetectedConfidence(0);
         setEffectAnchor(null);
         setFaceAnchor(null);
+        lastGoodFaceAnchorRef.current = null;
+        lastGoodFaceAnchorAtRef.current = 0;
         setHeadYaw(0);
         setHeadPitch(0);
         return;
@@ -2744,6 +2907,8 @@ export default function PlayArena({
         setDetectedConfidence(0);
         setEffectAnchor(null);
         setFaceAnchor(null);
+        lastGoodFaceAnchorRef.current = null;
+        lastGoodFaceAnchorAtRef.current = 0;
         setHeadYaw(0);
         setHeadPitch(0);
         return;
@@ -2808,6 +2973,10 @@ export default function PlayArena({
         }
       }
       setFaceAnchor(faceMotion.anchor);
+      if (faceMotion.anchor) {
+        lastGoodFaceAnchorRef.current = faceMotion.anchor;
+        lastGoodFaceAnchorAtRef.current = nowMs;
+      }
       setHeadYaw(faceMotion.yaw);
       setHeadPitch(faceMotion.pitch);
       const handAnchor = computeEffectAnchor(result.landmarks ?? []);
@@ -2872,7 +3041,7 @@ export default function PlayArena({
         setRawDetectedLabel("Eyes closed");
         setRawDetectedConfidence(holdRatio);
         setVoteHits(Math.min(VOTE_WINDOW_SIZE, Math.ceil(holdRatio * VOTE_WINDOW_SIZE)));
-        setDetectedLabel("Sharingan charge");
+        setDetectedLabel(sharinganChargeLabel);
         setDetectedConfidence(holdRatio);
 
         if (holdMs < SHARINGAN_BLINK_HOLD_MS) {
@@ -3073,6 +3242,8 @@ export default function PlayArena({
       }
 
       if (Array.isArray(jutsu?.comboParts) && jutsu.comboParts.length > 0) {
+        const finalEffectToken = normalizeLabel(String(jutsu?.effect || ""));
+        const isFinalStep = nextStep >= sequence.length;
         for (const part of jutsu.comboParts) {
           if (nextStep === part.atStep) {
             const partEffect = normalizeLabel(String(part.effect || ""));
@@ -3095,11 +3266,15 @@ export default function PlayArena({
             playSfx("/sounds/complete.mp3", 0.7);
             const partName = String(part.name || jutsuName);
             const partEffectName = String(part.effect || "").toLowerCase();
-            triggerJutsuSignature(partName, partEffectName, { volume: 0.95 });
-            if (normalizeLabel(partEffectName) === "clone") {
-              queueEffect(partEffectName, CLONE_SPAWN_DELAY_MS, 1700);
-            } else {
-              triggerJutsuEffect(partEffectName, 1700);
+            const partEffectToken = normalizeLabel(partEffectName);
+            const shouldDeferPartCastToFinish = isFinalStep && partEffectToken === finalEffectToken;
+            if (!shouldDeferPartCastToFinish) {
+              triggerJutsuSignature(partName, partEffectName, { volume: 0.95 });
+              if (partEffectToken === "clone") {
+                triggerJutsuEffect(partEffectName, COMBO_CLONE_HOLD_DURATION_MS);
+              } else {
+                triggerJutsuEffect(partEffectName, COMBO_PART_EFFECT_DURATION_MS);
+              }
             }
             if (isRankMode) {
               appendProofEvent("combo_trigger", nowMs, {
@@ -3128,12 +3303,13 @@ export default function PlayArena({
     isCalibrationMode,
     isRankMode,
     jutsu?.comboParts,
+    jutsu?.effect,
     jutsuName,
     playSfx,
     pushComboCue,
-    queueEffect,
     restrictedSigns,
     sequence,
+    sharinganChargeLabel,
     isSharinganChargedMode,
     isLikelyLowPowerMobile,
     triggerJutsuSignature,
@@ -3204,9 +3380,14 @@ export default function PlayArena({
       return;
     }
 
-    const anchor = faceAnchorRef.current || effectAnchorRef.current;
-    const cx = anchor?.x ?? 0.5;
-    const cy = anchor?.y ?? 0.68;
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const stickyFaceAnchor = lastGoodFaceAnchorRef.current
+      && (nowMs - lastGoodFaceAnchorAtRef.current) <= FACE_ANCHOR_STICKY_MS
+      ? lastGoodFaceAnchorRef.current
+      : null;
+    const anchor = faceAnchorRef.current || stickyFaceAnchor || DEFAULT_MOUTH_ANCHOR;
+    const cx = anchor.x;
+    const cy = anchor.y;
     const count = 5;
     let balls: PhoenixBall[] = Array.from({ length: count }, (_, i) => {
       const spread = ((i / Math.max(1, count - 1)) * 2) - 1;
@@ -3353,11 +3534,11 @@ export default function PlayArena({
           : phase === "active"
             ? `CLOSE BOTH EYES • ${sharinganHoldSeconds} / ${sharinganTargetSeconds}`
             : `TRIGGER: CLOSE BOTH EYES FOR ${sharinganTargetSeconds}`
-    : phase === "casting"
-      ? `CASTING • ${String(jutsu?.displayText || "JUTSU").toUpperCase()}`
-      : phase === "countdown"
-        ? "GET READY..."
-        : `NEXT SIGN: ${nextSign}`;
+      : phase === "casting"
+        ? `CASTING • ${String(jutsu?.displayText || "JUTSU").toUpperCase()}`
+        : phase === "countdown"
+          ? "GET READY..."
+          : `NEXT SIGN: ${nextSign}`;
   const iconBarStatusColorClass = isCalibrationMode
     ? "text-ninja-accent"
     : phase === "casting"
@@ -3397,25 +3578,6 @@ export default function PlayArena({
       : null;
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
   const sharinganBloodFramePath = `${SHARINGAN_BLOOD_BASE_NAME}${sharinganBloodFrame}.png`;
-  const sharinganSparks = useMemo(() => {
-    // Deterministic pseudo-random spark layout for Sharingan FX.
-    let seed = 1337;
-    const rand = () => {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed / 4294967296;
-    };
-    return Array.from({ length: 26 }, (_, idx) => ({
-      id: idx,
-      left: `${(8 + (rand() * 84)).toFixed(2)}%`,
-      top: `${(8 + (rand() * 84)).toFixed(2)}%`,
-      size: `${(2 + rand() * 6).toFixed(2)}px`,
-      delay: `${(rand() * 1.1).toFixed(2)}s`,
-      duration: `${(1.9 + rand() * 1.8).toFixed(2)}s`,
-      driftX: `${(-18 + rand() * 36).toFixed(2)}px`,
-      driftY: `${(-22 + rand() * 30).toFixed(2)}px`,
-      alpha: Number((0.28 + rand() * 0.42).toFixed(2)),
-    }));
-  }, []);
   const showSpeedHud = isRankMode && phase !== "loading" && phase !== "error";
   const showSignChip = phase === "active"
     && !isCalibrationMode
@@ -3434,14 +3596,25 @@ export default function PlayArena({
   const cameraStatusText = cameraFailure === "none" ? "OK" : cameraFailure.toUpperCase();
   const effectAnchorX = Math.round((effectAnchor?.x ?? 0.5) * 1000) / 10;
   const effectAnchorY = Math.round((effectAnchor?.y ?? 0.64) * 1000) / 10;
-  const fireAnchorX = Math.round(((faceAnchor?.x ?? effectAnchor?.x ?? 0.5) * 1000)) / 10;
-  const fireAnchorY = Math.round(((faceAnchor?.y ?? effectAnchor?.y ?? 0.64) * 1000)) / 10;
-  const fireAimYaw = clamp(headYaw, -1, 1);
-  const fireAimPitch = clamp(headPitch, -1, 1);
-  const fireOffsetX = Math.round(fireAimYaw * 90) / 10;
-  const fireOffsetY = Math.round(fireAimPitch * 65) / 10;
+  const faceAnchorSampleNowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const stickyFaceAnchor = lastGoodFaceAnchorRef.current
+    && (faceAnchorSampleNowMs - lastGoodFaceAnchorAtRef.current) <= FACE_ANCHOR_STICKY_MS
+    ? lastGoodFaceAnchorRef.current
+    : null;
+  const fireFaceAnchor = faceAnchor ?? stickyFaceAnchor ?? DEFAULT_MOUTH_ANCHOR;
+  const fireAnchorX = Math.round((clamp(fireFaceAnchor.x, 0.04, 0.96) * 1000)) / 10;
+  const fireAnchorY = Math.round((clamp(fireFaceAnchor.y, 0.08, 0.92) * 1000)) / 10;
+  const fireAimYaw = clamp(-headYaw, -1, 1);
+  const fireAimPitch = clamp(-headPitch, -1, 1);
+  const fireAimShiftXPct = fireAimYaw * 4.2;
+  const fireAimShiftYPct = fireAimPitch * 3.6;
+  const fireOffsetX = FIRE_MOUTH_OFFSET_X_PCT;
+  const fireOffsetY = FIRE_MOUTH_OFFSET_Y_PCT;
+  const fireFinalX = Math.round((clamp((fireAnchorX + fireOffsetX + fireAimShiftXPct) / 100, 0, 1) * 1000)) / 10;
+  const fireFinalY = Math.round((clamp((fireAnchorY + fireOffsetY + fireAimShiftYPct) / 100, 0, 1) * 1000)) / 10;
   const fireBlastWidth = Math.max(140, Math.min(250, Math.round(170 + (Math.abs(fireAimYaw) * 64))));
   const fireBlastHeight = Math.max(140, Math.min(250, Math.round(170 + (Math.abs(fireAimPitch) * 54))));
+  const fireThreeSizePx = Math.max(260, Math.min(620, Math.round((fireBlastWidth + fireBlastHeight) * 1.45)));
   const detectorErrorShort = detectorError
     ? `${detectorError.slice(0, 120)}${detectorError.length > 120 ? "..." : ""}`
     : "none";
@@ -3516,7 +3689,7 @@ export default function PlayArena({
     if (Math.abs(strip.scrollLeft - clampedLeft) < 2) return;
     strip.scrollTo({ left: clampedLeft, behavior: "smooth" });
   }, [iconProgressStep, isCalibrationMode, isViewportFitSession, sequence.length, sequenceKey]);
-  const tripleOffsets = comboTripleEffect !== "none" ? [-28, 0, 28] : [0];
+  const tripleOffsets = comboTripleEffect !== "none" ? [-24, 24] : [0];
   const arenaStageMaxWidthClass = isViewportFitSession ? "max-w-[1040px]" : "max-w-[900px] lg:max-w-[680px] xl:max-w-[720px]";
   const topControlChips = (
     <>
@@ -3557,7 +3730,7 @@ export default function PlayArena({
             {isCalibrationMode ? "Calibration Session" : isRankMode ? "Rank Session" : "Free Session"}
           </p>
           <h2 className="text-2xl font-black tracking-tight text-white md:text-3xl">
-            {isCalibrationMode ? "Detection Calibration" : jutsuName}
+            {isCalibrationMode ? "Detection Calibration" : jutsuTitle}
           </h2>
           <p className="mt-1 text-xs text-zinc-300">
             {isCalibrationMode
@@ -3680,6 +3853,14 @@ export default function PlayArena({
                   <div>AUTO IDLE DIST: ON (thr=1.8)</div>
                   <div>{diagCalibrationText}</div>
                   <div>RAW: {rawDetectedLabel} {rawDetectedConfidencePct}%</div>
+                  {effectLabel === "fire" && (
+                    <>
+                      <div>MOUTH: X {fireAnchorX.toFixed(1)}% • Y {fireAnchorY.toFixed(1)}%</div>
+                      <div>FIRE OFF: X {fireOffsetX.toFixed(1)}% • Y {fireOffsetY.toFixed(1)}%</div>
+                      <div>FIRE AIM: X {fireAimYaw.toFixed(2)} • Y {fireAimPitch.toFixed(2)}</div>
+                      <div>FIRE POS: X {fireFinalX.toFixed(1)}% • Y {fireFinalY.toFixed(1)}%</div>
+                    </>
+                  )}
                   <div>STATE: {phaseLabel}</div>
                   <div className="break-words">
                     LOADED SIGNS: {loadedDatasetLabels.length > 0 ? loadedDatasetLabels.join(", ") : "(none)"}
@@ -3700,32 +3881,18 @@ export default function PlayArena({
                   {effectLabel === "eye" && (
                     <div className="absolute inset-0 animate-[sharinganFadeIn_650ms_ease-out]">
                       <Image
-                        src="/red.jpg"
-                        alt="Sharingan red background"
+                        src="/effects/m_sharingan.jpg"
+                        alt={`${sharinganModeName} background`}
                         fill
                         sizes="(max-width: 1024px) 100vw, 900px"
-                        className="object-cover opacity-85"
+                        className="object-cover opacity-92"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-br from-red-900/45 via-rose-600/18 to-transparent" />
-                      <div className="absolute inset-0 bg-black/34" />
-                      {sharinganSparks.map((spark) => (
-                        <span
-                          key={`sharingan-spark-${spark.id}`}
-                          className="absolute rounded-full bg-red-300/80 blur-[1px]"
-                          style={{
-                            left: spark.left,
-                            top: spark.top,
-                            width: spark.size,
-                            height: spark.size,
-                            opacity: spark.alpha,
-                            animationName: "sharinganSparkDrift",
-                            animationDuration: spark.duration,
-                            animationDelay: spark.delay,
-                            animationIterationCount: "infinite",
-                            animationTimingFunction: "ease-in-out",
-                          }}
-                        />
-                      ))}
+                      <SharinganCrowOverlay lowPower={isLikelyLowPowerMobile} />
+                      <div className="absolute inset-0 bg-gradient-to-br from-red-950/45 via-rose-700/18 to-black/40" />
+                      <canvas
+                        ref={sharinganForegroundCanvasRef}
+                        className="absolute inset-0 z-[3] h-full w-full object-cover"
+                      />
                       {sharinganVisualPose && (
                         <>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -3797,13 +3964,25 @@ export default function PlayArena({
                   {effectLabel === "fire" && !isPhoenixFireEffect && (
                     <>
                       <div className="absolute inset-0 bg-gradient-to-t from-orange-700/35 via-amber-500/20 to-transparent" />
+                      <FireballThreeOverlay
+                        leftPct={fireAnchorX}
+                        topPct={fireAnchorY}
+                        offsetXPct={fireOffsetX}
+                        offsetYPct={fireOffsetY}
+                        aimYaw={fireAimYaw}
+                        aimPitch={fireAimPitch}
+                        sizePx={fireThreeSizePx}
+                        lowPower={isLikelyLowPowerMobile}
+                        mirroredInput={false}
+                        sourceAspect={videoAspect}
+                      />
                       <div
                         className="absolute rounded-full bg-orange-400/45 blur-2xl"
                         style={{
                           width: `${fireBlastWidth}px`,
                           height: `${fireBlastHeight}px`,
-                          left: `calc(${fireAnchorX}% + ${fireOffsetX}%)`,
-                          top: `calc(${fireAnchorY}% + ${fireOffsetY}%)`,
+                          left: `calc(${fireAnchorX}% + ${(fireOffsetX + fireAimShiftXPct).toFixed(2)}%)`,
+                          top: `calc(${fireAnchorY}% + ${(fireOffsetY + fireAimShiftYPct).toFixed(2)}%)`,
                           transform: "translate(-50%, -50%)",
                         }}
                       />
@@ -3812,8 +3991,8 @@ export default function PlayArena({
                         style={{
                           width: `${Math.round(fireBlastWidth * 0.72)}px`,
                           height: `${Math.round(fireBlastHeight * 0.72)}px`,
-                          left: `calc(${fireAnchorX}% + ${(fireOffsetX * 1.2)}%)`,
-                          top: `calc(${fireAnchorY}% + ${(fireOffsetY * 1.2)}%)`,
+                          left: `calc(${fireAnchorX}% + ${((fireOffsetX * 1.2) + (fireAimShiftXPct * 1.25)).toFixed(2)}%)`,
+                          top: `calc(${fireAnchorY}% + ${((fireOffsetY * 1.2) + (fireAimShiftYPct * 1.2)).toFixed(2)}%)`,
                           transform: "translate(-50%, -50%)",
                         }}
                       />
@@ -3929,18 +4108,19 @@ export default function PlayArena({
               {phase === "ready" && isRankMode && (
                 <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/58 px-4">
                   <div className="w-full max-w-md rounded-2xl border border-orange-300/45 bg-zinc-950/80 p-5 text-center shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
-                    <p className="text-2xl font-black text-orange-200">PRESS [SPACE] TO START</p>
-                    <p className="mt-2 text-sm text-zinc-200">
+                    <p className="text-2xl font-black text-orange-200">READY TO START</p>
+                    <p className="mt-1 text-xs font-bold uppercase tracking-widest text-zinc-400">Press [Space] or Tap Button</p>
+                    <p className="mt-3 text-sm text-zinc-200">
                       {isSharinganChargedMode
-                        ? "Close both eyes and hold to trigger Sharingan."
+                        ? `Close both eyes and hold to trigger ${sharinganModeName}.`
                         : "Perform the sequence as fast as possible."}
                     </p>
-                    <div className="mt-3 text-left text-xs text-zinc-300">
+                    <div className="mt-4 text-left text-xs text-zinc-300">
                       <p>1. Timer starts on GO.</p>
                       {isSharinganChargedMode ? (
                         <>
                           <p>2. Close both eyes and hold for 1.5 seconds.</p>
-                          <p>3. Timer stops when Sharingan triggers.</p>
+                          <p>3. Timer stops when {sharinganModeName} triggers.</p>
                         </>
                       ) : (
                         <>
@@ -3949,6 +4129,13 @@ export default function PlayArena({
                         </>
                       )}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => startRun()}
+                      className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-orange-500 text-sm font-black uppercase tracking-widest text-white shadow-[0_8px_20px_rgba(249,115,22,0.35)] transition-all hover:bg-orange-400 active:scale-95"
+                    >
+                      START RUN
+                    </button>
                   </div>
                 </div>
               )}
@@ -3997,8 +4184,26 @@ export default function PlayArena({
                     {!!submitDetail && <p className="mt-1 text-xs text-zinc-200">{submitDetail}</p>}
                     {!!rankInfo && <p className="mt-1 text-xs font-bold text-amber-200">{rankInfo}</p>}
                     {isRankMode && (
-                      <p className="mt-4 text-[11px] uppercase tracking-[0.14em] text-zinc-400">
-                        Press Space to ready up • Esc to exit
+                      <div className="mt-6 grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleBackAction?.()}
+                          className="flex h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900 text-xs font-black uppercase tracking-widest text-zinc-300 hover:bg-zinc-800"
+                        >
+                          EXIT
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => startRun()}
+                          className="flex h-11 items-center justify-center rounded-xl bg-orange-500 text-xs font-black uppercase tracking-widest text-white shadow-[0_4px_12px_rgba(249,115,22,0.25)] hover:bg-orange-400"
+                        >
+                          NEW RUN
+                        </button>
+                      </div>
+                    )}
+                    {isRankMode && (
+                      <p className="mt-4 text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                        Space to retry • Esc to exit
                       </p>
                     )}
                   </div>

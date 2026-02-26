@@ -211,6 +211,10 @@ interface AlertModalState {
   buttonText: string;
 }
 
+interface JutsuInfoModalState {
+  name: string;
+}
+
 interface ConnectionLostState {
   title: string;
   lines: string[];
@@ -277,7 +281,32 @@ const JUTSU_TEXTURES: Record<string, string> = {
   Chidori: "/pics/textured_buttons/chidori.jpg",
   "Water Dragon": "/pics/textured_buttons/water_dragon.jpg",
   Sharingan: "/pics/textured_buttons/sharingan.jpg",
+  "Mangekyou Sharingan": "/effects/m_sharingan.jpg",
   "Reaper Death Seal": "/pics/textured_buttons/reaper_death.jpg",
+};
+
+const JUTSU_INFO_SUMMARIES: Record<string, string> = {
+  "Shadow Clone": "Create solid clones to overwhelm your target and set up combo pressure.",
+  Rasengan: "Concentrate chakra into a compressed sphere and drive it through the opponent.",
+  Fireball: "A classic Uchiha fire release technique with wide area pressure and high impact.",
+  "Phoenix Flower": "Rapid fire-style projectiles that spread to force movement and openings.",
+  Chidori: "Lightning chakra focused into a piercing strike with explosive speed.",
+  "Water Dragon": "A long-form water release sequence that summons a crushing dragon torrent.",
+  Sharingan: "Heightened visual perception to read movement and react ahead of time.",
+  "Mangekyou Sharingan": "An evolved ocular state with advanced visual control and pressure effects.",
+  "Reaper Death Seal": "Forbidden sealing art with a heavy cost and extreme finishing power.",
+  "Shadow Clone + Rasengan Combo": "Deploy clones first, then collapse the angle with synchronized Rasengan.",
+  "Shadow Clone + Chidori Combo": "Split with clones, then chain into lightning finish from converging lanes.",
+};
+
+const JUTSU_EFFECT_LABELS: Record<string, string> = {
+  fire: "Fire Style",
+  lightning: "Lightning Style",
+  clone: "Clone Technique",
+  water: "Water Style",
+  eye: "Dojutsu",
+  rasengan: "Chakra Sphere",
+  reaper: "Sealing Art",
 };
 
 const MASTERY_ICON_BY_TIER: Record<"none" | "bronze" | "silver" | "gold", string> = {
@@ -473,6 +502,14 @@ function resolveCanonicalJutsuName(raw: unknown): string {
     (name) => normalizeJutsuNameToken(name) === normalized,
   );
   return normalizedMatch || value;
+}
+
+function getJutsuUiName(raw: unknown): string {
+  const canonical = resolveCanonicalJutsuName(raw);
+  if (canonical && OFFICIAL_JUTSUS[canonical]) {
+    return String(OFFICIAL_JUTSUS[canonical].displayName || canonical);
+  }
+  return String(raw || "");
 }
 
 function normalizeDiscordUsername(raw: unknown): string {
@@ -870,6 +907,15 @@ function getRunXpGain(jutsuName: string): number {
 
 function normalizeSignToken(value: unknown): string {
   return String(value || "").trim().toLowerCase();
+}
+
+function formatSignLabel(raw: unknown): string {
+  return String(raw || "")
+    .toLowerCase()
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
 }
 
 function getUnlockedJutsusBetweenLevels(previousLevel: number, newLevel: number): string[] {
@@ -1445,6 +1491,7 @@ function PlayPageInner() {
   const [connectionLostState, setConnectionLostState] = useState<ConnectionLostState | null>(null);
   const [errorModal, setErrorModal] = useState<ErrorModalState | null>(null);
   const [alertModal, setAlertModal] = useState<AlertModalState | null>(null);
+  const [jutsuInfoModal, setJutsuInfoModal] = useState<JutsuInfoModalState | null>(null);
   const [announcements, setAnnouncements] = useState<AnnouncementRow[]>([]);
   const [announcementIndex, setAnnouncementIndex] = useState(0);
   const [showAnnouncements, setShowAnnouncements] = useState(false);
@@ -1565,6 +1612,20 @@ function PlayPageInner() {
   }, []);
 
   const selectedJutsuConfig = OFFICIAL_JUTSUS[selectedJutsu] || null;
+  const activeJutsuInfoName = jutsuInfoModal?.name ? resolveCanonicalJutsuName(jutsuInfoModal.name) : "";
+  const activeJutsuInfoConfig = activeJutsuInfoName ? OFFICIAL_JUTSUS[activeJutsuInfoName] || null : null;
+  const activeJutsuInfoUnlocked = Boolean(
+    activeJutsuInfoConfig && progression.level >= activeJutsuInfoConfig.minLevel,
+  );
+  const activeJutsuInfoUiName = activeJutsuInfoName ? getJutsuUiName(activeJutsuInfoName) : "";
+  const activeJutsuInfoTexture = activeJutsuInfoName ? (JUTSU_TEXTURES[activeJutsuInfoName] || "") : "";
+  const activeJutsuInfoSummary = activeJutsuInfoName
+    ? JUTSU_INFO_SUMMARIES[activeJutsuInfoName]
+    || "A hidden leaf technique. Study the sequence, maintain stable hands, then execute with timing."
+    : "";
+  const activeJutsuInfoEffectLabel = activeJutsuInfoConfig?.effect
+    ? (JUTSU_EFFECT_LABELS[activeJutsuInfoConfig.effect] || formatSignLabel(activeJutsuInfoConfig.effect))
+    : "None";
   const orderedJutsuNames = useMemo(() => (
     Object.entries(OFFICIAL_JUTSUS)
       .sort((a, b) => a[1].minLevel - b[1].minLevel || a[0].localeCompare(b[0]))
@@ -2141,6 +2202,39 @@ function PlayPageInner() {
     playUiSfx("/sounds/each.mp3", 0.45);
   }, [playUiSfx, selectedJutsu, unlockedJutsuNames]);
 
+  const handleOpenJutsuInfo = useCallback((name: string, unlocked: boolean) => {
+    const canonical = resolveCanonicalJutsuName(name);
+    if (!canonical || !OFFICIAL_JUTSUS[canonical]) return;
+    playUiClickSfx();
+    if (unlocked) {
+      setSelectedJutsu(canonical);
+    }
+    setJutsuInfoModal({ name: canonical });
+  }, [playUiClickSfx]);
+
+  const handleLibraryStart = useCallback(() => {
+    playUiClickSfx();
+    if (!stateReady || !identityLinked || actionBusy) return;
+    setJutsuInfoModal(null);
+    if (needsCalibrationGate) {
+      setCalibrationReturnView("jutsu_library");
+      setView("calibration_gate");
+      return;
+    }
+    if (libraryIntent === "rank") {
+      setView("rank_session");
+      return;
+    }
+    setView("free_session");
+  }, [
+    actionBusy,
+    identityLinked,
+    libraryIntent,
+    needsCalibrationGate,
+    playUiClickSfx,
+    stateReady,
+  ]);
+
   const stopSettingsPreview = useCallback(() => {
     const stream = settingsPreviewStreamRef.current;
     if (stream) {
@@ -2711,6 +2805,22 @@ function PlayPageInner() {
       setSelectedJutsu(orderedJutsuNames[0] || "");
     }
   }, [orderedJutsuNames, selectedJutsu]);
+
+  useEffect(() => {
+    if (!selectedJutsu) return;
+    const selectedConfig = OFFICIAL_JUTSUS[selectedJutsu];
+    if (!selectedConfig) return;
+    if (progression.level >= selectedConfig.minLevel) return;
+    const fallback = unlockedJutsuNames[0] || orderedJutsuNames[0] || "";
+    if (!fallback || fallback === selectedJutsu) return;
+    setSelectedJutsu(fallback);
+  }, [orderedJutsuNames, progression.level, selectedJutsu, unlockedJutsuNames]);
+
+  useEffect(() => {
+    if (view === "jutsu_library") return;
+    if (!jutsuInfoModal) return;
+    setJutsuInfoModal(null);
+  }, [jutsuInfoModal, view]);
 
   useEffect(() => {
     void pollRuntimeConfig();
@@ -4298,6 +4408,7 @@ function PlayPageInner() {
                           const unlocked = progression.level >= config.minLevel;
                           const selected = selectedJutsu === name;
                           const texture = JUTSU_TEXTURES[name] || "";
+                          const uiName = getJutsuUiName(name);
                           const masteryRow = mastery[name];
                           const masteryTier = getMasteryTier(name, masteryRow?.bestTime);
                           const masteryTierLabel = masteryTier === "none"
@@ -4323,16 +4434,7 @@ function PlayPageInner() {
                                 }
                               }}
                               onClick={() => {
-                                playUiClickSfx();
-                                if (!unlocked) {
-                                  openAlertModal(
-                                    t("library.skillLocked", "Skill Locked"),
-                                    `${name} ${t("library.unlocksAt", "unlocks at")} LV.${config.minLevel}.`,
-                                    t("common.ok", "OK"),
-                                  );
-                                  return;
-                                }
-                                setSelectedJutsu(name);
+                                handleOpenJutsuInfo(name, unlocked);
                               }}
                               className={`relative w-full h-[196px] overflow-hidden rounded-xl border text-left flex flex-col cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ninja-accent transition-all duration-300 ${selected
                                 ? "z-20 border-white scale-[1.02] shadow-[0_0_60px_rgba(255,120,50,0.95)] ring-4 ring-ninja-accent"
@@ -4345,7 +4447,7 @@ function PlayPageInner() {
                                 {texture ? (
                                   <Image
                                     src={texture}
-                                    alt={name}
+                                    alt={uiName}
                                     fill
                                     sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
                                     className={`h-full w-full object-cover transition-all duration-500 ${(selected && unlocked) ? "opacity-100 scale-110 brightness-[1.15] contrast-110" : unlocked ? "opacity-60" : "opacity-30 grayscale"}`}
@@ -4355,8 +4457,11 @@ function PlayPageInner() {
                                 )}
                               </div>
                               <div className="relative z-10 bg-gradient-to-b from-black/45 via-black/60 to-black/80 p-3 flex-1 flex flex-col w-full h-full">
-                                <p className="text-sm font-black text-white">{name}</p>
+                                <p className="text-sm font-black text-white">{uiName}</p>
                                 <p className="mt-1 text-[11px] text-zinc-300">{config.sequence.length} {t("library.signs", "signs")}</p>
+                                <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-ninja-accent/90">
+                                  LV.{config.minLevel}
+                                </p>
                                 <div className="mt-auto pt-2">
                                   <p className={`text-[11px] font-bold uppercase ${masteryColor}`}>
                                     {t("library.mastery", "Mastery")}: {masteryTierLabel}
@@ -4379,18 +4484,7 @@ function PlayPageInner() {
                                       type="button"
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        playUiClickSfx();
-                                        if (!stateReady || !identityLinked || actionBusy) return;
-                                        if (needsCalibrationGate) {
-                                          setCalibrationReturnView("jutsu_library");
-                                          setView("calibration_gate");
-                                          return;
-                                        }
-                                        if (libraryIntent === "rank") {
-                                          setView("rank_session");
-                                          return;
-                                        }
-                                        setView("free_session");
+                                        handleLibraryStart();
                                       }}
                                       className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-white px-3 text-[11px] font-black tracking-widest text-orange-600 shadow-[0_4px_12px_rgba(255,255,255,0.3)] transition-all hover:bg-orange-50 active:scale-95 animate-in fade-in zoom-in duration-300"
                                     >
@@ -5304,7 +5398,7 @@ function PlayPageInner() {
                   ? t("mastery.masteryUnlocked", "MASTERY UNLOCKED")
                   : t("mastery.newBest", "NEW BEST")}
               </p>
-              <p className="mt-1 text-center text-xl font-black" style={{ color: "rgb(200, 180, 130)" }}>{masteryPanel.jutsuName}</p>
+              <p className="mt-1 text-center text-xl font-black" style={{ color: "rgb(200, 180, 130)" }}>{getJutsuUiName(masteryPanel.jutsuName)}</p>
 
               <p className="mt-3 text-center text-5xl font-black" style={{ color: "rgb(255, 245, 200)" }}>{masteryPanel.newBest.toFixed(2)}s</p>
               <p className="mt-1 text-center text-xs uppercase tracking-[0.16em]" style={{ color: "rgb(160, 220, 160)" }}>
@@ -5472,7 +5566,7 @@ function PlayPageInner() {
                           color: "rgb(180, 255, 200)",
                         }}
                       >
-                        {name}
+                        {getJutsuUiName(name)}
                       </div>
                     ))}
                     {levelUpPanel.unlocked.length > 4 && (
@@ -5595,6 +5689,174 @@ function PlayPageInner() {
                 >
                   {alertModal.buttonText}
                 </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        jutsuInfoModal && activeJutsuInfoConfig && !connectionLostState && (
+          <div className="fixed inset-0 z-[54] flex items-center justify-center p-4">
+            <button
+              type="button"
+              aria-label="Close jutsu info modal"
+              onClick={() => setJutsuInfoModal(null)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-[2px]"
+            />
+            <div className="relative w-full max-w-[760px] overflow-hidden rounded-[24px] border border-orange-300/55 bg-[#0f1424]/96 shadow-[0_30px_90px_rgba(0,0,0,0.72)]">
+              <div className="pointer-events-none absolute -left-24 -top-24 h-56 w-56 rounded-full bg-orange-500/20 blur-3xl" />
+              <div className="pointer-events-none absolute -right-28 -bottom-24 h-64 w-64 rounded-full bg-cyan-400/14 blur-3xl" />
+
+              <button
+                type="button"
+                aria-label={t("common.close", "Close")}
+                onClick={() => setJutsuInfoModal(null)}
+                className="absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/45 text-zinc-200 hover:border-white/45 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+
+              <div className="relative h-[220px] w-full overflow-hidden border-b border-ninja-border/70">
+                {activeJutsuInfoTexture ? (
+                  <Image
+                    src={activeJutsuInfoTexture}
+                    alt={activeJutsuInfoUiName}
+                    fill
+                    sizes="(max-width: 768px) 100vw, 760px"
+                    className="object-cover"
+                  />
+                ) : (
+                  <div className="h-full w-full bg-gradient-to-br from-[#24314d] via-[#1c253f] to-[#111726]" />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-[#0f1424] via-[#0f1424]/55 to-transparent" />
+                <div className="absolute bottom-4 left-5 right-5">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-orange-300/40 bg-black/45 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-orange-200">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    {activeJutsuInfoEffectLabel}
+                  </div>
+                  <h3 className="mt-3 text-3xl font-black leading-tight text-white">{activeJutsuInfoUiName}</h3>
+                  <p className="mt-1 text-sm font-semibold uppercase tracking-[0.14em] text-zinc-200/95">
+                    {activeJutsuInfoConfig.displayText}
+                  </p>
+                </div>
+              </div>
+
+              <div className="relative p-5 md:p-6">
+                <div className="flex flex-wrap gap-2">
+                  <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${activeJutsuInfoUnlocked
+                    ? "border-emerald-300/45 bg-emerald-500/14 text-emerald-200"
+                    : "border-red-300/45 bg-red-500/14 text-red-200"
+                    }`}
+                  >
+                    {activeJutsuInfoUnlocked
+                      ? t("library.unlocked", "UNLOCKED")
+                      : `${t("library.locked", "LOCKED")} • LV.${activeJutsuInfoConfig.minLevel}`}
+                  </span>
+                  <span className="rounded-full border border-ninja-border bg-black/25 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-200">
+                    LV.{activeJutsuInfoConfig.minLevel}
+                  </span>
+                  <span className="rounded-full border border-ninja-border bg-black/25 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-200">
+                    {activeJutsuInfoConfig.sequence.length} {t("library.signs", "signs")}
+                  </span>
+                  {activeJutsuInfoConfig.duration ? (
+                    <span className="rounded-full border border-ninja-border bg-black/25 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-200">
+                      {activeJutsuInfoConfig.duration.toFixed(1)}s
+                    </span>
+                  ) : null}
+                </div>
+
+                <p className="mt-4 text-sm leading-relaxed text-zinc-200/95">
+                  {activeJutsuInfoSummary}
+                </p>
+
+                <div className="mt-5">
+                  <p className="text-[11px] font-black uppercase tracking-[0.15em] text-zinc-300">
+                    {t("library.sequence", "Sequence")}
+                  </p>
+                  {activeJutsuInfoConfig.sequence.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {activeJutsuInfoConfig.sequence.map((sign, idx) => (
+                        <span
+                          key={`${activeJutsuInfoName}-${idx}-${sign}`}
+                          className="inline-flex items-center gap-2 rounded-lg border border-ninja-border bg-black/30 px-3 py-1.5 text-xs font-bold text-zinc-100"
+                        >
+                          <span className="rounded-md bg-orange-500/18 px-1.5 py-0.5 text-[10px] font-black text-orange-200">
+                            {idx + 1}
+                          </span>
+                          {formatSignLabel(sign)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs font-semibold text-emerald-300">
+                      {t("library.noSignsRequired", "No hand signs required for this move.")}
+                    </p>
+                  )}
+                </div>
+
+                {Array.isArray(activeJutsuInfoConfig.comboParts) && activeJutsuInfoConfig.comboParts.length > 0 && (
+                  <div className="mt-5">
+                    <p className="text-[11px] font-black uppercase tracking-[0.15em] text-zinc-300">
+                      {t("library.comboFlow", "Combo Flow")}
+                    </p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {activeJutsuInfoConfig.comboParts.map((part, idx) => (
+                        <div
+                          key={`${activeJutsuInfoName}-combo-${idx}-${part.name}`}
+                          className="rounded-lg border border-ninja-border bg-black/30 px-3 py-2"
+                        >
+                          <p className="text-xs font-black text-white">{part.name}</p>
+                          <p className="mt-0.5 text-[11px] text-zinc-300">Step {part.atStep} • {formatSignLabel(part.effect)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-6 grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setJutsuInfoModal(null)}
+                    className="h-11 rounded-xl border border-ninja-border bg-black/35 text-sm font-black text-zinc-100 hover:border-ninja-accent/45"
+                  >
+                    {t("common.close", "Close")}
+                  </button>
+
+                  {activeJutsuInfoUnlocked ? (
+                    libraryIntent === "browse" ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          playUiClickSfx();
+                          setSelectedJutsu(activeJutsuInfoName);
+                          setJutsuInfoModal(null);
+                        }}
+                        className="h-11 rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 text-sm font-black text-white shadow-[0_10px_24px_rgba(251,146,60,0.35)] hover:brightness-110"
+                      >
+                        {t("library.selectJutsu", "Select Jutsu")}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleLibraryStart}
+                        className="h-11 rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 text-sm font-black text-white shadow-[0_10px_24px_rgba(251,146,60,0.35)] hover:brightness-110"
+                      >
+                        {libraryIntent === "rank"
+                          ? t("library.startRankRun", "Start Rank Run")
+                          : t("library.playThisJutsu", "Play This Jutsu")}
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="h-11 rounded-xl border border-red-300/45 bg-red-500/12 text-sm font-black text-red-200"
+                    >
+                      {t("library.unlocksAt", "Unlocks at")} LV.{activeJutsuInfoConfig.minLevel}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
