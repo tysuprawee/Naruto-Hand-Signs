@@ -1490,6 +1490,7 @@ function PlayPageInner() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(!supabase);
   const [authBusy, setAuthBusy] = useState(false);
+  const [authBusyProvider, setAuthBusyProvider] = useState<"discord" | "google" | null>(null);
   const [authError, setAuthError] = useState(
     !supabase
       ? "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
@@ -2809,6 +2810,7 @@ function PlayPageInner() {
       setSession(nextSession ?? null);
       setAuthReady(true);
       setAuthBusy(false);
+      setAuthBusyProvider(null);
       pendingRankReplayBusyRef.current = false;
       profileMetaHydratedRef.current = false;
       if (nextSession) {
@@ -3066,6 +3068,7 @@ function PlayPageInner() {
   const handleOAuthLogin = async (provider: "discord" | "google") => {
     if (!supabase || typeof window === "undefined") return;
     setAuthBusy(true);
+    setAuthBusyProvider(provider);
     setAuthError("");
 
     const redirectTo = `${window.location.origin}/play`;
@@ -3080,6 +3083,7 @@ function PlayPageInner() {
     if (error) {
       setAuthError(error.message);
       setAuthBusy(false);
+      setAuthBusyProvider(null);
     }
   };
 
@@ -3127,6 +3131,7 @@ function PlayPageInner() {
   const handleLogout = async () => {
     if (!supabase) return;
     setAuthBusy(true);
+    setAuthBusyProvider(null);
     setAuthError("");
     const { error } = await supabase.auth.signOut();
     if (error) {
@@ -3141,6 +3146,7 @@ function PlayPageInner() {
   const handleConnectionLostExit = async () => {
     if (supabase) {
       setAuthBusy(true);
+      setAuthBusyProvider(null);
       await supabase.auth.signOut().catch(() => { });
       setAuthBusy(false);
     }
@@ -3939,12 +3945,16 @@ function PlayPageInner() {
                 disabled={!supabase || authBusy}
                 className="flex h-14 w-full items-center justify-center gap-3 rounded-xl bg-indigo-600 px-6 text-base font-black text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {authBusy ? (
+                {authBusy && authBusyProvider === "discord" ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
                 ) : (
-                  <svg className="h-6 w-6 shrink-0 fill-current" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                    <path d="M107.7 8.07C99.71 4.29 91.13 1.51 82.16 0A101.44 101.44 0 0 0 78.73 7c-9.6-1.44-19.14-1.44-28.53 0A101.63 101.63 0 0 0 46.77 0c-8.97 1.51-17.55 4.3-25.54 8.07C4.1 33.56-1.9 58.4.45 82.91a100.95 100.95 0 0 0 30.65 13.45c2-2.73 3.8-5.63 5.4-8.7a46.68 46.68 0 0 1-15.82-7.55c1.23-.9 2.4-1.85 3.55-2.85 18 8.35 37.52 8.35 55.42 0 1.15 1 2.32 1.95 3.55 2.85a46.54 46.54 0 0 1-15.82 7.55c1.6 3.07 3.4 5.97 5.4 8.7a100.9 100.9 0 0 0 30.65-13.45c2.63-28.16-5-52.01-20.73-74.84ZM42.27 63.85c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Zm42.6 0c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Z" />
-                  </svg>
+                  <Image
+                    src="/socials/discord-mark-white.svg"
+                    alt="Discord"
+                    width={24}
+                    height={24}
+                    className="h-6 w-6 shrink-0 object-contain"
+                  />
                 )}
                 LOGIN WITH DISCORD
               </button>
@@ -3955,10 +3965,16 @@ function PlayPageInner() {
                 disabled={!supabase || authBusy}
                 className="flex h-14 w-full items-center justify-center gap-3 rounded-xl border border-zinc-500 bg-zinc-900/80 px-6 text-base font-black text-zinc-100 transition hover:bg-zinc-800/90 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {authBusy ? (
+                {authBusy && authBusyProvider === "google" ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
                 ) : (
-                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-sm font-black text-zinc-900">G</span>
+                  <Image
+                    src="/socials/google-g.svg"
+                    alt="Google"
+                    width={24}
+                    height={24}
+                    className="h-6 w-6 shrink-0 object-contain"
+                  />
                 )}
                 LOGIN WITH GOOGLE
               </button>
