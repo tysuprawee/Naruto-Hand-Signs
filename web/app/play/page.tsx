@@ -3,6 +3,7 @@
 import type { Session } from "@supabase/supabase-js";
 import Image from "next/image";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -112,6 +113,7 @@ interface MenuSettingsState {
   easyMode: boolean;
   cameraIdx: number;
   resolutionIdx: number;
+  noEffects: boolean;
   fullscreen: boolean;
 }
 
@@ -241,6 +243,7 @@ const DEFAULT_SETTINGS: MenuSettingsState = {
   easyMode: false,
   cameraIdx: 0,
   resolutionIdx: 0,
+  noEffects: false,
   fullscreen: false,
 };
 
@@ -391,6 +394,7 @@ function sanitizeSettings(raw: Partial<MenuSettingsState> | null | undefined): M
     easyMode: false,
     cameraIdx: clampInt(raw?.cameraIdx, 0, 16, DEFAULT_SETTINGS.cameraIdx),
     resolutionIdx: clampInt(raw?.resolutionIdx, 0, 2, DEFAULT_SETTINGS.resolutionIdx),
+    noEffects: typeof raw?.noEffects === "boolean" ? raw.noEffects : DEFAULT_SETTINGS.noEffects,
     fullscreen: typeof raw?.fullscreen === "boolean" ? raw.fullscreen : DEFAULT_SETTINGS.fullscreen,
   };
 }
@@ -1454,6 +1458,15 @@ export default function PlayPage() {
 
   const [savedSettings, setSavedSettings] = useState<MenuSettingsState>(() => readStoredSettings());
   const [draftSettings, setDraftSettings] = useState<MenuSettingsState>(() => readStoredSettings());
+
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const noEffectsParam = searchParams.get("noEffects") === "true";
+    if (noEffectsParam) {
+      setSavedSettings((prev) => ({ ...prev, noEffects: true }));
+      setDraftSettings((prev) => ({ ...prev, noEffects: true }));
+    }
+  }, [searchParams]);
   const [menuMusicMuted, setMenuMusicMuted] = useState(() => readStoredMenuMute());
   const [progression, setProgression] = useState<ProgressionState>(() => createInitialProgression());
   const [questState, setQuestState] = useState<QuestState>(() => createDefaultQuestState(new Date()));
@@ -2980,13 +2993,13 @@ export default function PlayPage() {
         "award_jutsu_completion_authoritative_bound_auth",
         "award_jutsu_completion_authoritative_bound",
         {
-        p_username: identity.username,
-        p_discord_id: identity.discordId,
-        p_xp_gain: xpGain,
-        p_signs_landed: signsLanded,
-        p_is_challenge: mode === "rank",
-        p_mode: runJutsuName.toUpperCase(),
-      },
+          p_username: identity.username,
+          p_discord_id: identity.discordId,
+          p_xp_gain: xpGain,
+          p_signs_landed: signsLanded,
+          p_is_challenge: mode === "rank",
+          p_mode: runJutsuName.toUpperCase(),
+        },
       );
 
       if (!Boolean(res.ok)) {
@@ -4105,6 +4118,7 @@ export default function PlayPage() {
                 datasetUrl={runtimeDataset.url}
                 datasetSyncedAt={runtimeDatasetSyncedAt}
                 onCalibrationComplete={handleCalibrationComplete}
+                noEffects={savedSettings.noEffects}
                 onBack={() => setView(calibrationReturnView)}
               />
             )}
@@ -4136,6 +4150,7 @@ export default function PlayPage() {
                   }}
                   onPrevJutsu={() => handleCycleSelectedJutsu(-1)}
                   onNextJutsu={() => handleCycleSelectedJutsu(1)}
+                  noEffects={savedSettings.noEffects}
                   onQuickCalibrate={() => {
                     setCalibrationReturnView("free_session");
                     setView("calibration_session");
@@ -4163,6 +4178,7 @@ export default function PlayPage() {
                   datasetSyncedAt={runtimeDatasetSyncedAt}
                   busy={actionBusy}
                   viewportFit
+                  noEffects={savedSettings.noEffects}
                   onComplete={handleArenaComplete}
                   onRequestRunToken={requestRankRunToken}
                   progressionHud={{
@@ -4929,6 +4945,19 @@ export default function PlayPage() {
                       className="h-4 w-4 accent-orange-500"
                     />
                   </label>
+
+                  <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
+                    <span>{t("settings.noEffects", "Disable Jutsu Effects")}</span>
+                    <input
+                      type="checkbox"
+                      checked={draftSettings.noEffects}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setDraftSettings((prev) => ({ ...prev, noEffects: checked }));
+                      }}
+                      className="h-4 w-4 accent-orange-500"
+                    />
+                  </label>
                 </div>
 
                 <div className="mt-8 flex flex-wrap gap-3">
@@ -5070,7 +5099,8 @@ export default function PlayPage() {
               </div>
             )}
           </div>
-        )}
+        )
+        }
       </main>
 
       {showAnnouncements && !!session && activeAnnouncement && !maintenanceGate && !updateGate && (
@@ -5117,408 +5147,424 @@ export default function PlayPage() {
         </div>
       )}
 
-      {maintenanceGate && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/88 px-4">
-          <div className="w-full max-w-[620px] rounded-2xl border border-red-400/35 bg-[#140f14]/96 p-7 shadow-[0_30px_95px_rgba(0,0,0,0.72)]">
-            <p className="text-[11px] font-black uppercase tracking-[0.23em] text-red-300">{t("maintenance.label", "Maintenance")}</p>
-            <h3 className="mt-2 text-3xl font-black tracking-tight text-white">{t("maintenance.title", "Jutsu Academy Temporarily Offline")}</h3>
-            <p className="mt-4 rounded-xl border border-red-400/35 bg-red-500/10 px-4 py-3 text-sm leading-relaxed text-red-100">
-              {maintenanceGate.message}
-            </p>
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <a
-                href={maintenanceGate.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex h-10 items-center rounded-lg border border-red-300/45 bg-red-500/18 px-4 text-xs font-black tracking-wide text-red-100 hover:bg-red-500/30"
-              >
-                {t("maintenance.statusDiscord", "STATUS / DISCORD")}
-              </a>
-              <button
-                type="button"
-                onClick={() => void pollRuntimeConfig()}
-                className="h-10 rounded-lg bg-red-600 px-4 text-xs font-black tracking-wide text-white hover:bg-red-500"
-              >
-                {t("common.retry", "RETRY")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {!maintenanceGate && updateGate && (
-        <div className="fixed inset-0 z-[69] flex items-center justify-center bg-black/86 px-4">
-          <div className="w-full max-w-[620px] rounded-2xl border border-amber-300/40 bg-[#15120b]/96 p-7 shadow-[0_30px_95px_rgba(0,0,0,0.72)]">
-            <p className="text-[11px] font-black uppercase tracking-[0.23em] text-amber-300">{t("update.label", "Mandatory Update")}</p>
-            <h3 className="mt-2 text-3xl font-black tracking-tight text-white">{t("update.title", "Client Update Required")}</h3>
-            <p className="mt-4 rounded-xl border border-amber-300/35 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
-              {updateGate.message}
-            </p>
-            <div className="mt-4 rounded-lg border border-ninja-border bg-black/25 px-3 py-2 text-xs text-zinc-200">
-              {t("update.current", "Current")}: {WEB_APP_VERSION} • {t("update.required", "Required")}: {updateGate.remoteVersion || t("update.latest", "latest")}
-            </div>
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <a
-                href={updateGate.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex h-10 items-center rounded-lg border border-amber-300/45 bg-amber-500/18 px-4 text-xs font-black tracking-wide text-amber-100 hover:bg-amber-500/30"
-              >
-                {t("update.getUpdate", "GET UPDATE")}
-              </a>
-              <button
-                type="button"
-                onClick={() => window.location.reload()}
-                className="h-10 rounded-lg bg-amber-600 px-4 text-xs font-black tracking-wide text-white hover:bg-amber-500"
-              >
-                {t("update.reload", "RELOAD")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {session && masteryPanel && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
-          <button
-            type="button"
-            aria-label="Close mastery panel"
-            onClick={() => setMasteryPanel(null)}
-            className="absolute inset-0 bg-black/70"
-          />
-
-          <div
-            className="relative w-full max-w-[440px] rounded-[20px] border p-5 shadow-[0_30px_90px_rgba(0,0,0,0.65)]"
-            style={{
-              backgroundColor: "rgba(18, 14, 10, 0.92)",
-              borderColor: "rgb(180, 110, 30)",
-            }}
-          >
-            <div
-              className="pointer-events-none absolute inset-[2px] rounded-[18px] border"
-              style={{ borderColor: "rgba(255, 200, 80, 0.32)" }}
-            />
-
-            <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 220, 80)" }}>
-              {masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null
-                ? t("mastery.masteryUnlocked", "MASTERY UNLOCKED")
-                : t("mastery.newBest", "NEW BEST")}
-            </p>
-            <p className="mt-1 text-center text-xl font-black" style={{ color: "rgb(200, 180, 130)" }}>{masteryPanel.jutsuName}</p>
-
-            <p className="mt-3 text-center text-5xl font-black" style={{ color: "rgb(255, 245, 200)" }}>{masteryPanel.newBest.toFixed(2)}s</p>
-            <p className="mt-1 text-center text-xs uppercase tracking-[0.16em]" style={{ color: "rgb(160, 220, 160)" }}>
-              {masteryPanel.previousBest === null
-                ? t("mastery.firstRecord", "FIRST RECORD")
-                : t("mastery.newBestTime", "NEW BEST TIME")}
-            </p>
-
-            <div
-              className="mx-auto mt-4 flex h-[38px] w-[240px] items-center justify-center gap-2 rounded-full border px-4"
-              style={{
-                color: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
-                borderColor: `rgba(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b}, 0.78)`,
-                backgroundColor: `rgba(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b}, 0.16)`,
-              }}
-            >
-              <Image
-                src={MASTERY_ICON_BY_TIER[masteryPanel.newTier]}
-                alt={masteryPanel.newTier}
-                width={32}
-                height={32}
-                className="h-8 w-8 object-contain"
-              />
-              <p className="text-sm font-black uppercase tracking-wide">
-                {masteryPanel.newTier === "none" ? t("mastery.unranked", "UNRANKED") : masteryPanel.newTier}
+      {
+        maintenanceGate && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/88 px-4">
+            <div className="w-full max-w-[620px] rounded-2xl border border-red-400/35 bg-[#140f14]/96 p-7 shadow-[0_30px_95px_rgba(0,0,0,0.72)]">
+              <p className="text-[11px] font-black uppercase tracking-[0.23em] text-red-300">{t("maintenance.label", "Maintenance")}</p>
+              <h3 className="mt-2 text-3xl font-black tracking-tight text-white">{t("maintenance.title", "Jutsu Academy Temporarily Offline")}</h3>
+              <p className="mt-4 rounded-xl border border-red-400/35 bg-red-500/10 px-4 py-3 text-sm leading-relaxed text-red-100">
+                {maintenanceGate.message}
               </p>
-              {(masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null) && (
-                <span className="ml-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: "rgb(200, 255, 180)" }}>
-                  {t("mastery.unlocked", "Unlocked!")}
-                </span>
-              )}
-            </div>
-
-            {masteryDelta !== null && (
-              <p
-                className="mt-2 text-center text-xs font-black"
-                style={{ color: masteryDelta < 0 ? "rgb(100, 230, 120)" : "rgb(230, 110, 80)" }}
-              >
-                {masteryDelta < 0 ? t("mastery.up", "UP") : t("mastery.down", "DOWN")} {Math.abs(masteryDelta).toFixed(2)}s
-              </p>
-            )}
-
-            {masteryThresholds && (
-              <div className="mt-4">
-                <div className="relative h-[8px] rounded-full" style={{ backgroundColor: "rgb(50, 40, 30)" }}>
-                  <div
-                    className="h-[8px] rounded-full transition-[width] duration-700 ease-out"
-                    style={{
-                      width: `${masteryBarDisplayPct}%`,
-                      backgroundColor: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
-                    }}
-                  />
-                  <span
-                    className="absolute -top-[7px] h-[22px] w-[2px] rounded-full transition-[left] duration-700 ease-out"
-                    style={{
-                      left: `${masteryBarDisplayPct}%`,
-                      transform: "translateX(-50%)",
-                      backgroundColor: "rgba(245, 245, 245, 0.85)",
-                      boxShadow: "0 0 8px rgba(255,255,255,0.35)",
-                    }}
-                  />
-                  <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryBronzePct}%`, backgroundColor: "rgb(196, 128, 60)" }} />
-                  <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masterySilverPct}%`, backgroundColor: "rgb(180, 190, 200)" }} />
-                  <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryGoldPct}%`, backgroundColor: "rgb(255, 200, 40)" }} />
-                </div>
-                <div className="mt-2 flex justify-between text-[10px] uppercase tracking-wide" style={{ color: "rgb(180, 160, 120)" }}>
-                  <span>{t("mastery.bronze", "BRONZE")} {masteryThresholds.bronze.toFixed(1)}s</span>
-                  <span>{t("mastery.silver", "SILVER")} {masteryThresholds.silver.toFixed(1)}s</span>
-                  <span>{t("mastery.gold", "GOLD")} {masteryThresholds.gold.toFixed(1)}s</span>
-                </div>
-                {masteryNextTierHint && (
-                  <p className="mt-2 text-center text-[11px]" style={{ color: "rgb(180, 160, 110)" }}>
-                    {t("common.next", "NEXT")}: {masteryNextTierHint.name} ({masteryNextTierHint.target.toFixed(2)}s) - {(masteryPanel.newBest - masteryNextTierHint.target).toFixed(2)}s {t("mastery.toGo", "to go")}
-                  </p>
-                )}
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <a
+                  href={maintenanceGate.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-10 items-center rounded-lg border border-red-300/45 bg-red-500/18 px-4 text-xs font-black tracking-wide text-red-100 hover:bg-red-500/30"
+                >
+                  {t("maintenance.statusDiscord", "STATUS / DISCORD")}
+                </a>
+                <button
+                  type="button"
+                  onClick={() => void pollRuntimeConfig()}
+                  className="h-10 rounded-lg bg-red-600 px-4 text-xs font-black tracking-wide text-white hover:bg-red-500"
+                >
+                  {t("common.retry", "RETRY")}
+                </button>
               </div>
-            )}
+            </div>
+          </div>
+        )
+      }
 
+      {
+        !maintenanceGate && updateGate && (
+          <div className="fixed inset-0 z-[69] flex items-center justify-center bg-black/86 px-4">
+            <div className="w-full max-w-[620px] rounded-2xl border border-amber-300/40 bg-[#15120b]/96 p-7 shadow-[0_30px_95px_rgba(0,0,0,0.72)]">
+              <p className="text-[11px] font-black uppercase tracking-[0.23em] text-amber-300">{t("update.label", "Mandatory Update")}</p>
+              <h3 className="mt-2 text-3xl font-black tracking-tight text-white">{t("update.title", "Client Update Required")}</h3>
+              <p className="mt-4 rounded-xl border border-amber-300/35 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-100">
+                {updateGate.message}
+              </p>
+              <div className="mt-4 rounded-lg border border-ninja-border bg-black/25 px-3 py-2 text-xs text-zinc-200">
+                {t("update.current", "Current")}: {WEB_APP_VERSION} • {t("update.required", "Required")}: {updateGate.remoteVersion || t("update.latest", "latest")}
+              </div>
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <a
+                  href={updateGate.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-10 items-center rounded-lg border border-amber-300/45 bg-amber-500/18 px-4 text-xs font-black tracking-wide text-amber-100 hover:bg-amber-500/30"
+                >
+                  {t("update.getUpdate", "GET UPDATE")}
+                </a>
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="h-10 rounded-lg bg-amber-600 px-4 text-xs font-black tracking-wide text-white hover:bg-amber-500"
+                >
+                  {t("update.reload", "RELOAD")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        session && masteryPanel && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
             <button
               type="button"
+              aria-label="Close mastery panel"
               onClick={() => setMasteryPanel(null)}
-              className="mt-5 flex h-11 w-full items-center justify-center rounded-[12px] border text-sm font-black text-white hover:bg-[#c87314]"
-              style={{
-                backgroundColor: "rgb(170, 90, 15)",
-                borderColor: "rgb(255, 190, 60)",
-              }}
-            >
-              {t("common.continue", "Continue")}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {session && levelUpPanel && !masteryPanel && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
-          <button
-            type="button"
-            aria-label="Close level-up panel"
-            onClick={() => setLevelUpPanel(null)}
-            className="absolute inset-0 bg-black/75"
-          />
-
-          <div
-            className="relative w-full max-w-[460px] rounded-[22px] border p-6 shadow-[0_30px_90px_rgba(0,0,0,0.65)]"
-            style={{
-              backgroundColor: "rgba(12, 10, 18, 0.96)",
-              borderColor: "rgb(200, 160, 40)",
-            }}
-          >
-            <div
-              className="pointer-events-none absolute inset-[2px] rounded-[20px] border"
-              style={{ borderColor: "rgba(255, 220, 80, 0.24)" }}
+              className="absolute inset-0 bg-black/70"
             />
 
-            <div className="mb-2 flex items-center justify-center gap-2">
-              {[0, 1, 2, 3, 4, 5, 6].map((n) => (
-                <Image
-                  key={`level-star-${n}`}
-                  src="/pics/mastery/star_small.png"
-                  alt="star"
-                  width={14}
-                  height={14}
-                  className="h-[14px] w-[14px] object-contain"
-                />
-              ))}
-            </div>
-
-            <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 210, 60)" }}>{t("levelUp.title", "LEVEL UP")}</p>
-            {!!levelUpPanel.sourceLabel && (
-              <p className="mt-1 text-center text-[11px] uppercase tracking-[0.18em]" style={{ color: "rgb(160, 150, 120)" }}>{levelUpPanel.sourceLabel}</p>
-            )}
-
-            <p className="mt-3 text-center text-[56px] font-black leading-none" style={{ color: "rgb(255, 245, 180)" }}>LV.{levelUpPanel.newLevel}</p>
-            <p className="mt-1 text-center text-xs font-bold" style={{ color: "rgb(180, 165, 120)" }}>
-              LV.{levelUpPanel.previousLevel} → LV.{levelUpPanel.newLevel}
-            </p>
-
-            <div className="mt-4 flex justify-center">
+            <div
+              className="relative w-full max-w-[440px] rounded-[20px] border p-5 shadow-[0_30px_90px_rgba(0,0,0,0.65)]"
+              style={{
+                backgroundColor: "rgba(18, 14, 10, 0.92)",
+                borderColor: "rgb(180, 110, 30)",
+              }}
+            >
               <div
-                className="inline-flex rounded-full border px-6 py-2 text-center"
+                className="pointer-events-none absolute inset-[2px] rounded-[18px] border"
+                style={{ borderColor: "rgba(255, 200, 80, 0.32)" }}
+              />
+
+              <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 220, 80)" }}>
+                {masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null
+                  ? t("mastery.masteryUnlocked", "MASTERY UNLOCKED")
+                  : t("mastery.newBest", "NEW BEST")}
+              </p>
+              <p className="mt-1 text-center text-xl font-black" style={{ color: "rgb(200, 180, 130)" }}>{masteryPanel.jutsuName}</p>
+
+              <p className="mt-3 text-center text-5xl font-black" style={{ color: "rgb(255, 245, 200)" }}>{masteryPanel.newBest.toFixed(2)}s</p>
+              <p className="mt-1 text-center text-xs uppercase tracking-[0.16em]" style={{ color: "rgb(160, 220, 160)" }}>
+                {masteryPanel.previousBest === null
+                  ? t("mastery.firstRecord", "FIRST RECORD")
+                  : t("mastery.newBestTime", "NEW BEST TIME")}
+              </p>
+
+              <div
+                className="mx-auto mt-4 flex h-[38px] w-[240px] items-center justify-center gap-2 rounded-full border px-4"
                 style={{
-                  borderColor: "rgba(200, 160, 40, 0.7)",
-                  backgroundColor: "rgba(200, 160, 40, 0.16)",
+                  color: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
+                  borderColor: `rgba(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b}, 0.78)`,
+                  backgroundColor: `rgba(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b}, 0.16)`,
                 }}
               >
-                <p className="text-sm font-black uppercase tracking-wide" style={{ color: "rgb(255, 220, 80)" }}>{levelUpPanel.rank}</p>
-              </div>
-            </div>
-
-            {levelUpPanel.unlocked.length > 0 && (
-              <div className="mt-5">
-                <p className="text-center text-[11px] font-black uppercase tracking-[0.17em]" style={{ color: "rgb(140, 215, 155)" }}>
-                  {t("levelUp.newJutsuUnlocked", "New Jutsu Unlocked")}
+                <Image
+                  src={MASTERY_ICON_BY_TIER[masteryPanel.newTier]}
+                  alt={masteryPanel.newTier}
+                  width={32}
+                  height={32}
+                  className="h-8 w-8 object-contain"
+                />
+                <p className="text-sm font-black uppercase tracking-wide">
+                  {masteryPanel.newTier === "none" ? t("mastery.unranked", "UNRANKED") : masteryPanel.newTier}
                 </p>
-                <div className="mt-3 space-y-2">
-                  {levelUpPanel.unlocked.slice(0, 4).map((name) => (
+                {(masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null) && (
+                  <span className="ml-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: "rgb(200, 255, 180)" }}>
+                    {t("mastery.unlocked", "Unlocked!")}
+                  </span>
+                )}
+              </div>
+
+              {masteryDelta !== null && (
+                <p
+                  className="mt-2 text-center text-xs font-black"
+                  style={{ color: masteryDelta < 0 ? "rgb(100, 230, 120)" : "rgb(230, 110, 80)" }}
+                >
+                  {masteryDelta < 0 ? t("mastery.up", "UP") : t("mastery.down", "DOWN")} {Math.abs(masteryDelta).toFixed(2)}s
+                </p>
+              )}
+
+              {masteryThresholds && (
+                <div className="mt-4">
+                  <div className="relative h-[8px] rounded-full" style={{ backgroundColor: "rgb(50, 40, 30)" }}>
                     <div
-                      key={name}
-                      className="rounded-lg border px-3 py-2 text-center text-xs font-bold"
+                      className="h-[8px] rounded-full transition-[width] duration-700 ease-out"
                       style={{
-                        borderColor: "rgba(70, 200, 100, 0.7)",
-                        backgroundColor: "rgba(50, 170, 80, 0.16)",
-                        color: "rgb(180, 255, 200)",
+                        width: `${masteryBarDisplayPct}%`,
+                        backgroundColor: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
                       }}
-                    >
-                      {name}
-                    </div>
-                  ))}
-                  {levelUpPanel.unlocked.length > 4 && (
-                    <p className="text-center text-[11px]" style={{ color: "rgb(140, 160, 140)" }}>
-                      +{levelUpPanel.unlocked.length - 4} {t("levelUp.more", "more")}
+                    />
+                    <span
+                      className="absolute -top-[7px] h-[22px] w-[2px] rounded-full transition-[left] duration-700 ease-out"
+                      style={{
+                        left: `${masteryBarDisplayPct}%`,
+                        transform: "translateX(-50%)",
+                        backgroundColor: "rgba(245, 245, 245, 0.85)",
+                        boxShadow: "0 0 8px rgba(255,255,255,0.35)",
+                      }}
+                    />
+                    <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryBronzePct}%`, backgroundColor: "rgb(196, 128, 60)" }} />
+                    <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masterySilverPct}%`, backgroundColor: "rgb(180, 190, 200)" }} />
+                    <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryGoldPct}%`, backgroundColor: "rgb(255, 200, 40)" }} />
+                  </div>
+                  <div className="mt-2 flex justify-between text-[10px] uppercase tracking-wide" style={{ color: "rgb(180, 160, 120)" }}>
+                    <span>{t("mastery.bronze", "BRONZE")} {masteryThresholds.bronze.toFixed(1)}s</span>
+                    <span>{t("mastery.silver", "SILVER")} {masteryThresholds.silver.toFixed(1)}s</span>
+                    <span>{t("mastery.gold", "GOLD")} {masteryThresholds.gold.toFixed(1)}s</span>
+                  </div>
+                  {masteryNextTierHint && (
+                    <p className="mt-2 text-center text-[11px]" style={{ color: "rgb(180, 160, 110)" }}>
+                      {t("common.next", "NEXT")}: {masteryNextTierHint.name} ({masteryNextTierHint.target.toFixed(2)}s) - {(masteryPanel.newBest - masteryNextTierHint.target).toFixed(2)}s {t("mastery.toGo", "to go")}
                     </p>
                   )}
                 </div>
-              </div>
-            )}
+              )}
 
+              <button
+                type="button"
+                onClick={() => setMasteryPanel(null)}
+                className="mt-5 flex h-11 w-full items-center justify-center rounded-[12px] border text-sm font-black text-white hover:bg-[#c87314]"
+                style={{
+                  backgroundColor: "rgb(170, 90, 15)",
+                  borderColor: "rgb(255, 190, 60)",
+                }}
+              >
+                {t("common.continue", "Continue")}
+              </button>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        session && levelUpPanel && !masteryPanel && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
             <button
               type="button"
+              aria-label="Close level-up panel"
               onClick={() => setLevelUpPanel(null)}
-              className="mt-6 flex h-[46px] w-full items-center justify-center rounded-[13px] border text-sm font-black text-white hover:bg-[#d77d14]"
+              className="absolute inset-0 bg-black/75"
+            />
+
+            <div
+              className="relative w-full max-w-[460px] rounded-[22px] border p-6 shadow-[0_30px_90px_rgba(0,0,0,0.65)]"
               style={{
-                backgroundColor: "rgb(165, 85, 10)",
-                borderColor: "rgb(255, 200, 60)",
+                backgroundColor: "rgba(12, 10, 18, 0.96)",
+                borderColor: "rgb(200, 160, 40)",
               }}
             >
-              {t("levelUp.awesome", "Awesome")}
-            </button>
-          </div>
-        </div>
-      )}
+              <div
+                className="pointer-events-none absolute inset-[2px] rounded-[20px] border"
+                style={{ borderColor: "rgba(255, 220, 80, 0.24)" }}
+              />
 
-      {session && showLogoutConfirm && (
-        <div className="fixed inset-0 z-[51] flex items-center justify-center p-4">
-          <button
-            type="button"
-            aria-label="Close logout dialog"
-            onClick={() => setShowLogoutConfirm(false)}
-            className="absolute inset-0 bg-black/75"
-          />
-          <div className="relative w-full max-w-[500px] rounded-2xl border border-ninja-border bg-ninja-panel p-6 shadow-[0_24px_70px_rgba(0,0,0,0.62)]">
-            <p className="text-center text-2xl font-black tracking-tight text-white">{t("logout.title", "Sign Out?")}</p>
-            <p className="mt-4 text-center text-sm text-zinc-300">{t("logout.subtitle", "Sign out and clear this Discord session?")}</p>
-            <p className="mt-1 text-center text-sm text-zinc-400">{t("logout.helper", "You can log back in anytime.")}</p>
+              <div className="mb-2 flex items-center justify-center gap-2">
+                {[0, 1, 2, 3, 4, 5, 6].map((n) => (
+                  <Image
+                    key={`level-star-${n}`}
+                    src="/pics/mastery/star_small.png"
+                    alt="star"
+                    width={14}
+                    height={14}
+                    className="h-[14px] w-[14px] object-contain"
+                  />
+                ))}
+              </div>
 
-            {authError && (
-              <p className="mt-4 rounded-lg border border-red-400/35 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-                {authError}
+              <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 210, 60)" }}>{t("levelUp.title", "LEVEL UP")}</p>
+              {!!levelUpPanel.sourceLabel && (
+                <p className="mt-1 text-center text-[11px] uppercase tracking-[0.18em]" style={{ color: "rgb(160, 150, 120)" }}>{levelUpPanel.sourceLabel}</p>
+              )}
+
+              <p className="mt-3 text-center text-[56px] font-black leading-none" style={{ color: "rgb(255, 245, 180)" }}>LV.{levelUpPanel.newLevel}</p>
+              <p className="mt-1 text-center text-xs font-bold" style={{ color: "rgb(180, 165, 120)" }}>
+                LV.{levelUpPanel.previousLevel} → LV.{levelUpPanel.newLevel}
               </p>
-            )}
 
-            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <div className="mt-4 flex justify-center">
+                <div
+                  className="inline-flex rounded-full border px-6 py-2 text-center"
+                  style={{
+                    borderColor: "rgba(200, 160, 40, 0.7)",
+                    backgroundColor: "rgba(200, 160, 40, 0.16)",
+                  }}
+                >
+                  <p className="text-sm font-black uppercase tracking-wide" style={{ color: "rgb(255, 220, 80)" }}>{levelUpPanel.rank}</p>
+                </div>
+              </div>
+
+              {levelUpPanel.unlocked.length > 0 && (
+                <div className="mt-5">
+                  <p className="text-center text-[11px] font-black uppercase tracking-[0.17em]" style={{ color: "rgb(140, 215, 155)" }}>
+                    {t("levelUp.newJutsuUnlocked", "New Jutsu Unlocked")}
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {levelUpPanel.unlocked.slice(0, 4).map((name) => (
+                      <div
+                        key={name}
+                        className="rounded-lg border px-3 py-2 text-center text-xs font-bold"
+                        style={{
+                          borderColor: "rgba(70, 200, 100, 0.7)",
+                          backgroundColor: "rgba(50, 170, 80, 0.16)",
+                          color: "rgb(180, 255, 200)",
+                        }}
+                      >
+                        {name}
+                      </div>
+                    ))}
+                    {levelUpPanel.unlocked.length > 4 && (
+                      <p className="text-center text-[11px]" style={{ color: "rgb(140, 160, 140)" }}>
+                        +{levelUpPanel.unlocked.length - 4} {t("levelUp.more", "more")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <button
                 type="button"
-                onClick={() => void handleLogout()}
-                disabled={authBusy}
-                className="flex h-12 items-center justify-center gap-2 rounded-xl bg-red-700 text-sm font-black text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => setLevelUpPanel(null)}
+                className="mt-6 flex h-[46px] w-full items-center justify-center rounded-[13px] border text-sm font-black text-white hover:bg-[#d77d14]"
+                style={{
+                  backgroundColor: "rgb(165, 85, 10)",
+                  borderColor: "rgb(255, 200, 60)",
+                }}
               >
-                {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
-                {t("menu.signOut", "SIGN OUT")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowLogoutConfirm(false)}
-                className="h-12 rounded-xl border border-ninja-border bg-ninja-card text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
-              >
-                {t("common.cancel", "CANCEL")}
+                {t("levelUp.awesome", "Awesome")}
               </button>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-      {errorModal && !connectionLostState && (
-        <div className="fixed inset-0 z-[52] flex items-center justify-center p-4">
-          <button
-            type="button"
-            aria-label="Close error modal"
-            onClick={() => setErrorModal(null)}
-            className="absolute inset-0 bg-black/80"
-          />
-          <div className="relative w-full max-w-[550px] rounded-2xl border border-red-400/60 bg-ninja-panel p-6 shadow-[0_24px_70px_rgba(0,0,0,0.62)]">
-            <p className="text-center text-2xl font-black text-red-300">{errorModal.title}</p>
-            <p className="mt-5 whitespace-pre-line text-center text-sm leading-relaxed text-zinc-100">
-              {errorModal.message}
-            </p>
-            <div className="mt-6 flex justify-center">
-              <button
-                type="button"
-                onClick={() => setErrorModal(null)}
-                className="flex h-11 min-w-[170px] items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card px-5 text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
-              >
-                <AlertTriangle className="h-4 w-4 text-red-300" />
-                {t("common.backToMenu", "Back to Menu")}
-              </button>
+      {
+        session && showLogoutConfirm && (
+          <div className="fixed inset-0 z-[51] flex items-center justify-center p-4">
+            <button
+              type="button"
+              aria-label="Close logout dialog"
+              onClick={() => setShowLogoutConfirm(false)}
+              className="absolute inset-0 bg-black/75"
+            />
+            <div className="relative w-full max-w-[500px] rounded-2xl border border-ninja-border bg-ninja-panel p-6 shadow-[0_24px_70px_rgba(0,0,0,0.62)]">
+              <p className="text-center text-2xl font-black tracking-tight text-white">{t("logout.title", "Sign Out?")}</p>
+              <p className="mt-4 text-center text-sm text-zinc-300">{t("logout.subtitle", "Sign out and clear this Discord session?")}</p>
+              <p className="mt-1 text-center text-sm text-zinc-400">{t("logout.helper", "You can log back in anytime.")}</p>
+
+              {authError && (
+                <p className="mt-4 rounded-lg border border-red-400/35 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                  {authError}
+                </p>
+              )}
+
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => void handleLogout()}
+                  disabled={authBusy}
+                  className="flex h-12 items-center justify-center gap-2 rounded-xl bg-red-700 text-sm font-black text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+                  {t("menu.signOut", "SIGN OUT")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowLogoutConfirm(false)}
+                  className="h-12 rounded-xl border border-ninja-border bg-ninja-card text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
+                >
+                  {t("common.cancel", "CANCEL")}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-      {alertModal && !connectionLostState && (
-        <div className="fixed inset-0 z-[53] flex items-center justify-center p-4">
-          <button
-            type="button"
-            aria-label="Close alert modal"
-            onClick={() => setAlertModal(null)}
-            className="absolute inset-0 bg-black/80"
-          />
-          <div className="relative w-full max-w-[620px] rounded-[20px] border border-orange-300/70 bg-[#121729]/95 p-6 shadow-[0_28px_80px_rgba(0,0,0,0.68)]">
-            <div className="pointer-events-none absolute inset-x-[8px] top-[8px] h-[64px] rounded-[14px] bg-orange-400/10" />
-            <p className="relative text-center text-2xl font-black text-orange-200">{alertModal.title}</p>
-            <p className="relative mt-6 whitespace-pre-line text-center text-sm leading-relaxed text-zinc-100">
-              {alertModal.message}
-            </p>
-            <div className="relative mt-7 flex justify-center">
-              <button
-                type="button"
-                onClick={() => setAlertModal(null)}
-                className="flex h-12 min-w-[220px] items-center justify-center rounded-xl bg-ninja-accent px-6 text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow"
-              >
-                {alertModal.buttonText}
-              </button>
+      {
+        errorModal && !connectionLostState && (
+          <div className="fixed inset-0 z-[52] flex items-center justify-center p-4">
+            <button
+              type="button"
+              aria-label="Close error modal"
+              onClick={() => setErrorModal(null)}
+              className="absolute inset-0 bg-black/80"
+            />
+            <div className="relative w-full max-w-[550px] rounded-2xl border border-red-400/60 bg-ninja-panel p-6 shadow-[0_24px_70px_rgba(0,0,0,0.62)]">
+              <p className="text-center text-2xl font-black text-red-300">{errorModal.title}</p>
+              <p className="mt-5 whitespace-pre-line text-center text-sm leading-relaxed text-zinc-100">
+                {errorModal.message}
+              </p>
+              <div className="mt-6 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setErrorModal(null)}
+                  className="flex h-11 min-w-[170px] items-center justify-center gap-2 rounded-xl border border-ninja-border bg-ninja-card px-5 text-sm font-black text-zinc-100 hover:border-ninja-accent/40"
+                >
+                  <AlertTriangle className="h-4 w-4 text-red-300" />
+                  {t("common.backToMenu", "Back to Menu")}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-      {connectionLostState && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/85" />
-          <div className="relative w-full max-w-[500px] rounded-2xl border border-red-400/60 bg-ninja-panel p-6 shadow-[0_30px_90px_rgba(0,0,0,0.75)]">
-            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-red-400/45 bg-red-500/10">
-              <WifiOff className="h-5 w-5 text-red-300" />
-            </div>
-            <p className="mt-3 text-center text-2xl font-black text-red-300">{connectionLostState.title}</p>
-            <div className="mt-4 space-y-2 text-center text-sm text-zinc-100">
-              {connectionLostState.lines.map((line) => (
-                <p key={`conn-line-${line}`}>{line}</p>
-              ))}
-            </div>
-            <div className="mt-7 flex justify-center">
-              <button
-                type="button"
-                onClick={() => void handleConnectionLostExit()}
-                disabled={authBusy}
-                className="flex h-12 min-w-[180px] items-center justify-center gap-2 rounded-xl bg-red-700 px-6 text-sm font-black text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {t("connection.exitToLogin", "EXIT TO LOGIN")}
-              </button>
+      {
+        alertModal && !connectionLostState && (
+          <div className="fixed inset-0 z-[53] flex items-center justify-center p-4">
+            <button
+              type="button"
+              aria-label="Close alert modal"
+              onClick={() => setAlertModal(null)}
+              className="absolute inset-0 bg-black/80"
+            />
+            <div className="relative w-full max-w-[620px] rounded-[20px] border border-orange-300/70 bg-[#121729]/95 p-6 shadow-[0_28px_80px_rgba(0,0,0,0.68)]">
+              <div className="pointer-events-none absolute inset-x-[8px] top-[8px] h-[64px] rounded-[14px] bg-orange-400/10" />
+              <p className="relative text-center text-2xl font-black text-orange-200">{alertModal.title}</p>
+              <p className="relative mt-6 whitespace-pre-line text-center text-sm leading-relaxed text-zinc-100">
+                {alertModal.message}
+              </p>
+              <div className="relative mt-7 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setAlertModal(null)}
+                  className="flex h-12 min-w-[220px] items-center justify-center rounded-xl bg-ninja-accent px-6 text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow"
+                >
+                  {alertModal.buttonText}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+
+      {
+        connectionLostState && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/85" />
+            <div className="relative w-full max-w-[500px] rounded-2xl border border-red-400/60 bg-ninja-panel p-6 shadow-[0_30px_90px_rgba(0,0,0,0.75)]">
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-red-400/45 bg-red-500/10">
+                <WifiOff className="h-5 w-5 text-red-300" />
+              </div>
+              <p className="mt-3 text-center text-2xl font-black text-red-300">{connectionLostState.title}</p>
+              <div className="mt-4 space-y-2 text-center text-sm text-zinc-100">
+                {connectionLostState.lines.map((line) => (
+                  <p key={`conn-line-${line}`}>{line}</p>
+                ))}
+              </div>
+              <div className="mt-7 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => void handleConnectionLostExit()}
+                  disabled={authBusy}
+                  className="flex h-12 min-w-[180px] items-center justify-center gap-2 rounded-xl bg-red-700 px-6 text-sm font-black text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {authBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {t("connection.exitToLogin", "EXIT TO LOGIN")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+    </div >
   );
 }

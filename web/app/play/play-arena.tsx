@@ -129,6 +129,7 @@ interface PlayArenaProps {
   easyMode: boolean;
   debugHands: boolean;
   viewportFit?: boolean;
+  noEffects?: boolean;
   busy?: boolean;
   sfxVolume?: number;
   cameraIdx?: number;
@@ -785,6 +786,7 @@ export default function PlayArena({
   easyMode,
   debugHands,
   viewportFit = false,
+  noEffects = false,
   busy = false,
   sfxVolume = 0.35,
   cameraIdx = 0,
@@ -1050,6 +1052,7 @@ export default function PlayArena({
     effectName: string,
     options?: { delayMs?: number; volume?: number },
   ) => {
+    if (noEffects) return;
     const path = getJutsuSfxPath(name, effectName);
     if (!path) return;
     const effectNorm = normalizeLabel(effectName);
@@ -1104,7 +1107,7 @@ export default function PlayArena({
   }, [isCalibrationMode]);
 
   const triggerJutsuEffect = useCallback((effectName: string, durationMs = EFFECT_DEFAULT_DURATION_MS) => {
-    if (!effectName) return;
+    if (noEffects || !effectName) return;
     setActiveEffect(String(effectName).toLowerCase());
     setShowJutsuEffect(true);
     if (effectTimerRef.current) {
