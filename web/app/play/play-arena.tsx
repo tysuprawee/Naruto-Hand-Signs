@@ -327,6 +327,8 @@ type DatasetRow = Record<string, string | number>;
 
 const DATASET_LABEL_ROWS_CACHE = new Map<string, DatasetRow[]>();
 const DATASET_FULL_ROWS_CACHE = new Map<string, DatasetRow[]>();
+const SFX_AUDIO_CACHE = new Map<string, HTMLAudioElement>();
+const SFX_PRELOAD_PROMISES = new Map<string, Promise<void>>();
 
 function getCachedDatasetRowsForVersion(versionToken: string): Map<string, DatasetRow[]> {
   const prefix = `${versionToken}:`;
@@ -995,10 +997,63 @@ export default function PlayArena({
   const [xpPopupText, setXpPopupText] = useState("");
   const [xpPopupNonce, setXpPopupNonce] = useState(0);
   const [cameraFailure, setCameraFailure] = useState<CameraRuntimeFailure>("none");
+  const [sfxReady, setSfxReady] = useState(false);
+
+  const preloadSfx = useCallback((src: string): Promise<void> => {
+    const path = String(src || "").trim();
+    if (!path) return Promise.resolve();
+    if (SFX_AUDIO_CACHE.has(path)) return Promise.resolve();
+    const existing = SFX_PRELOAD_PROMISES.get(path);
+    if (existing) return existing;
+
+    const promise = new Promise<void>((resolve) => {
+      try {
+        const audio = new window.Audio();
+        audio.preload = "auto";
+        audio.src = path;
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          cleanup();
+          SFX_AUDIO_CACHE.set(path, audio);
+          resolve();
+        };
+        const fail = () => {
+          if (done) return;
+          done = true;
+          cleanup();
+          resolve();
+        };
+        const timeoutId = window.setTimeout(finish, 1800);
+        const cleanup = () => {
+          window.clearTimeout(timeoutId);
+          audio.removeEventListener("canplaythrough", finish);
+          audio.removeEventListener("loadeddata", finish);
+          audio.removeEventListener("error", fail);
+        };
+        audio.addEventListener("canplaythrough", finish);
+        audio.addEventListener("loadeddata", finish);
+        audio.addEventListener("error", fail);
+        audio.load();
+      } catch {
+        resolve();
+      }
+    });
+
+    SFX_PRELOAD_PROMISES.set(path, promise);
+    return promise;
+  }, []);
 
   const playSfx = useCallback((src: string, volume = 1) => {
     try {
-      const audio = new Audio(src);
+      const path = String(src || "").trim();
+      if (!path) return;
+      const cached = SFX_AUDIO_CACHE.get(path);
+      const audio = cached
+        ? (cached.cloneNode(true) as HTMLAudioElement)
+        : new window.Audio(path);
+      audio.preload = "auto";
       audio.volume = clamp(sfxVolume * volume, 0, 1);
       void audio.play().catch(() => { });
     } catch {
@@ -1111,6 +1166,24 @@ export default function PlayArena({
     const volume = options?.volume ?? 1;
     queueSfx(path, baseDelay, volume);
   }, [getJutsuSfxPath, noEffects, queueSfx]);
+
+  const requiredSfxPaths = useMemo(() => {
+    const paths = new Set<string>();
+    paths.add("/sounds/each.mp3");
+    paths.add("/sounds/complete.mp3");
+    const mainEffect = String(jutsu?.effect || "").toLowerCase();
+    const mainSig = getJutsuSfxPath(jutsuName, mainEffect);
+    if (mainSig) paths.add(mainSig);
+    if (Array.isArray(jutsu?.comboParts)) {
+      for (const part of jutsu.comboParts) {
+        const partName = String(part?.name || jutsuName);
+        const partEffect = String(part?.effect || "").toLowerCase();
+        const sig = getJutsuSfxPath(partName, partEffect);
+        if (sig) paths.add(sig);
+      }
+    }
+    return [...paths];
+  }, [getJutsuSfxPath, jutsu?.comboParts, jutsu?.effect, jutsuName]);
 
   const pushComboCue = useCallback((message: string) => {
     setComboCue(message);
@@ -1308,8 +1381,11 @@ export default function PlayArena({
 
       if (!SHADOW_CLONE_SMOKE_ENABLED || !smokeFrame) return;
 
-      const smokeW = drawWidth * SHADOW_CLONE_SMOKE_SCALE;
+      const spriteAspect = (smokeFrame.naturalWidth > 0 && smokeFrame.naturalHeight > 0)
+        ? (smokeFrame.naturalWidth / smokeFrame.naturalHeight)
+        : 1;
       const smokeH = drawHeight * SHADOW_CLONE_SMOKE_SCALE;
+      const smokeW = smokeH * spriteAspect;
       const smokeX = x - ((smokeW - drawWidth) * 0.5);
       const smokeY = centeredY - (smokeH * SHADOW_CLONE_SMOKE_RISE);
 
@@ -1734,7 +1810,7 @@ export default function PlayArena({
 
   const startRun = useCallback(() => {
     if (phaseRef.current === "loading" || phaseRef.current === "error") return;
-    if (datasetLoadingRef.current || !knnRef.current) return;
+    if (datasetLoadingRef.current || !knnRef.current || !sfxReady) return;
 
     if (isRankMode) {
       if (phaseRef.current === "completed") {
@@ -1755,7 +1831,7 @@ export default function PlayArena({
       forceCalibrationDiagnostics();
     }
     startActiveRun();
-  }, [appendProofEvent, forceCalibrationDiagnostics, isCalibrationMode, isRankMode, resetRunState, startActiveRun]);
+  }, [appendProofEvent, forceCalibrationDiagnostics, isCalibrationMode, isRankMode, resetRunState, sfxReady, startActiveRun]);
 
   const handleSubmitResult = useCallback(async () => {
     if (isCalibrationMode || !onComplete) return;
@@ -1905,6 +1981,26 @@ export default function PlayArena({
     headYawRef.current = headYaw;
     headPitchRef.current = headPitch;
   }, [headYaw, headPitch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const allCached = requiredSfxPaths.every((path) => SFX_AUDIO_CACHE.has(path));
+    if (allCached) {
+      setSfxReady(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setSfxReady(false);
+    void (async () => {
+      await Promise.all(requiredSfxPaths.map((path) => preloadSfx(path)));
+      if (cancelled) return;
+      setSfxReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [preloadSfx, requiredSfxPaths]);
 
   useEffect(() => {
     const effectNow = normalizeLabel(String(activeEffect || jutsu?.effect || ""));
@@ -2338,12 +2434,12 @@ export default function PlayArena({
   }, [ensureDatasetRowsForSequence, sequenceKey]);
 
   useEffect(() => {
-    if (phase === "ready" && (mode === "free" || mode === "calibration")) {
+    if (phase === "ready" && sfxReady && (mode === "free" || mode === "calibration")) {
       const timer = window.setTimeout(() => startRun(), 120);
       return () => window.clearTimeout(timer);
     }
     return;
-  }, [mode, phase, startRun]);
+  }, [mode, phase, sfxReady, startRun]);
 
   useEffect(() => {
     if (phase !== "countdown") return;
