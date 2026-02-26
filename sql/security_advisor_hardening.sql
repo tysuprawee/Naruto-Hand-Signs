@@ -8,6 +8,13 @@ alter table if exists public.app_config enable row level security;
 alter table if exists public.button_clicks enable row level security;
 alter table if exists public.challenge_mode_rules enable row level security;
 alter table if exists public.leaderboard enable row level security;
+alter table if exists public.profiles
+  add column if not exists auth_user_id uuid;
+
+create unique index if not exists profiles_auth_user_id_uidx
+  on public.profiles(auth_user_id)
+  where auth_user_id is not null;
+
 alter table if exists public.profiles enable row level security;
 alter table if exists public.quest_claims enable row level security;
 alter table if exists public.website_visits enable row level security;
@@ -105,7 +112,14 @@ create policy quest_claims_owner_read
       select 1
       from public.profiles p
       where lower(p.username) = lower(public.quest_claims.username)
-        and coalesce(p.discord_id, '') = coalesce(public.auth_session_discord_id(), '')
+        and (
+          (auth.uid() is not null and p.auth_user_id = auth.uid())
+          or (
+            auth.uid() is not null
+            and p.auth_user_id is null
+            and coalesce(p.discord_id, '') = coalesce(public.auth_session_discord_id(), '')
+          )
+        )
     )
   );
 
@@ -135,4 +149,3 @@ create policy website_visits_service_select
   using (true);
 
 commit;
-

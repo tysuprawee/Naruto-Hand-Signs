@@ -22,6 +22,13 @@ grant select on public.profiles_leaderboard_public to anon, authenticated;
 -- ----------------------------------------------------------------------------
 -- profiles table lockdown
 -- ----------------------------------------------------------------------------
+alter table if exists public.profiles
+  add column if not exists auth_user_id uuid;
+
+create unique index if not exists profiles_auth_user_id_uidx
+  on public.profiles(auth_user_id)
+  where auth_user_id is not null;
+
 alter table if exists public.profiles enable row level security;
 
 drop policy if exists "profiles_public_read" on public.profiles;
@@ -33,7 +40,15 @@ create policy profiles_self_read_authenticated
   for select
   to authenticated
   using (
-    coalesce(discord_id, '') = coalesce(public.auth_session_discord_id(), '')
+    (
+      auth.uid() is not null
+      and auth_user_id = auth.uid()
+    )
+    or (
+      auth.uid() is not null
+      and auth_user_id is null
+      and coalesce(discord_id, '') = coalesce(public.auth_session_discord_id(), '')
+    )
   );
 
 -- Keep table grants minimal; service_role remains operational.
@@ -46,16 +61,24 @@ grant select on table public.profiles to authenticated;
 create or replace function public.get_profile_meta_self_auth()
 returns jsonb
 language plpgsql
-stable
 security definer
 set search_path = public, pg_temp
 as $$
 declare
+  v_uid uuid := auth.uid();
   v_discord text := trim(coalesce(public.auth_session_discord_id(), ''));
   v_profile jsonb;
 begin
-  if v_discord = '' then
-    return jsonb_build_object('ok', false, 'reason', 'session_discord_missing');
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'reason', 'unauthenticated');
+  end if;
+
+  if v_discord <> '' then
+    update public.profiles p
+    set auth_user_id = v_uid,
+        updated_at = now()
+    where p.auth_user_id is null
+      and coalesce(p.discord_id, '') = v_discord;
   end if;
 
   select to_jsonb(x)
@@ -77,7 +100,12 @@ begin
       p.total_jutsus,
       p.fastest_combo
     from public.profiles p
-    where coalesce(p.discord_id, '') = v_discord
+    where p.auth_user_id = v_uid
+       or (
+         p.auth_user_id is null
+         and v_discord <> ''
+         and coalesce(p.discord_id, '') = v_discord
+       )
     limit 1
   ) as x;
 
@@ -96,4 +124,3 @@ revoke all on function public.get_profile_meta_self_auth() from public, anon;
 grant execute on function public.get_profile_meta_self_auth() to authenticated, service_role;
 
 commit;
-

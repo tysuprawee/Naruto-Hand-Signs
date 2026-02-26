@@ -16,6 +16,7 @@ import {
   Maximize,
   Settings,
   Sparkles,
+  Video,
   WifiOff,
   X,
 } from "lucide-react";
@@ -173,6 +174,7 @@ interface LeaderboardLevelRow {
 const SETTINGS_STORAGE_KEY = "jutsu-play-menu-settings-v1";
 const MENU_MUTE_STORAGE_KEY = "jutsu-play-menu-mute-v1";
 const PENDING_RANK_QUEUE_PREFIX = "jutsu-play-pending-rank-submit-v1";
+const CALIBRATION_SKIP_PREFIX = "jutsu-play-calibration-skip-v1";
 const PENDING_RANK_QUEUE_MAX = 20;
 const PENDING_RANK_REPLAY_BATCH = 4;
 const WEB_APP_VERSION = "1.0.0";
@@ -388,7 +390,7 @@ const ABOUT_SECTIONS: Array<{ title: string; lines: string[]; tone?: "accent" | 
     lines: [
       "Camera frames are processed locally for sign detection and effects.",
       "Raw camera frames are not uploaded.",
-      "Discord login is used for account identity and progression sync.",
+      "OAuth login is used for account identity and progression sync.",
     ],
   },
   {
@@ -589,7 +591,7 @@ function resolveSessionIdentity(session: Session | null): AuthIdentity | null {
     metadata.full_name,
     String(user.email || "").split("@")[0],
   );
-  const discordId = pickDiscordId(
+  const providerIdentity = pickDiscordId(
     identityData.provider_id,
     identityData.user_id,
     identityData.id,
@@ -603,9 +605,13 @@ function resolveSessionIdentity(session: Session | null): AuthIdentity | null {
     appMetadata.sub,
     discordIdentity?.id,
   );
+  const accountIdentity = firstNonEmpty(
+    user.id,
+    providerIdentity,
+  );
 
-  if (!username || !discordId) return null;
-  return { username, discordId };
+  if (!username || !accountIdentity) return null;
+  return { username, discordId: accountIdentity };
 }
 
 function getDiscordDisplayName(session: Session | null, identity: AuthIdentity | null): string {
@@ -1037,6 +1043,10 @@ function buildPendingRankQueueStorageKey(discordId: string): string {
   return `${PENDING_RANK_QUEUE_PREFIX}:${String(discordId || "").trim()}`;
 }
 
+function buildCalibrationSkipStorageKey(discordId: string): string {
+  return `${CALIBRATION_SKIP_PREFIX}:${String(discordId || "").trim()}`;
+}
+
 function makePendingRankRecordId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -1358,6 +1368,17 @@ function toRpcError(prefix: string, payload: Record<string, unknown>): string {
   return `${prefix}: ${reason}`;
 }
 
+function isTransientVideoPlayError(err: unknown): boolean {
+  const name = String((err as { name?: unknown })?.name || "").toLowerCase();
+  const message = String((err as { message?: unknown })?.message || err || "").toLowerCase();
+  return (
+    name === "aborterror"
+    || message.includes("the play() request was interrupted")
+    || message.includes("interrupted by a new load request")
+    || message.includes("aborterror")
+  );
+}
+
 function formatLeaderboardModeLabel(rawMode: string): string {
   return String(rawMode || "")
     .toLowerCase()
@@ -1504,10 +1525,12 @@ function PlayPageInner() {
   const calibrationGatePreviewRef = useRef<HTMLVideoElement | null>(null);
   const calibrationGatePreviewStreamRef = useRef<MediaStream | null>(null);
   const calibrationGateSampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const calibrationGatePreviewStartSeqRef = useRef(0);
   const [calibrationGateCameraIdx, setCalibrationGateCameraIdx] = useState(0);
   const [calibrationGateResolutionIdx, setCalibrationGateResolutionIdx] = useState(0);
   const [calibrationGateReady, setCalibrationGateReady] = useState(false);
   const [calibrationGateError, setCalibrationGateError] = useState("");
+  const [calibrationGateSkipped, setCalibrationGateSkipped] = useState(false);
   const [calibrationGateLighting, setCalibrationGateLighting] = useState<LightingReadiness>("good");
   const [calibrationGateDetected, setCalibrationGateDetected] = useState("IDLE");
   const [calibrationGateConfidence, setCalibrationGateConfidence] = useState(0);
@@ -1579,7 +1602,7 @@ function PlayPageInner() {
   const avatarUrl = useMemo(() => getDiscordAvatar(session), [session]);
   const visibleStateError = stateError || (
     session && !sessionIdentity
-      ? "Discord identity is missing required username/id fields. Re-login and retry."
+      ? "Account identity is missing required username/id fields. Re-login and retry."
       : ""
   );
 
@@ -1587,7 +1610,7 @@ function PlayPageInner() {
   const dailyResetAt = startOfTomorrowUtc(now);
   const weeklyResetAt = nextWeeklyResetUtc(now);
   const calibrationReady = hasCalibrationProfile(calibrationProfile);
-  const needsCalibrationGate = Boolean(session && identityLinked && !calibrationReady);
+  const needsCalibrationGate = Boolean(session && identityLinked && !calibrationReady && !calibrationGateSkipped);
 
   const jutsuTiers = useMemo(() => {
     const entries = Object.entries(OFFICIAL_JUTSUS).sort((a, b) => a[1].minLevel - b[1].minLevel || a[0].localeCompare(b[0]));
@@ -1654,10 +1677,46 @@ function PlayPageInner() {
     const discordId = String(identity?.discordId || "").trim();
     return discordId ? buildPendingRankQueueStorageKey(discordId) : "";
   }, [identity?.discordId]);
+  const calibrationSkipStorageKey = useMemo(() => {
+    const discordId = String(identity?.discordId || "").trim();
+    return discordId ? buildCalibrationSkipStorageKey(discordId) : "";
+  }, [identity?.discordId]);
   const effectiveMenuMusicVol = useMemo(
     () => clampVolume(view === "settings" ? draftSettings.musicVol : savedSettings.musicVol, DEFAULT_SETTINGS.musicVol),
     [draftSettings.musicVol, savedSettings.musicVol, view],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!calibrationSkipStorageKey) {
+      setCalibrationGateSkipped(false);
+      return;
+    }
+    try {
+      setCalibrationGateSkipped(window.localStorage.getItem(calibrationSkipStorageKey) === "1");
+    } catch {
+      setCalibrationGateSkipped(false);
+    }
+  }, [calibrationSkipStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !calibrationSkipStorageKey) return;
+    try {
+      if (calibrationGateSkipped) {
+        window.localStorage.setItem(calibrationSkipStorageKey, "1");
+      } else {
+        window.localStorage.removeItem(calibrationSkipStorageKey);
+      }
+    } catch {
+      // Ignore localStorage write failures.
+    }
+  }, [calibrationGateSkipped, calibrationSkipStorageKey]);
+
+  useEffect(() => {
+    if (calibrationReady && calibrationGateSkipped) {
+      setCalibrationGateSkipped(false);
+    }
+  }, [calibrationGateSkipped, calibrationReady]);
 
   const applyCompetitivePayload = useCallback((payload: Record<string, unknown>) => {
     const payloadResult = firstRecord(payload.result);
@@ -1898,7 +1957,7 @@ function PlayPageInner() {
     return response;
   }, [callRpcWithLegacyFallback]);
 
-  const fetchProfileMetaDirect = useCallback(async (targetIdentity: AuthIdentity): Promise<DirectProfileMetaResult> => {
+  const fetchProfileMetaDirect = useCallback(async (): Promise<DirectProfileMetaResult> => {
     const res = await callRpc("get_profile_meta_self_auth", {});
     if (!Boolean(res.ok)) {
       return {
@@ -1910,13 +1969,7 @@ function PlayPageInner() {
     if (!isRecord(res.profile)) {
       return { ok: false, reason: "profile_missing" };
     }
-    const profile = res.profile as Record<string, unknown>;
-    const expectedDiscord = String(targetIdentity.discordId || "").trim();
-    const actualDiscord = String(profile.discord_id || "").trim();
-    if (expectedDiscord && actualDiscord && expectedDiscord !== actualDiscord) {
-      return { ok: false, reason: "profile_identity_mismatch" };
-    }
-    return { ok: true, profile };
+    return { ok: true, profile: res.profile as Record<string, unknown> };
   }, [callRpc]);
 
   const findExistingUsernameByDiscordId = useCallback(async (discordId: string): Promise<string> => {
@@ -2247,6 +2300,7 @@ function PlayPageInner() {
   }, []);
 
   const stopCalibrationGatePreview = useCallback(() => {
+    calibrationGatePreviewStartSeqRef.current += 1;
     const stream = calibrationGatePreviewStreamRef.current;
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
@@ -2321,20 +2375,47 @@ function PlayPageInner() {
 
   const startCalibrationGatePreview = useCallback(async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return;
+    const startSeq = calibrationGatePreviewStartSeqRef.current + 1;
+    calibrationGatePreviewStartSeqRef.current = startSeq;
     stopCalibrationGatePreview();
     setCalibrationGateError("");
     setCalibrationGateSamples(0);
     try {
       const constraints = buildCameraConstraints(calibrationGateCameraIdx, calibrationGateResolutionIdx);
       const stream = await navigator.mediaDevices.getUserMedia({ video: constraints });
+      if (startSeq !== calibrationGatePreviewStartSeqRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       calibrationGatePreviewStreamRef.current = stream;
       if (calibrationGatePreviewRef.current) {
         calibrationGatePreviewRef.current.srcObject = stream;
-        await calibrationGatePreviewRef.current.play();
+        try {
+          await calibrationGatePreviewRef.current.play();
+        } catch (playErr) {
+          if (!isTransientVideoPlayError(playErr)) {
+            throw playErr;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          if (startSeq !== calibrationGatePreviewStartSeqRef.current) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          await calibrationGatePreviewRef.current.play();
+        }
+      }
+      if (startSeq !== calibrationGatePreviewStartSeqRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
       setCalibrationGateReady(true);
     } catch (err) {
+      if (startSeq !== calibrationGatePreviewStartSeqRef.current) return;
       stopCalibrationGatePreview();
+      if (isTransientVideoPlayError(err)) {
+        setCalibrationGateError("Camera feed is restarting. Press SCAN once.");
+        return;
+      }
       setCalibrationGateError(String((err as Error)?.message || "Camera unavailable. Check device and retry."));
     }
   }, [buildCameraConstraints, calibrationGateCameraIdx, calibrationGateResolutionIdx, stopCalibrationGatePreview]);
@@ -2540,7 +2621,7 @@ function PlayPageInner() {
     }
 
     let effectiveIdentity = targetIdentity;
-    const existingProfileRes = await fetchProfileMetaDirect(targetIdentity);
+    const existingProfileRes = await fetchProfileMetaDirect();
     if (existingProfileRes.ok && isRecord(existingProfileRes.profile)) {
       const existingUsername = normalizeDiscordUsername(existingProfileRes.profile.username);
       if (existingUsername) {
@@ -2610,7 +2691,7 @@ function PlayPageInner() {
     if (!Boolean(bindRes.ok) && String(bindRes.reason || "") === "identity_mismatch") {
       setStateReady(true);
       if (!silent) setStateBusy(false);
-      setStateError(toRpcError("Discord account link rejected", bindRes));
+      setStateError(toRpcError("Account link rejected", bindRes));
       return;
     }
 
@@ -2651,7 +2732,7 @@ function PlayPageInner() {
         p_discord_id: effectiveIdentity.discordId,
       }),
       shouldFetchDirectProfile
-        ? fetchProfileMetaDirect(effectiveIdentity)
+        ? fetchProfileMetaDirect()
         : Promise.resolve<DirectProfileMetaResult | null>(null),
     ]);
 
@@ -2735,6 +2816,7 @@ function PlayPageInner() {
         setStateReady(false);
         setBoundUsername("");
         setIdentityLinked(false);
+        setCalibrationGateSkipped(false);
         setStateError("");
         setQuestNotice("");
         clearQueuedRunPanels();
@@ -2748,6 +2830,7 @@ function PlayPageInner() {
         setActionBusy(false);
         setClaimBusyKey("");
         setIdentityLinked(false);
+        setCalibrationGateSkipped(false);
         setProgression(createInitialProgression());
         setQuestState(createDefaultQuestState(new Date()));
         setMastery({});
@@ -2972,17 +3055,25 @@ function PlayPageInner() {
     stopCalibrationGatePreview();
   }), [stopCalibrationGatePreview, stopSettingsPreview]);
 
-  const handleDiscordLogin = async () => {
+  const handleSkipCalibrationGate = useCallback(() => {
+    playUiClickSfx();
+    setCalibrationGateSkipped(true);
+    stopCalibrationGatePreview();
+    setCalibrationGateError("");
+    setView(calibrationReturnView);
+  }, [calibrationReturnView, playUiClickSfx, stopCalibrationGatePreview]);
+
+  const handleOAuthLogin = async (provider: "discord" | "google") => {
     if (!supabase || typeof window === "undefined") return;
     setAuthBusy(true);
     setAuthError("");
 
     const redirectTo = `${window.location.origin}/play`;
     const { error } = await supabase.auth.signInWithOAuth({
-      provider: "discord",
+      provider,
       options: {
         redirectTo,
-        scopes: "identify email",
+        scopes: provider === "discord" ? "identify email" : undefined,
       },
     });
 
@@ -2990,6 +3081,14 @@ function PlayPageInner() {
       setAuthError(error.message);
       setAuthBusy(false);
     }
+  };
+
+  const handleDiscordLogin = async () => {
+    await handleOAuthLogin("discord");
+  };
+
+  const handleGoogleLogin = async () => {
+    await handleOAuthLogin("google");
   };
 
   const handleSaveSettings = async () => {
@@ -3056,7 +3155,7 @@ function PlayPageInner() {
     if (!identity) return { ok: false, reason: "missing_identity" };
 
     let safeMastery = mergeMasteryMapsKeepBest(nextMastery);
-    const cloudMeta = await fetchProfileMetaDirect(identity);
+    const cloudMeta = await fetchProfileMetaDirect();
     if (cloudMeta.ok && isRecord(cloudMeta.profile)) {
       const cloudMastery = sanitizeMasteryMap(cloudMeta.profile.mastery);
       safeMastery = mergeMasteryMapsKeepBest(cloudMastery, safeMastery);
@@ -3140,7 +3239,7 @@ function PlayPageInner() {
       };
     }
     if (!identity) {
-      const message = t("run.identityUnavailable", "Discord identity is unavailable. Re-login and retry.");
+      const message = t("run.identityUnavailable", "Account identity is unavailable. Re-login and retry.");
       setStateError(message);
       openErrorModal(t("run.runErrorTitle", "Run Error"), message);
       return {
@@ -3583,6 +3682,7 @@ function PlayPageInner() {
 
   const handleCalibrationComplete = useCallback(async (profile: CalibrationProfile): Promise<boolean> => {
     setCalibrationProfile(profile);
+    setCalibrationGateSkipped(false);
     if (!identity) return false;
 
     const res = await callBoundRpc("upsert_calibration_profile_bound_auth", "upsert_calibration_profile_bound", {
@@ -3628,7 +3728,7 @@ function PlayPageInner() {
   const claimQuest = async (def: QuestDefinition) => {
     if (actionBusy) return;
     if (!identity) {
-      const message = t("quest.identityUnavailable", "Discord identity is unavailable. Re-login and retry.");
+      const message = t("quest.identityUnavailable", "Account identity is unavailable. Re-login and retry.");
       setStateError(message);
       openErrorModal(t("quest.rewardTitle", "Quest Reward"), message);
       return;
@@ -3832,21 +3932,37 @@ function PlayPageInner() {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => void handleDiscordLogin()}
-              disabled={!supabase || authBusy}
-              className="flex h-14 w-full items-center justify-center gap-3 rounded-xl bg-indigo-600 px-6 text-base font-black text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {authBusy ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <svg className="h-6 w-6 shrink-0 fill-current" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path d="M107.7 8.07C99.71 4.29 91.13 1.51 82.16 0A101.44 101.44 0 0 0 78.73 7c-9.6-1.44-19.14-1.44-28.53 0A101.63 101.63 0 0 0 46.77 0c-8.97 1.51-17.55 4.3-25.54 8.07C4.1 33.56-1.9 58.4.45 82.91a100.95 100.95 0 0 0 30.65 13.45c2-2.73 3.8-5.63 5.4-8.7a46.68 46.68 0 0 1-15.82-7.55c1.23-.9 2.4-1.85 3.55-2.85 18 8.35 37.52 8.35 55.42 0 1.15 1 2.32 1.95 3.55 2.85a46.54 46.54 0 0 1-15.82 7.55c1.6 3.07 3.4 5.97 5.4 8.7a100.9 100.9 0 0 0 30.65-13.45c2.63-28.16-5-52.01-20.73-74.84ZM42.27 63.85c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Zm42.6 0c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Z" />
-                </svg>
-              )}
-              LOGIN WITH DISCORD
-            </button>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void handleDiscordLogin()}
+                disabled={!supabase || authBusy}
+                className="flex h-14 w-full items-center justify-center gap-3 rounded-xl bg-indigo-600 px-6 text-base font-black text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {authBusy ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <svg className="h-6 w-6 shrink-0 fill-current" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M107.7 8.07C99.71 4.29 91.13 1.51 82.16 0A101.44 101.44 0 0 0 78.73 7c-9.6-1.44-19.14-1.44-28.53 0A101.63 101.63 0 0 0 46.77 0c-8.97 1.51-17.55 4.3-25.54 8.07C4.1 33.56-1.9 58.4.45 82.91a100.95 100.95 0 0 0 30.65 13.45c2-2.73 3.8-5.63 5.4-8.7a46.68 46.68 0 0 1-15.82-7.55c1.23-.9 2.4-1.85 3.55-2.85 18 8.35 37.52 8.35 55.42 0 1.15 1 2.32 1.95 3.55 2.85a46.54 46.54 0 0 1-15.82 7.55c1.6 3.07 3.4 5.97 5.4 8.7a100.9 100.9 0 0 0 30.65-13.45c2.63-28.16-5-52.01-20.73-74.84ZM42.27 63.85c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Zm42.6 0c-5.83 0-10.6-5.28-10.6-11.75 0-6.48 4.67-11.75 10.6-11.75s10.68 5.27 10.6 11.75c0 6.47-4.77 11.75-10.6 11.75Z" />
+                  </svg>
+                )}
+                LOGIN WITH DISCORD
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleGoogleLogin()}
+                disabled={!supabase || authBusy}
+                className="flex h-14 w-full items-center justify-center gap-3 rounded-xl border border-zinc-500 bg-zinc-900/80 px-6 text-base font-black text-zinc-100 transition hover:bg-zinc-800/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {authBusy ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-sm font-black text-zinc-900">G</span>
+                )}
+                LOGIN WITH GOOGLE
+              </button>
+            </div>
 
             {authError && (
               <p className="mt-4 rounded-lg border border-red-400/35 bg-red-500/10 px-3 py-2 text-xs text-red-200">
@@ -3873,7 +3989,7 @@ function PlayPageInner() {
             {(stateBusy || (!stateReady && Boolean(identity))) && session && (
               <div className="mx-auto mb-4 flex w-full max-w-5xl items-center gap-3 rounded-xl border border-ninja-border bg-ninja-panel/80 px-4 py-3 text-sm text-zinc-200">
                 <Loader2 className="h-4 w-4 animate-spin text-ninja-accent" />
-                Linking Discord identity and loading authoritative progression...
+                Linking account identity and loading authoritative progression...
               </div>
             )}
 
@@ -4174,11 +4290,41 @@ function PlayPageInner() {
                       className="h-full w-full object-cover"
                     />
                     {!calibrationGateReady && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/65 px-6 text-center">
-                        <p className="text-base font-black tracking-wide text-red-200">{t("calibration.noCameraFeed", "NO CAMERA FEED")}</p>
-                        <p className="text-xs text-zinc-200">
-                          {calibrationGateError || t("calibration.cameraUnavailableFallback", "Camera unavailable for calibration.")}
-                        </p>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/75 px-6 text-center">
+                        <div className="space-y-1">
+                          <p className="text-lg font-black tracking-wide text-red-200">{t("calibration.noCameraFeed", "NO CAMERA FEED")}</p>
+                          <p className="text-xs text-zinc-300">
+                            {calibrationGateError || t("calibration.cameraUnavailableFallback", "Camera unavailable for calibration.")}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void (async () => {
+                              await scanCameras();
+                              await startCalibrationGatePreview();
+                            })();
+                          }}
+                          disabled={cameraScanBusy}
+                          className="group relative flex h-14 w-44 items-center justify-center gap-3 overflow-hidden rounded-xl bg-orange-600 px-6 text-sm font-black tracking-[0.15em] text-white shadow-[0_12px_45px_rgba(234,88,12,0.35)] transition-all hover:bg-orange-500 hover:shadow-[0_12px_45px_rgba(234,88,12,0.45)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <div className="absolute inset-0 bg-gradient-to-tr from-white/10 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                          {cameraScanBusy ? (
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <Video className="h-5 w-5" />
+                              {t("calibration.scan", "SCAN").toUpperCase()}
+                            </div>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSkipCalibrationGate}
+                          className="h-11 rounded-lg border border-ninja-border bg-black/40 px-5 text-xs font-black tracking-wide text-zinc-100 hover:border-ninja-accent/40 hover:text-white"
+                        >
+                          {t("calibration.skipForNow", "SKIP FOR NOW")}
+                        </button>
                       </div>
                     )}
                   </div>
@@ -4233,8 +4379,10 @@ function PlayPageInner() {
                     <button
                       type="button"
                       onClick={() => {
-                        void scanCameras();
-                        void startCalibrationGatePreview();
+                        void (async () => {
+                          await scanCameras();
+                          await startCalibrationGatePreview();
+                        })();
                       }}
                       disabled={cameraScanBusy}
                       className="h-10 rounded-lg border border-ninja-border bg-ninja-card text-xs font-black tracking-wide text-zinc-100 hover:border-ninja-accent/45 disabled:cursor-not-allowed disabled:opacity-60"
@@ -4247,8 +4395,10 @@ function PlayPageInner() {
                     type="button"
                     onClick={() => {
                       if (!calibrationGateReady) {
-                        void scanCameras();
-                        void startCalibrationGatePreview();
+                        void (async () => {
+                          await scanCameras();
+                          await startCalibrationGatePreview();
+                        })();
                         return;
                       }
                       setView("calibration_session");
@@ -4261,6 +4411,13 @@ function PlayPageInner() {
                   </button>
 
                   <div className="grid gap-3 sm:grid-cols-1">
+                    <button
+                      type="button"
+                      onClick={handleSkipCalibrationGate}
+                      className="flex h-[42px] items-center justify-center rounded-xl border border-ninja-border bg-black/35 text-sm font-black tracking-wide text-zinc-200 hover:border-ninja-accent/40 hover:text-white"
+                    >
+                      {t("calibration.skipForNow", "SKIP FOR NOW")}
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -5605,7 +5762,7 @@ function PlayPageInner() {
             />
             <div className="relative w-full max-w-[500px] rounded-2xl border border-ninja-border bg-ninja-panel p-6 shadow-[0_24px_70px_rgba(0,0,0,0.62)]">
               <p className="text-center text-2xl font-black tracking-tight text-white">{t("logout.title", "Sign Out?")}</p>
-              <p className="mt-4 text-center text-sm text-zinc-300">{t("logout.subtitle", "Sign out and clear this Discord session?")}</p>
+              <p className="mt-4 text-center text-sm text-zinc-300">{t("logout.subtitle", "Sign out and clear this session?")}</p>
               <p className="mt-1 text-center text-sm text-zinc-400">{t("logout.helper", "You can log back in anytime.")}</p>
 
               {authError && (
