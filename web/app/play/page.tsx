@@ -1183,11 +1183,11 @@ function validateRankProofClient(result: PlayArenaResult): RankProofValidationRe
     return fail("event_limit_exceeded", "Event list exceeded limit without overflow marker.");
   }
 
-  const expectedSigns = Math.max(0, Math.floor(Number(result.expectedSigns) || 0));
-  if (expectedSigns <= 0) {
-    return fail("invalid_expected_signs", "Expected sign count is missing.");
+  const rawExpectedSigns = Number(result.expectedSigns);
+  if (!Number.isFinite(rawExpectedSigns)) {
+    return fail("invalid_expected_signs", "Expected sign count is invalid.");
   }
-
+  const expectedSigns = Math.max(0, Math.floor(rawExpectedSigns));
   const jutsuSequence = (OFFICIAL_JUTSUS[result.jutsuName]?.sequence ?? []).map((sign) => normalizeSignToken(sign));
   if (jutsuSequence.length > 0 && jutsuSequence.length !== expectedSigns) {
     return fail("jutsu_sequence_mismatch", "Result sign count does not match configured jutsu sequence.");
@@ -1257,7 +1257,7 @@ function validateRankProofClient(result: PlayArenaResult): RankProofValidationRe
         return fail("mode_mismatch", "run_start mode does not match selected jutsu.");
       }
       const eventExpectedSigns = Math.floor(Number(event.expected_signs));
-      if (Number.isFinite(eventExpectedSigns) && eventExpectedSigns > 0 && eventExpectedSigns !== expectedSigns) {
+      if (Number.isFinite(eventExpectedSigns) && eventExpectedSigns >= 0 && eventExpectedSigns !== expectedSigns) {
         return fail("expected_signs_mismatch", "run_start expected_signs mismatched result payload.");
       }
       continue;

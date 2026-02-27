@@ -16,6 +16,7 @@ import { OFFICIAL_JUTSUS } from "@/utils/jutsu-registry";
 import { getXpForLevel } from "@/utils/progression";
 import FireballThreeOverlay from "@/app/play/effects/fireball-three-overlay";
 import SharinganCrowOverlay from "@/app/play/effects/sharingan-crow-overlay";
+import WaterDragonOverlay from "@/app/play/effects/water-dragon-overlay";
 import {
   applyTemporalVote,
   DEFAULT_FILTERS,
@@ -214,6 +215,16 @@ const SHARINGAN_BLOOD_BASE_NAME = "/eyeblood/f4aa41aa-86ca-4142-a969-2024f75bdf7
 const SHARINGAN_BLOOD_FRAME_START = 11;
 const SHARINGAN_BLOOD_FRAME_END = 199;
 const SHARINGAN_BLOOD_FRAME_RATE = 24;
+const SHARINGAN_POSE_POS_LERP = 0.42;
+const SHARINGAN_POSE_SIZE_LERP = 0.34;
+const SHARINGAN_POSE_ANGLE_LERP = 0.28;
+const SHARINGAN_LEFT_EYELID_INDICES = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
+const SHARINGAN_RIGHT_EYELID_INDICES = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
+const SHARINGAN_EYE_BLEND = 0.65;
+const SHARINGAN_EYE_SHADOW = 0.4;
+const SHARINGAN_EYE_LIGHT = 0.95;
+const SHARINGAN_EYE_GLOW = 0.6;
+const SHARINGAN_EYE_REFLECT = 0.35;
 
 const SHADOW_CLONE_OFFSET_RATIO = 0.3;
 const SHADOW_CLONE_SCALE = 1.0;
@@ -229,6 +240,21 @@ const SHADOW_CLONE_SMOKE_MASK_TO_CLONE = false;
 const SHADOW_CLONE_SMOKE_BASE_NAME = "/smoke/cf7378e5-58a9-4967-af50-904b2d11ecdd-";
 const SHADOW_CLONE_SMOKE_FRAME_START = 0;
 const SHADOW_CLONE_SMOKE_FRAME_END = 55;
+
+const REAPER_BG_IMAGE_PATH = "/effects/reaper_death_bg.jpg";
+const REAPER_BG_BASE_SCALE = 1.03;
+const REAPER_BG_ZOOM_AMP = 0.08;
+const REAPER_BG_ZOOM_HZ = 0.22;
+const REAPER_BG_FLOAT_X_AMP = 14;
+const REAPER_BG_FLOAT_Y_AMP = 20;
+const REAPER_BG_FLOAT_HZ = 0.16;
+const REAPER_BG_Y_OFFSET = -30;
+const REAPER_BG_KEEP_RATIO = 0.4;
+const REAPER_BG_DARKEN_ALPHA = 0.42;
+const REAPER_PERSON_BRIGHTNESS = 0.82;
+const REAPER_PERSON_DARKNESS = 0.78;
+const REAPER_FADE_IN_MS = 900;
+const REAPER_FADE_OUT_MS = 900;
 
 const CALIBRATION_DURATION_S = 12;
 const CALIBRATION_MIN_SAMPLES = 100;
@@ -750,6 +776,58 @@ function buildSharinganVisualPose(landmarks: Landmark[]): SharinganVisualPose | 
   };
 }
 
+function lerpValue(from: number, to: number, alpha: number): number {
+  return from + ((to - from) * alpha);
+}
+
+function lerpAngleDeg(from: number, to: number, alpha: number): number {
+  let delta = ((to - from + 540) % 360) - 180;
+  if (!Number.isFinite(delta)) delta = 0;
+  return from + (delta * alpha);
+}
+
+function smoothSharinganVisualPose(
+  previous: SharinganVisualPose | null,
+  next: SharinganVisualPose,
+): SharinganVisualPose {
+  if (!previous) return next;
+  return {
+    angleDeg: lerpAngleDeg(previous.angleDeg, next.angleDeg, SHARINGAN_POSE_ANGLE_LERP),
+    leftEye: {
+      x: lerpValue(previous.leftEye.x, next.leftEye.x, SHARINGAN_POSE_POS_LERP),
+      y: lerpValue(previous.leftEye.y, next.leftEye.y, SHARINGAN_POSE_POS_LERP),
+      sizePct: lerpValue(previous.leftEye.sizePct, next.leftEye.sizePct, SHARINGAN_POSE_SIZE_LERP),
+    },
+    rightEye: {
+      x: lerpValue(previous.rightEye.x, next.rightEye.x, SHARINGAN_POSE_POS_LERP),
+      y: lerpValue(previous.rightEye.y, next.rightEye.y, SHARINGAN_POSE_POS_LERP),
+      sizePct: lerpValue(previous.rightEye.sizePct, next.rightEye.sizePct, SHARINGAN_POSE_SIZE_LERP),
+    },
+    leftBlood: {
+      x: lerpValue(previous.leftBlood.x, next.leftBlood.x, SHARINGAN_POSE_POS_LERP),
+      y: lerpValue(previous.leftBlood.y, next.leftBlood.y, SHARINGAN_POSE_POS_LERP),
+      widthPct: lerpValue(previous.leftBlood.widthPct, next.leftBlood.widthPct, SHARINGAN_POSE_SIZE_LERP),
+      heightPct: lerpValue(previous.leftBlood.heightPct, next.leftBlood.heightPct, SHARINGAN_POSE_SIZE_LERP),
+    },
+    rightBlood: {
+      x: lerpValue(previous.rightBlood.x, next.rightBlood.x, SHARINGAN_POSE_POS_LERP),
+      y: lerpValue(previous.rightBlood.y, next.rightBlood.y, SHARINGAN_POSE_POS_LERP),
+      widthPct: lerpValue(previous.rightBlood.widthPct, next.rightBlood.widthPct, SHARINGAN_POSE_SIZE_LERP),
+      heightPct: lerpValue(previous.rightBlood.heightPct, next.rightBlood.heightPct, SHARINGAN_POSE_SIZE_LERP),
+    },
+  };
+}
+
+function getCachedImage(cache: Map<string, HTMLImageElement>, src: string): HTMLImageElement {
+  const existing = cache.get(src);
+  if (existing) return existing;
+  const image = new window.Image();
+  image.decoding = "async";
+  image.src = src;
+  cache.set(src, image);
+  return image;
+}
+
 function drawLandmarks(ctx: CanvasRenderingContext2D, landmarks: Landmark[], width: number, height: number): void {
   const connections = [
     [0, 1], [1, 2], [2, 3], [3, 4],
@@ -972,6 +1050,10 @@ export default function PlayArena({
     () => normalizeLabel(jutsuTitle).includes("mangekyou") ? "Mangekyou Sharingan" : "Sharingan",
     [jutsuTitle],
   );
+  const sharinganEyeTexturePath = useMemo(
+    () => (sharinganModeName === "Mangekyou Sharingan" ? "/mangekyou_eyes.png" : "/sharingan.png"),
+    [sharinganModeName],
+  );
   const sharinganChargeLabel = sharinganModeName === "Mangekyou Sharingan" ? "Mangekyou charge" : "Sharingan charge";
   const isSharinganChargedMode = useMemo(
     () => !isCalibrationMode
@@ -1006,6 +1088,7 @@ export default function PlayArena({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const shadowCloneCanvasRef = useRef<HTMLCanvasElement>(null);
   const sharinganForegroundCanvasRef = useRef<HTMLCanvasElement>(null);
+  const reaperCompositeCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const knnRef = useRef<KNNClassifier | null>(null);
   const handsRef = useRef<HandLandmarkerLike | null>(null);
@@ -1018,6 +1101,16 @@ export default function PlayArena({
   const shadowCloneSmokeCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const sharinganForegroundLayerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sharinganForegroundLayerCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const reaperLayerCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const reaperLayerCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const reaperBgImageRef = useRef<HTMLImageElement | null>(null);
+  const reaperEffectStartAtRef = useRef(0);
+  const sharinganFaceLandmarksRef = useRef<Landmark[] | null>(null);
+  const sharinganSmoothEyesRef = useRef<{
+    left: { x: number; y: number; s: number };
+    right: { x: number; y: number; s: number };
+  } | null>(null);
+  const sharinganAssetImageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const shadowCloneSmokeFramesRef = useRef<HTMLImageElement[]>([]);
   const shadowCloneSegmentationBusyRef = useRef(false);
   const shadowCloneLastSendAtRef = useRef(0);
@@ -1051,6 +1144,9 @@ export default function PlayArena({
   const sharinganBlinkHoldStartedAtRef = useRef(0);
   const sharinganBloodAnimStartAtRef = useRef(0);
   const sharinganBloodAnimRafRef = useRef(0);
+  const sharinganPoseRef = useRef<SharinganVisualPose | null>(null);
+  const sharinganEyeTexturePathRef = useRef("/sharingan.png");
+  const sharinganBloodFrameRef = useRef(SHARINGAN_BLOOD_FRAME_START);
   const lightingStatusRef = useRef<"good" | "low_light" | "overexposed" | "low_contrast">("good");
   const lightingMeanRef = useRef(0);
   const lightingContrastRef = useRef(0);
@@ -1404,6 +1500,23 @@ export default function PlayArena({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
 
+  const clearReaperCompositeOverlay = useCallback(() => {
+    const canvas = reaperCompositeCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  const ensureReaperBackgroundImage = useCallback(() => {
+    if (reaperBgImageRef.current) return reaperBgImageRef.current;
+    const image = new window.Image();
+    image.decoding = "async";
+    image.src = REAPER_BG_IMAGE_PATH;
+    reaperBgImageRef.current = image;
+    return image;
+  }, []);
+
   const ensureShadowCloneSmokeFrames = useCallback(() => {
     if (shadowCloneSmokeFramesRef.current.length > 0) return;
     const frames: HTMLImageElement[] = [];
@@ -1422,10 +1535,122 @@ export default function PlayArena({
       && (effectToken === "lightning" || effectToken === "rasengan");
     const cloneEffectActive = showJutsuEffectRef.current && (effectToken === "clone" || comboClonePersistActive);
     const sharinganEffectActive = showJutsuEffectRef.current && effectToken === "eye";
-    if (!cloneEffectActive && !sharinganEffectActive) {
+    const reaperEffectActive = showJutsuEffectRef.current && effectToken === "reaper";
+    if (!cloneEffectActive && !sharinganEffectActive && !reaperEffectActive) {
       clearShadowCloneOverlay(false);
       clearSharinganForegroundOverlay();
+      clearReaperCompositeOverlay();
       return;
+    }
+
+    if (reaperEffectActive) {
+      const overlayCanvas = reaperCompositeCanvasRef.current;
+      const overlayCtx = overlayCanvas?.getContext("2d") ?? null;
+      if (overlayCanvas && overlayCtx && overlayCanvas.width > 0 && overlayCanvas.height > 0) {
+        let layerCanvas = reaperLayerCanvasRef.current;
+        let layerCtx = reaperLayerCtxRef.current;
+        if (!layerCanvas || !layerCtx) {
+          layerCanvas = document.createElement("canvas");
+          layerCtx = layerCanvas.getContext("2d");
+          reaperLayerCanvasRef.current = layerCanvas;
+          reaperLayerCtxRef.current = layerCtx;
+        }
+        if (layerCanvas && layerCtx) {
+          if (layerCanvas.width !== overlayCanvas.width || layerCanvas.height !== overlayCanvas.height) {
+            layerCanvas.width = overlayCanvas.width;
+            layerCanvas.height = overlayCanvas.height;
+          }
+
+          layerCtx.save();
+          layerCtx.clearRect(0, 0, layerCanvas.width, layerCanvas.height);
+          layerCtx.translate(layerCanvas.width, 0);
+          layerCtx.scale(-1, 1);
+          layerCtx.drawImage(
+            results.segmentationMask,
+            0,
+            0,
+            layerCanvas.width,
+            layerCanvas.height,
+          );
+          layerCtx.globalCompositeOperation = "source-in";
+          layerCtx.drawImage(
+            results.image,
+            0,
+            0,
+            layerCanvas.width,
+            layerCanvas.height,
+          );
+          layerCtx.restore();
+          layerCtx.globalCompositeOperation = "source-atop";
+          layerCtx.fillStyle = `rgba(0, 0, 0, ${clamp(REAPER_PERSON_DARKNESS, 0, 0.95)})`;
+          layerCtx.fillRect(0, 0, layerCanvas.width, layerCanvas.height);
+          layerCtx.globalCompositeOperation = "source-over";
+
+          const now = performance.now();
+          if (!reaperEffectStartAtRef.current) {
+            reaperEffectStartAtRef.current = now;
+          }
+          const elapsedMs = Math.max(0, now - reaperEffectStartAtRef.current);
+          const totalDurationMs = Math.max(
+            EFFECT_DEFAULT_DURATION_MS,
+            Math.floor(castEffectDurationRef.current || EFFECT_DEFAULT_DURATION_MS),
+          );
+          const fadeIn = REAPER_FADE_IN_MS > 0
+            ? clamp(elapsedMs / REAPER_FADE_IN_MS, 0, 1)
+            : 1;
+          const remainingMs = Math.max(0, totalDurationMs - elapsedMs);
+          const fadeOut = REAPER_FADE_OUT_MS > 0
+            ? clamp(remainingMs / REAPER_FADE_OUT_MS, 0, 1)
+            : 1;
+          const effectAlpha = clamp(Math.min(fadeIn, fadeOut), 0, 1);
+          const bgImage = ensureReaperBackgroundImage();
+
+          overlayCtx.save();
+          overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+          overlayCtx.globalAlpha = effectAlpha;
+
+          if (bgImage.complete && bgImage.naturalWidth > 0) {
+            const nowSec = now * 0.001;
+            const zoom = Math.max(
+              1,
+              REAPER_BG_BASE_SCALE + (Math.sin(nowSec * Math.PI * 2 * REAPER_BG_ZOOM_HZ) * REAPER_BG_ZOOM_AMP),
+            );
+            const bgW = overlayCanvas.width * zoom;
+            const bgH = overlayCanvas.height * zoom;
+            const driftX = Math.sin(nowSec * Math.PI * 2 * REAPER_BG_FLOAT_HZ) * REAPER_BG_FLOAT_X_AMP;
+            const driftY = (Math.cos(nowSec * Math.PI * 2 * REAPER_BG_FLOAT_HZ) * REAPER_BG_FLOAT_Y_AMP) + REAPER_BG_Y_OFFSET;
+            const bgX = ((overlayCanvas.width - bgW) * 0.5) + driftX;
+            const bgY = ((overlayCanvas.height - bgH) * 0.5) + driftY;
+            overlayCtx.drawImage(bgImage, bgX, bgY, bgW, bgH);
+          } else {
+            const gradient = overlayCtx.createLinearGradient(0, 0, 0, overlayCanvas.height);
+            gradient.addColorStop(0, "rgba(48,12,12,0.96)");
+            gradient.addColorStop(0.5, "rgba(24,4,4,0.97)");
+            gradient.addColorStop(1, "rgba(0,0,0,0.99)");
+            overlayCtx.fillStyle = gradient;
+            overlayCtx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+          }
+
+          overlayCtx.globalAlpha = effectAlpha * clamp(REAPER_BG_KEEP_RATIO, 0, 1);
+          overlayCtx.save();
+          overlayCtx.translate(overlayCanvas.width, 0);
+          overlayCtx.scale(-1, 1);
+          overlayCtx.drawImage(results.image, 0, 0, overlayCanvas.width, overlayCanvas.height);
+          overlayCtx.restore();
+
+          overlayCtx.globalAlpha = effectAlpha * clamp(REAPER_BG_DARKEN_ALPHA, 0, 1);
+          overlayCtx.fillStyle = "black";
+          overlayCtx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+          overlayCtx.globalAlpha = effectAlpha;
+          overlayCtx.filter = `brightness(${REAPER_PERSON_BRIGHTNESS}) contrast(1.02) saturate(0.92)`;
+          overlayCtx.drawImage(layerCanvas, 0, 0, overlayCanvas.width, overlayCanvas.height);
+          overlayCtx.filter = "none";
+          overlayCtx.restore();
+        }
+      }
+    } else {
+      clearReaperCompositeOverlay();
     }
 
     if (sharinganEffectActive) {
@@ -1474,6 +1699,213 @@ export default function PlayArena({
           foregroundCtx.save();
           foregroundCtx.clearRect(0, 0, foregroundCanvas.width, foregroundCanvas.height);
           foregroundCtx.drawImage(foregroundLayerCanvas, 0, 0, foregroundCanvas.width, foregroundCanvas.height);
+          const faceLandmarks = sharinganFaceLandmarksRef.current;
+          if (Array.isArray(faceLandmarks) && faceLandmarks.length >= 474) {
+            const leftIris = faceLandmarks[468];
+            const rightIris = faceLandmarks[473];
+            const leftOuter = faceLandmarks[33];
+            const leftInner = faceLandmarks[133];
+            const rightOuter = faceLandmarks[362];
+            const rightInner = faceLandmarks[263];
+
+            if (leftIris && rightIris && leftOuter && leftInner && rightOuter && rightInner) {
+              const canvasW = foregroundCanvas.width;
+              const canvasH = foregroundCanvas.height;
+              const mirrorPoint = (point: Landmark) => ({
+                x: (1 - point.x) * canvasW,
+                y: point.y * canvasH,
+              });
+              const mirrorNorm = (point: Landmark) => ({
+                x: clamp(1 - point.x, 0.02, 0.98),
+                y: clamp(point.y, 0.04, 0.96),
+              });
+              const leftIrisPx = mirrorPoint(leftIris);
+              const rightIrisPx = mirrorPoint(rightIris);
+              const leftOuterPx = mirrorPoint(leftOuter);
+              const leftInnerPx = mirrorPoint(leftInner);
+              const rightOuterPx = mirrorPoint(rightOuter);
+              const rightInnerPx = mirrorPoint(rightInner);
+
+              const leftSizeTarget = Math.hypot(leftOuterPx.x - leftInnerPx.x, leftOuterPx.y - leftInnerPx.y) * 0.42;
+              const rightSizeTarget = Math.hypot(rightOuterPx.x - rightInnerPx.x, rightOuterPx.y - rightInnerPx.y) * 0.42;
+
+              let smoothEyeState = sharinganSmoothEyesRef.current;
+              if (!smoothEyeState) {
+                smoothEyeState = {
+                  left: { x: leftIrisPx.x, y: leftIrisPx.y, s: leftSizeTarget },
+                  right: { x: rightIrisPx.x, y: rightIrisPx.y, s: rightSizeTarget },
+                };
+              } else {
+                smoothEyeState.left.x = lerpValue(smoothEyeState.left.x, leftIrisPx.x, SHARINGAN_POSE_POS_LERP);
+                smoothEyeState.left.y = lerpValue(smoothEyeState.left.y, leftIrisPx.y, SHARINGAN_POSE_POS_LERP);
+                smoothEyeState.left.s = lerpValue(smoothEyeState.left.s, leftSizeTarget, SHARINGAN_POSE_SIZE_LERP);
+                smoothEyeState.right.x = lerpValue(smoothEyeState.right.x, rightIrisPx.x, SHARINGAN_POSE_POS_LERP);
+                smoothEyeState.right.y = lerpValue(smoothEyeState.right.y, rightIrisPx.y, SHARINGAN_POSE_POS_LERP);
+                smoothEyeState.right.s = lerpValue(smoothEyeState.right.s, rightSizeTarget, SHARINGAN_POSE_SIZE_LERP);
+              }
+              sharinganSmoothEyesRef.current = smoothEyeState;
+
+              const leftSocketCenterNorm = mirrorNorm({
+                x: (leftOuter.x + leftInner.x) * 0.5,
+                y: (leftOuter.y + leftInner.y) * 0.5,
+                z: 0,
+              });
+              const rightSocketCenterNorm = mirrorNorm({
+                x: (rightOuter.x + rightInner.x) * 0.5,
+                y: (rightOuter.y + rightInner.y) * 0.5,
+                z: 0,
+              });
+
+              const leftSocketCenterPx = {
+                x: leftSocketCenterNorm.x * canvasW,
+                y: leftSocketCenterNorm.y * canvasH,
+              };
+              const rightSocketCenterPx = {
+                x: rightSocketCenterNorm.x * canvasW,
+                y: rightSocketCenterNorm.y * canvasH,
+              };
+
+              const faceAngle = Math.atan2(
+                rightSocketCenterPx.y - leftSocketCenterPx.y,
+                rightSocketCenterPx.x - leftSocketCenterPx.x,
+              );
+
+              const eyeTexturePath = sharinganEyeTexturePathRef.current || "/sharingan.png";
+              const eyeTextureImage = getCachedImage(sharinganAssetImageCacheRef.current, eyeTexturePath);
+              const eyeTextureReady = eyeTextureImage.complete && eyeTextureImage.naturalWidth > 0;
+
+              if (eyeTextureReady) {
+                const drawSeamlessEye = (iris: { x: number; y: number }, size: number, lidIndices: number[]) => {
+                  foregroundCtx.save();
+                  foregroundCtx.beginPath();
+                  for (let i = 0; i < lidIndices.length; i += 1) {
+                    const point = faceLandmarks[lidIndices[i]];
+                    if (!point) continue;
+                    const px = (1 - point.x) * canvasW;
+                    const py = point.y * canvasH;
+                    if (i === 0) foregroundCtx.moveTo(px, py);
+                    else foregroundCtx.lineTo(px, py);
+                  }
+                  foregroundCtx.closePath();
+                  foregroundCtx.clip();
+
+                  foregroundCtx.translate(iris.x, iris.y);
+                  foregroundCtx.rotate(faceAngle);
+
+                  foregroundCtx.globalCompositeOperation = "screen";
+                  const glowGrad = foregroundCtx.createRadialGradient(0, 0, 0, 0, 0, size * 0.8);
+                  glowGrad.addColorStop(0, `rgba(255, 0, 0, ${SHARINGAN_EYE_GLOW * SHARINGAN_EYE_BLEND})`);
+                  glowGrad.addColorStop(0.4, `rgba(255, 0, 0, ${(SHARINGAN_EYE_GLOW * 0.33) * SHARINGAN_EYE_BLEND})`);
+                  glowGrad.addColorStop(1, "rgba(255, 0, 0, 0)");
+                  foregroundCtx.fillStyle = glowGrad;
+                  foregroundCtx.fillRect(-size, -size, size * 2, size * 2);
+
+                  foregroundCtx.globalCompositeOperation = "multiply";
+                  foregroundCtx.globalAlpha = SHARINGAN_EYE_SHADOW * SHARINGAN_EYE_BLEND;
+                  foregroundCtx.drawImage(eyeTextureImage, -size / 2, -size / 2, size, size);
+
+                  foregroundCtx.globalCompositeOperation = "hard-light";
+                  foregroundCtx.globalAlpha = SHARINGAN_EYE_LIGHT * SHARINGAN_EYE_BLEND;
+                  foregroundCtx.drawImage(eyeTextureImage, -size / 2, -size / 2, size, size);
+
+                  const reflectionStrength = Math.max(0, Math.min(1, SHARINGAN_EYE_REFLECT * SHARINGAN_EYE_BLEND));
+                  if (reflectionStrength > 0) {
+                    foregroundCtx.globalCompositeOperation = "screen";
+                    foregroundCtx.globalAlpha = reflectionStrength;
+
+                    foregroundCtx.beginPath();
+                    foregroundCtx.ellipse(-size * 0.16, -size * 0.18, size * 0.2, size * 0.12, -0.35, 0, Math.PI * 2);
+                    let specularGrad = foregroundCtx.createRadialGradient(
+                      -size * 0.18,
+                      -size * 0.19,
+                      0,
+                      -size * 0.16,
+                      -size * 0.18,
+                      size * 0.22,
+                    );
+                    specularGrad.addColorStop(0, "rgba(255,255,255,0.95)");
+                    specularGrad.addColorStop(0.5, "rgba(255,255,255,0.45)");
+                    specularGrad.addColorStop(1, "rgba(255,255,255,0)");
+                    foregroundCtx.fillStyle = specularGrad;
+                    foregroundCtx.fill();
+
+                    foregroundCtx.globalAlpha = reflectionStrength * 0.6;
+                    foregroundCtx.beginPath();
+                    foregroundCtx.ellipse(size * 0.06, -size * 0.03, size * 0.06, size * 0.04, 0.2, 0, Math.PI * 2);
+                    specularGrad = foregroundCtx.createRadialGradient(
+                      size * 0.05,
+                      -size * 0.04,
+                      0,
+                      size * 0.06,
+                      -size * 0.03,
+                      size * 0.08,
+                    );
+                    specularGrad.addColorStop(0, "rgba(255,255,255,0.95)");
+                    specularGrad.addColorStop(1, "rgba(255,255,255,0)");
+                    foregroundCtx.fillStyle = specularGrad;
+                    foregroundCtx.fill();
+                  }
+                  foregroundCtx.restore();
+                };
+
+                drawSeamlessEye(smoothEyeState.left, smoothEyeState.left.s, SHARINGAN_LEFT_EYELID_INDICES);
+                drawSeamlessEye(smoothEyeState.right, smoothEyeState.right.s, SHARINGAN_RIGHT_EYELID_INDICES);
+              }
+
+              const bloodFrame = clamp(
+                Math.round(sharinganBloodFrameRef.current),
+                SHARINGAN_BLOOD_FRAME_START,
+                SHARINGAN_BLOOD_FRAME_END,
+              );
+              const bloodTexturePath = `${SHARINGAN_BLOOD_BASE_NAME}${bloodFrame}.png`;
+              const bloodTextureImage = getCachedImage(sharinganAssetImageCacheRef.current, bloodTexturePath);
+              const bloodReady = bloodTextureImage.complete && bloodTextureImage.naturalWidth > 0;
+
+              if (bloodReady) {
+                const leftBloodCenter = {
+                  x: leftSocketCenterPx.x,
+                  y: clamp(
+                    leftSocketCenterNorm.y + ((smoothEyeState.left.s / canvasW) * 0.48),
+                    0.04,
+                    0.98,
+                  ) * canvasH,
+                };
+                const rightBloodCenter = {
+                  x: rightSocketCenterPx.x,
+                  y: clamp(
+                    rightSocketCenterNorm.y + ((smoothEyeState.right.s / canvasW) * 0.48),
+                    0.04,
+                    0.98,
+                  ) * canvasH,
+                };
+                const drawBlood = (center: { x: number; y: number }, eyeSize: number) => {
+                  const width = Math.max(18, eyeSize * 2.5);
+                  const height = Math.max(36, eyeSize * 7.0);
+                  foregroundCtx.save();
+                  foregroundCtx.translate(center.x, center.y);
+                  foregroundCtx.rotate(faceAngle);
+                  foregroundCtx.globalAlpha = 0.95;
+                  foregroundCtx.filter = "saturate(1.35) contrast(1.15)";
+                  foregroundCtx.drawImage(
+                    bloodTextureImage,
+                    -width * 0.5,
+                    -height * 0.05,
+                    width,
+                    height,
+                  );
+                  foregroundCtx.filter = "none";
+                  foregroundCtx.restore();
+                };
+
+                drawBlood(leftBloodCenter, smoothEyeState.left.s);
+                drawBlood(rightBloodCenter, smoothEyeState.right.s);
+              }
+            } else {
+              sharinganSmoothEyesRef.current = null;
+            }
+          } else {
+            sharinganSmoothEyesRef.current = null;
+          }
           foregroundCtx.restore();
         }
       }
@@ -1634,7 +2066,7 @@ export default function PlayArena({
     drawCloneWithSmoke(centeredX - animatedOffset, leftAlpha);
     drawCloneWithSmoke(centeredX + animatedOffset, rightAlpha);
     overlayCtx.restore();
-  }, [clearShadowCloneOverlay, clearSharinganForegroundOverlay]);
+  }, [clearReaperCompositeOverlay, clearShadowCloneOverlay, clearSharinganForegroundOverlay, ensureReaperBackgroundImage]);
 
   const ensureSelfieSegmentation = useCallback(async (): Promise<SelfieSegmentationLike | null> => {
     if (selfieSegmentationRef.current) return selfieSegmentationRef.current;
@@ -1671,8 +2103,18 @@ export default function PlayArena({
       ensureShadowCloneSmokeFrames();
       void ensureSelfieSegmentation();
       clearSharinganForegroundOverlay();
+      clearReaperCompositeOverlay();
+      reaperEffectStartAtRef.current = 0;
     } else if (effectToken === "eye") {
       clearShadowCloneOverlay(true);
+      void ensureSelfieSegmentation();
+      clearReaperCompositeOverlay();
+      reaperEffectStartAtRef.current = 0;
+    } else if (effectToken === "reaper") {
+      clearShadowCloneOverlay(true);
+      clearSharinganForegroundOverlay();
+      reaperEffectStartAtRef.current = performance.now();
+      ensureReaperBackgroundImage();
       void ensureSelfieSegmentation();
     } else {
       const keepCloneVisible = comboCloneHoldRef.current && (effectToken === "lightning" || effectToken === "rasengan");
@@ -1680,6 +2122,8 @@ export default function PlayArena({
         clearShadowCloneOverlay(true);
       }
       clearSharinganForegroundOverlay();
+      clearReaperCompositeOverlay();
+      reaperEffectStartAtRef.current = 0;
     }
     setActiveEffect(effectToken);
     setShowJutsuEffect(true);
@@ -1691,6 +2135,8 @@ export default function PlayArena({
       setActiveEffect("");
       clearShadowCloneOverlay(true);
       clearSharinganForegroundOverlay();
+      clearReaperCompositeOverlay();
+      reaperEffectStartAtRef.current = 0;
       setComboTripleEffect("none");
       comboCloneHoldRef.current = false;
       comboChidoriTripleRef.current = false;
@@ -1698,8 +2144,10 @@ export default function PlayArena({
       effectTimerRef.current = null;
     }, Math.max(600, durationMs));
   }, [
+    clearReaperCompositeOverlay,
     clearShadowCloneOverlay,
     clearSharinganForegroundOverlay,
+    ensureReaperBackgroundImage,
     ensureSelfieSegmentation,
     ensureShadowCloneSmokeFrames,
     noEffects,
@@ -1820,6 +2268,10 @@ export default function PlayArena({
     showTwoHandsGuideRef.current = false;
     sharinganBlinkHoldStartedAtRef.current = 0;
     sharinganBloodAnimStartAtRef.current = 0;
+    reaperEffectStartAtRef.current = 0;
+    sharinganPoseRef.current = null;
+    sharinganFaceLandmarksRef.current = null;
+    sharinganSmoothEyesRef.current = null;
     calibrationStartedAtRef.current = 0;
     calibrationSamplesRef.current = [];
     calibrationFinalizeBusyRef.current = false;
@@ -1901,6 +2353,7 @@ export default function PlayArena({
     setActiveEffect("");
     clearShadowCloneOverlay(true);
     clearSharinganForegroundOverlay();
+    clearReaperCompositeOverlay();
     setPhoenixFireballs([]);
     setXpPopupText("");
     setFaceAnchor(null);
@@ -1911,7 +2364,7 @@ export default function PlayArena({
     clearCameraFailure();
     videoStallSinceRef.current = 0;
     lastVideoMediaTimeRef.current = -1;
-  }, [clearCameraFailure, clearShadowCloneOverlay, clearSharinganForegroundOverlay, resetProofState]);
+  }, [clearCameraFailure, clearReaperCompositeOverlay, clearShadowCloneOverlay, clearSharinganForegroundOverlay, resetProofState]);
 
   const finalizeCalibrationRun = useCallback(async () => {
     if (!isCalibrationMode) return;
@@ -2259,10 +2712,13 @@ export default function PlayArena({
       && comboCloneHoldRef.current
       && (effectNow === "lightning" || effectNow === "rasengan");
     const sharinganEffectActive = showJutsuEffect && !noEffects && effectNow === "eye";
-    const needsSegmentation = cloneEffectActive || comboClonePersistActive || sharinganEffectActive;
+    const reaperEffectActive = showJutsuEffect && !noEffects && effectNow === "reaper";
+    const needsSegmentation = cloneEffectActive || comboClonePersistActive || sharinganEffectActive || reaperEffectActive;
     if (!needsSegmentation) {
       clearShadowCloneOverlay(true);
       clearSharinganForegroundOverlay();
+      clearReaperCompositeOverlay();
+      reaperEffectStartAtRef.current = 0;
       return;
     }
 
@@ -2300,6 +2756,16 @@ export default function PlayArena({
         }
       }
 
+      if (reaperEffectActive) {
+        const reaperCanvas = reaperCompositeCanvasRef.current;
+        if (!reaperCanvas) return;
+        if (reaperCanvas.width !== video.videoWidth || reaperCanvas.height !== video.videoHeight) {
+          reaperCanvas.width = video.videoWidth;
+          reaperCanvas.height = video.videoHeight;
+          clearReaperCompositeOverlay();
+        }
+      }
+
       if (shadowCloneSegmentationBusyRef.current) return;
       if (ts - shadowCloneLastSendAtRef.current < CLONE_SEGMENTATION_INTERVAL_MS) return;
       shadowCloneLastSendAtRef.current = ts;
@@ -2331,11 +2797,14 @@ export default function PlayArena({
       cancelAnimationFrame(raf);
       shadowCloneSegmentationBusyRef.current = false;
       shadowCloneLastSendAtRef.current = 0;
+      reaperEffectStartAtRef.current = 0;
       clearShadowCloneOverlay(false);
       clearSharinganForegroundOverlay();
+      clearReaperCompositeOverlay();
     };
   }, [
     activeEffect,
+    clearReaperCompositeOverlay,
     clearShadowCloneOverlay,
     clearSharinganForegroundOverlay,
     ensureSelfieSegmentation,
@@ -2634,9 +3103,14 @@ export default function PlayArena({
       shadowCloneSmokeCtxRef.current = null;
       sharinganForegroundLayerCanvasRef.current = null;
       sharinganForegroundLayerCtxRef.current = null;
+      reaperLayerCanvasRef.current = null;
+      reaperLayerCtxRef.current = null;
+      reaperBgImageRef.current = null;
       shadowCloneSmokeFramesRef.current = [];
+      reaperEffectStartAtRef.current = 0;
       clearShadowCloneOverlay(true);
       clearSharinganForegroundOverlay();
+      clearReaperCompositeOverlay();
       if (comboCueTimerRef.current) {
         window.clearTimeout(comboCueTimerRef.current);
         comboCueTimerRef.current = null;
@@ -2662,6 +3136,9 @@ export default function PlayArena({
         sharinganBloodAnimRafRef.current = 0;
       }
       sharinganBloodAnimStartAtRef.current = 0;
+      sharinganPoseRef.current = null;
+      sharinganFaceLandmarksRef.current = null;
+      sharinganSmoothEyesRef.current = null;
       phoenixLastAtRef.current = 0;
       if (xpPopupTimerRef.current) {
         window.clearTimeout(xpPopupTimerRef.current);
@@ -2695,6 +3172,7 @@ export default function PlayArena({
   }, [
     cameraIdx,
     clearCameraFailure,
+    clearReaperCompositeOverlay,
     clearShadowCloneOverlay,
     clearSharinganForegroundOverlay,
     isLikelyLowPowerMobile,
@@ -2868,6 +3346,10 @@ export default function PlayArena({
       if (cameraFailureRef.current !== "none") {
         latestLandmarksRef.current = [];
         voteWindowRef.current = [];
+        sharinganPoseRef.current = null;
+        sharinganFaceLandmarksRef.current = null;
+        sharinganSmoothEyesRef.current = null;
+        setSharinganVisualPose(null);
         setDetectedHands(0);
         setRawDetectedLabel("No hands");
         setRawDetectedConfidence(0);
@@ -2896,6 +3378,9 @@ export default function PlayArena({
           setShowTwoHandsGuide(false);
         }
         if (isSharinganChargedMode) {
+          sharinganPoseRef.current = null;
+          sharinganFaceLandmarksRef.current = null;
+          sharinganSmoothEyesRef.current = null;
           setSharinganVisualPose(null);
           setSharinganBlinkHoldMs(0);
         }
@@ -2951,9 +3436,23 @@ export default function PlayArena({
           if (Array.isArray(firstFace) && firstFace.length > 0) {
             faceMotion = computeFaceMotion(firstFace);
             if (isSharinganChargedMode) {
-              setSharinganVisualPose(buildSharinganVisualPose(firstFace));
+              sharinganFaceLandmarksRef.current = firstFace;
+              const rawPose = buildSharinganVisualPose(firstFace);
+              if (rawPose) {
+                const smoothedPose = smoothSharinganVisualPose(sharinganPoseRef.current, rawPose);
+                sharinganPoseRef.current = smoothedPose;
+                setSharinganVisualPose(smoothedPose);
+              } else {
+                sharinganPoseRef.current = null;
+                sharinganFaceLandmarksRef.current = null;
+                sharinganSmoothEyesRef.current = null;
+                setSharinganVisualPose(null);
+              }
             }
           } else if (isSharinganChargedMode) {
+            sharinganPoseRef.current = null;
+            sharinganFaceLandmarksRef.current = null;
+            sharinganSmoothEyesRef.current = null;
             setSharinganVisualPose(null);
           }
           if (isSharinganChargedMode && phaseNow === "active") {
@@ -2962,6 +3461,9 @@ export default function PlayArena({
           }
         } catch (err) {
           if (isSharinganChargedMode) {
+            sharinganPoseRef.current = null;
+            sharinganFaceLandmarksRef.current = null;
+            sharinganSmoothEyesRef.current = null;
             setSharinganVisualPose(null);
           }
           const message = String((err as Error)?.message || err || "face_detect_failed");
@@ -2971,6 +3473,12 @@ export default function PlayArena({
             return prev ? `${prev} | ${token}` : token;
           });
         }
+      }
+      if (isSharinganChargedMode && !shouldUseFaceTracking) {
+        sharinganPoseRef.current = null;
+        sharinganFaceLandmarksRef.current = null;
+        sharinganSmoothEyesRef.current = null;
+        setSharinganVisualPose(null);
       }
       setFaceAnchor(faceMotion.anchor);
       if (faceMotion.anchor) {
@@ -3577,7 +4085,6 @@ export default function PlayArena({
       }
       : null;
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
-  const sharinganBloodFramePath = `${SHARINGAN_BLOOD_BASE_NAME}${sharinganBloodFrame}.png`;
   const showSpeedHud = isRankMode && phase !== "loading" && phase !== "error";
   const showSignChip = phase === "active"
     && !isCalibrationMode
@@ -3626,6 +4133,21 @@ export default function PlayArena({
       ? 520
       : 560;
   const effectSizePx = Math.max(280, Math.min(920, Math.round(effectBaseSize * effectScale)));
+
+  useEffect(() => {
+    sharinganEyeTexturePathRef.current = sharinganEyeTexturePath;
+  }, [sharinganEyeTexturePath]);
+
+  useEffect(() => {
+    sharinganBloodFrameRef.current = sharinganBloodFrame;
+  }, [sharinganBloodFrame]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const cache = sharinganAssetImageCacheRef.current;
+    getCachedImage(cache, "/sharingan.png");
+    getCachedImage(cache, "/mangekyou_eyes.png");
+  }, []);
 
   useEffect(() => {
     const isSharinganEffectActive = showJutsuEffect && effectLabel === "eye";
@@ -3861,6 +4383,12 @@ export default function PlayArena({
                       <div>FIRE POS: X {fireFinalX.toFixed(1)}% • Y {fireFinalY.toFixed(1)}%</div>
                     </>
                   )}
+                  {effectLabel === "eye" && (
+                    <>
+                      <div>EYE TEX: {sharinganEyeTexturePath}</div>
+                      <div>EYE POSE: {sharinganVisualPose ? "LOCKED" : "NONE"}</div>
+                    </>
+                  )}
                   <div>STATE: {phaseLabel}</div>
                   <div className="break-words">
                     LOADED SIGNS: {loadedDatasetLabels.length > 0 ? loadedDatasetLabels.join(", ") : "(none)"}
@@ -3874,9 +4402,26 @@ export default function PlayArena({
               {showJutsuEffect && (
                 <div className="pointer-events-none absolute inset-0 z-20">
                   {effectLabel === "water" && (
-                    <div
-                      className="absolute inset-0 bg-gradient-to-t from-sky-800/35 via-cyan-500/15 to-transparent"
-                    />
+                    <>
+                      <div className="absolute inset-0 bg-gradient-to-t from-cyan-900/45 via-sky-500/16 to-transparent" />
+                      <WaterDragonOverlay
+                        leftPct={fireAnchorX}
+                        topPct={Math.max(8, fireAnchorY - 4)}
+                        lowPower={isLikelyLowPowerMobile}
+                        mirroredInput={false}
+                        sourceAspect={videoAspect}
+                      />
+                      <div
+                        className="absolute rounded-full bg-cyan-300/30 blur-3xl"
+                        style={{
+                          width: "300px",
+                          height: "220px",
+                          left: `${Math.max(12, fireAnchorX - 6)}%`,
+                          top: `${Math.max(10, fireAnchorY - 8)}%`,
+                          transform: "translate(-50%, -50%)",
+                        }}
+                      />
+                    </>
                   )}
                   {effectLabel === "eye" && (
                     <div className="absolute inset-0 animate-[sharinganFadeIn_650ms_ease-out]">
@@ -3893,66 +4438,6 @@ export default function PlayArena({
                         ref={sharinganForegroundCanvasRef}
                         className="absolute inset-0 z-[3] h-full w-full object-cover"
                       />
-                      {sharinganVisualPose && (
-                        <>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src="/eyes.png"
-                            alt=""
-                            className="absolute opacity-95 mix-blend-screen"
-                            style={{
-                              left: `${sharinganVisualPose.leftEye.x * 100}%`,
-                              top: `${sharinganVisualPose.leftEye.y * 100}%`,
-                              width: `${sharinganVisualPose.leftEye.sizePct}%`,
-                              height: `${sharinganVisualPose.leftEye.sizePct}%`,
-                              transform: `translate(-50%, -50%) rotate(${sharinganVisualPose.angleDeg}deg)`,
-                              filter: "drop-shadow(0 0 14px rgba(255, 35, 35, 0.72)) saturate(1.25)",
-                            }}
-                          />
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src="/eyes.png"
-                            alt=""
-                            className="absolute opacity-95 mix-blend-screen"
-                            style={{
-                              left: `${sharinganVisualPose.rightEye.x * 100}%`,
-                              top: `${sharinganVisualPose.rightEye.y * 100}%`,
-                              width: `${sharinganVisualPose.rightEye.sizePct}%`,
-                              height: `${sharinganVisualPose.rightEye.sizePct}%`,
-                              transform: `translate(-50%, -50%) rotate(${sharinganVisualPose.angleDeg}deg)`,
-                              filter: "drop-shadow(0 0 14px rgba(255, 35, 35, 0.72)) saturate(1.25)",
-                            }}
-                          />
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={sharinganBloodFramePath}
-                            alt=""
-                            className="absolute opacity-95"
-                            style={{
-                              left: `${sharinganVisualPose.leftBlood.x * 100}%`,
-                              top: `${sharinganVisualPose.leftBlood.y * 100}%`,
-                              width: `${sharinganVisualPose.leftBlood.widthPct}%`,
-                              height: `${sharinganVisualPose.leftBlood.heightPct}%`,
-                              transform: `translate(-50%, -5%) rotate(${sharinganVisualPose.angleDeg}deg)`,
-                              filter: "saturate(1.35) contrast(1.15)",
-                            }}
-                          />
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={sharinganBloodFramePath}
-                            alt=""
-                            className="absolute opacity-95"
-                            style={{
-                              left: `${sharinganVisualPose.rightBlood.x * 100}%`,
-                              top: `${sharinganVisualPose.rightBlood.y * 100}%`,
-                              width: `${sharinganVisualPose.rightBlood.widthPct}%`,
-                              height: `${sharinganVisualPose.rightBlood.heightPct}%`,
-                              transform: `translate(-50%, -5%) rotate(${sharinganVisualPose.angleDeg}deg)`,
-                              filter: "saturate(1.35) contrast(1.15)",
-                            }}
-                          />
-                        </>
-                      )}
                     </div>
                   )}
                   {effectLabel === "clone" && (
@@ -4020,28 +4505,11 @@ export default function PlayArena({
                   )}
                   {effectLabel === "reaper" && (
                     <div className="absolute inset-0">
-                      <div className="absolute inset-0 bg-gradient-to-t from-rose-950/45 via-red-800/18 to-transparent" />
-                      <div
-                        className="absolute rounded-full bg-red-400/30 blur-3xl"
-                        style={{
-                          width: "230px",
-                          height: "230px",
-                          left: `${fireAnchorX}%`,
-                          top: `${Math.max(8, fireAnchorY - 2)}%`,
-                          transform: "translate(-50%, -50%)",
-                        }}
+                      <canvas
+                        ref={reaperCompositeCanvasRef}
+                        className="absolute inset-0 z-[2] h-full w-full object-cover"
                       />
-                      <div
-                        className="absolute rounded-full border border-red-300/40 bg-red-900/25"
-                        style={{
-                          width: "88px",
-                          height: "88px",
-                          left: `${fireAnchorX}%`,
-                          top: `${Math.max(8, fireAnchorY - 1)}%`,
-                          transform: "translate(-50%, -50%)",
-                          boxShadow: "0 0 36px rgba(220,38,38,0.45)",
-                        }}
-                      />
+                      <div className="absolute inset-0 z-[3] bg-gradient-to-br from-rose-900/18 via-red-700/10 to-black/20" />
                     </div>
                   )}
                   {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideo && (
