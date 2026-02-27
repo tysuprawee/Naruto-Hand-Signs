@@ -384,7 +384,43 @@ type DatasetRow = Record<string, string | number>;
 const DATASET_LABEL_ROWS_CACHE = new Map<string, DatasetRow[]>();
 const DATASET_FULL_ROWS_CACHE = new Map<string, DatasetRow[]>();
 const SFX_AUDIO_CACHE = new Map<string, HTMLAudioElement>();
-const SFX_PRELOAD_PROMISES = new Map<string, Promise<void>>();
+const SFX_PRELOAD_PROMISES = new Map<string, Promise<boolean>>();
+const SFX_PERSISTED_READY_KEY = "jutsu-play-sfx-ready-v1";
+const SFX_PERSISTED_READY_PATHS = new Set<string>();
+let SFX_PERSISTED_READY_HYDRATED = false;
+
+function hydratePersistedSfxReadyPaths(): void {
+  if (SFX_PERSISTED_READY_HYDRATED || typeof window === "undefined") return;
+  SFX_PERSISTED_READY_HYDRATED = true;
+  try {
+    const raw = window.localStorage.getItem(SFX_PERSISTED_READY_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    for (const value of parsed) {
+      const path = String(value || "").trim();
+      if (!path) continue;
+      SFX_PERSISTED_READY_PATHS.add(path);
+    }
+  } catch {
+    // Ignore malformed storage.
+  }
+}
+
+function persistSfxReadyPath(path: string): void {
+  if (typeof window === "undefined") return;
+  const normalized = String(path || "").trim();
+  if (!normalized) return;
+  hydratePersistedSfxReadyPaths();
+  if (SFX_PERSISTED_READY_PATHS.has(normalized)) return;
+  SFX_PERSISTED_READY_PATHS.add(normalized);
+  try {
+    const trimmed = [...SFX_PERSISTED_READY_PATHS].slice(-80);
+    window.localStorage.setItem(SFX_PERSISTED_READY_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
 
 function getCachedDatasetRowsForVersion(versionToken: string): Map<string, DatasetRow[]> {
   const prefix = `${versionToken}:`;
@@ -1242,16 +1278,20 @@ export default function PlayArena({
   const [xpPopupNonce, setXpPopupNonce] = useState(0);
   const [cameraFailure, setCameraFailure] = useState<CameraRuntimeFailure>("none");
   const [sfxReady, setSfxReady] = useState(false);
+  const [sfxLoadCompleted, setSfxLoadCompleted] = useState(0);
+  const [sfxLoadTotal, setSfxLoadTotal] = useState(0);
+  const [sfxLoadFailed, setSfxLoadFailed] = useState(0);
+  const [sfxRetryNonce, setSfxRetryNonce] = useState(0);
   const [videoAspect, setVideoAspect] = useState(4 / 3);
 
-  const preloadSfx = useCallback((src: string): Promise<void> => {
+  const preloadSfx = useCallback((src: string): Promise<boolean> => {
     const path = String(src || "").trim();
-    if (!path) return Promise.resolve();
-    if (SFX_AUDIO_CACHE.has(path)) return Promise.resolve();
+    if (!path) return Promise.resolve(false);
+    if (SFX_AUDIO_CACHE.has(path)) return Promise.resolve(true);
     const existing = SFX_PRELOAD_PROMISES.get(path);
     if (existing) return existing;
 
-    const promise = new Promise<void>((resolve) => {
+    const promise = new Promise<boolean>((resolve) => {
       try {
         const audio = new window.Audio();
         audio.preload = "auto";
@@ -1262,32 +1302,39 @@ export default function PlayArena({
           done = true;
           cleanup();
           SFX_AUDIO_CACHE.set(path, audio);
-          resolve();
+          persistSfxReadyPath(path);
+          resolve(true);
         };
         const fail = () => {
           if (done) return;
           done = true;
           cleanup();
-          resolve();
+          resolve(false);
         };
-        const timeoutId = window.setTimeout(finish, 1800);
+        const timeoutId = window.setTimeout(fail, 10000);
         const cleanup = () => {
           window.clearTimeout(timeoutId);
           audio.removeEventListener("canplaythrough", finish);
           audio.removeEventListener("loadeddata", finish);
+          audio.removeEventListener("canplay", finish);
           audio.removeEventListener("error", fail);
         };
         audio.addEventListener("canplaythrough", finish);
         audio.addEventListener("loadeddata", finish);
+        audio.addEventListener("canplay", finish);
         audio.addEventListener("error", fail);
         audio.load();
       } catch {
-        resolve();
+        resolve(false);
       }
     });
 
-    SFX_PRELOAD_PROMISES.set(path, promise);
-    return promise;
+    const tracked = promise.finally(() => {
+      SFX_PRELOAD_PROMISES.delete(path);
+    });
+
+    SFX_PRELOAD_PROMISES.set(path, tracked);
+    return tracked;
   }, []);
 
   const playSfx = useCallback((src: string, volume = 1) => {
@@ -2686,23 +2733,72 @@ export default function PlayArena({
 
   useEffect(() => {
     let cancelled = false;
-    const allCached = requiredSfxPaths.every((path) => SFX_AUDIO_CACHE.has(path));
-    if (allCached) {
+    const uniquePaths = [...new Set(requiredSfxPaths
+      .map((path) => String(path || "").trim())
+      .filter((path) => path.length > 0))];
+
+    hydratePersistedSfxReadyPaths();
+    setSfxLoadTotal(uniquePaths.length);
+    setSfxLoadCompleted(0);
+    setSfxLoadFailed(0);
+
+    if (uniquePaths.length <= 0) {
       setSfxReady(true);
       return () => {
         cancelled = true;
       };
     }
+
+    let completed = 0;
+    let failed = 0;
+    const pending: string[] = [];
+    for (const path of uniquePaths) {
+      if (SFX_AUDIO_CACHE.has(path)) {
+        completed += 1;
+        continue;
+      }
+      if (SFX_PERSISTED_READY_PATHS.has(path)) {
+        try {
+          const audio = new window.Audio(path);
+          audio.preload = "auto";
+          audio.load();
+          SFX_AUDIO_CACHE.set(path, audio);
+        } catch {
+          pending.push(path);
+          continue;
+        }
+        completed += 1;
+        continue;
+      }
+      pending.push(path);
+    }
+
+    setSfxLoadCompleted(completed);
+    setSfxLoadFailed(failed);
+    if (completed >= uniquePaths.length) {
+      setSfxReady(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setSfxReady(false);
     void (async () => {
-      await Promise.all(requiredSfxPaths.map((path) => preloadSfx(path)));
+      await Promise.all(pending.map(async (path) => {
+        const ok = await preloadSfx(path);
+        if (cancelled) return;
+        completed += 1;
+        if (!ok) failed += 1;
+        setSfxLoadCompleted(completed);
+        setSfxLoadFailed(failed);
+      }));
       if (cancelled) return;
-      setSfxReady(true);
+      setSfxReady(failed <= 0 && completed >= uniquePaths.length);
     })();
     return () => {
       cancelled = true;
     };
-  }, [preloadSfx, requiredSfxPaths]);
+  }, [preloadSfx, requiredSfxPaths, sfxRetryNonce]);
 
   useEffect(() => {
     const effectNow = normalizeLabel(String(activeEffect || jutsu?.effect || ""));
@@ -4008,6 +4104,9 @@ export default function PlayArena({
     : isSharinganChargedMode
       ? sharinganBlinkProgressPct
       : sequenceProgressPct;
+  const sfxLoadPct = sfxLoadTotal > 0
+    ? Math.round((Math.max(0, Math.min(sfxLoadTotal, sfxLoadCompleted)) / sfxLoadTotal) * 100)
+    : 100;
 
   const phaseLabel = phase === "active"
     ? "RUNNING"
@@ -4362,6 +4461,7 @@ export default function PlayArena({
                   <div>DB CRC: {datasetChecksumDisplay.slice(0, 8)}</div>
                   <div>DB SYNC: {datasetSyncLabel}</div>
                   <div>DB LOADED: {loadedDatasetLabels.length}</div>
+                  <div>SFX: {sfxLoadCompleted}/{Math.max(1, sfxLoadTotal)} • {sfxLoadPct}%</div>
                   <div>MP BACKEND: {detectorBackend}</div>
                   <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>
                   <div>CAM: {cameraStatusText}</div>
@@ -4570,6 +4670,40 @@ export default function PlayArena({
                   <p className={`px-4 text-center text-sm ${phase === "error" ? "text-red-200" : "text-zinc-200"}`}>
                     {phase === "error" ? errorMessage : loadingMessage}
                   </p>
+                </div>
+              )}
+
+              {phase === "ready" && !sfxReady && (
+                <div className="absolute inset-0 z-45 flex items-center justify-center bg-black/62 px-4">
+                  <div className="w-full max-w-md rounded-2xl border border-cyan-300/35 bg-zinc-950/85 p-5 text-center shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
+                    <p className="text-xl font-black text-cyan-100">LOADING SOUNDS</p>
+                    <p className="mt-1 text-xs uppercase tracking-widest text-zinc-400">
+                      Preparing all SFX before run start
+                    </p>
+                    <div className="mt-4 h-3 w-full overflow-hidden rounded-full border border-cyan-300/30 bg-zinc-900">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500 transition-all duration-300"
+                        style={{ width: `${Math.max(0, Math.min(100, sfxLoadPct))}%` }}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs font-bold tracking-wider text-cyan-100">
+                      {Math.max(0, sfxLoadCompleted)} / {Math.max(1, sfxLoadTotal)} • {sfxLoadPct}%
+                    </p>
+                    {sfxLoadFailed > 0 && (
+                      <>
+                        <p className="mt-2 text-xs text-red-200">
+                          {sfxLoadFailed} sound file(s) failed to preload.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setSfxRetryNonce((prev) => prev + 1)}
+                          className="mt-3 inline-flex h-9 items-center justify-center rounded-lg border border-cyan-300/45 bg-cyan-500/20 px-4 text-xs font-black uppercase tracking-wider text-cyan-100 hover:bg-cyan-400/25"
+                        >
+                          Retry Audio Load
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
 

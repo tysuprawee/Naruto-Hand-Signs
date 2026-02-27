@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "@/utils/supabase";
 
 const SETTINGS_STORAGE_KEY = "jutsu-play-menu-settings-v1";
 const MENU_MUTE_STORAGE_KEY = "jutsu-play-menu-mute-v1";
@@ -43,6 +44,9 @@ function readStoredMute(): boolean {
 
 export function BackgroundMusicProvider({ children }: { children: React.ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const canPlayRef = useRef(false);
+  const userInteractedRef = useRef(false);
+  const [hasAuthenticatedSession, setHasAuthenticatedSession] = useState(false);
   const [musicVolume, setMusicVolumeState] = useState<number>(() => readStoredVolume());
   const [musicMuted, setMusicMutedState] = useState<boolean>(() => readStoredMute());
 
@@ -55,23 +59,39 @@ export function BackgroundMusicProvider({ children }: { children: React.ReactNod
   }, []);
 
   useEffect(() => {
+    if (!supabase) {
+      return;
+    }
+    let cancelled = false;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (cancelled) return;
+      setHasAuthenticatedSession(Boolean(data.session));
+    }).catch(() => {
+      if (!cancelled) setHasAuthenticatedSession(false);
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (cancelled) return;
+      setHasAuthenticatedSession(Boolean(session));
+    });
+
+    return () => {
+      cancelled = true;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     const audio = new Audio("/sounds/music2.mp3");
     audio.loop = true;
     audio.preload = "auto";
     audioRef.current = audio;
 
-    const tryPlay = () => {
-      void audio.play().catch(() => { });
-    };
-
-    tryPlay();
-
     const onGesture = () => {
-      tryPlay();
-      window.removeEventListener("pointerdown", onGesture);
-      window.removeEventListener("keydown", onGesture);
-      window.removeEventListener("touchstart", onGesture);
+      userInteractedRef.current = true;
+      if (!canPlayRef.current) return;
+      void audio.play().catch(() => { });
     };
 
     window.addEventListener("pointerdown", onGesture);
@@ -91,9 +111,18 @@ export function BackgroundMusicProvider({ children }: { children: React.ReactNod
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    const canPlay = hasAuthenticatedSession && !musicMuted && musicVolume > 0.001;
+    canPlayRef.current = canPlay;
     audio.volume = musicVolume;
-    audio.muted = musicMuted || musicVolume <= 0.001;
-  }, [musicMuted, musicVolume]);
+    audio.muted = !hasAuthenticatedSession || musicMuted || musicVolume <= 0.001;
+    if (!canPlay) {
+      audio.pause();
+      return;
+    }
+    if (audio.paused) {
+      void audio.play().catch(() => { });
+    }
+  }, [hasAuthenticatedSession, musicMuted, musicVolume]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

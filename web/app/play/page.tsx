@@ -82,9 +82,19 @@ interface WeeklyQuestBucket {
   quests: Record<WeeklyQuestId, QuestProgress>;
 }
 
+interface QuestStreakState {
+  dailyCurrent: number;
+  dailyBest: number;
+  dailyLastPeriod: string;
+  weeklyCurrent: number;
+  weeklyBest: number;
+  weeklyLastPeriod: string;
+}
+
 interface QuestState {
   daily: DailyQuestBucket;
   weekly: WeeklyQuestBucket;
+  streak: QuestStreakState;
 }
 
 interface AuthIdentity {
@@ -267,6 +277,142 @@ const QUEST_DEFS: QuestDefinition[] = [
   { scope: "weekly", id: "w_challenges", title: "Finish 12 rank mode runs", target: 12, reward: 900 },
   { scope: "weekly", id: "w_xp", title: "Earn 4000 XP", target: 4000, reward: 1200 },
 ];
+
+const DAILY_QUEST_DEFS = QUEST_DEFS.filter((def): def is QuestDefinition & { scope: "daily"; id: DailyQuestId } => def.scope === "daily");
+const WEEKLY_QUEST_DEFS = QUEST_DEFS.filter((def): def is QuestDefinition & { scope: "weekly"; id: WeeklyQuestId } => def.scope === "weekly");
+
+function createDefaultQuestStreakState(): QuestStreakState {
+  return {
+    dailyCurrent: 0,
+    dailyBest: 0,
+    dailyLastPeriod: "",
+    weeklyCurrent: 0,
+    weeklyBest: 0,
+    weeklyLastPeriod: "",
+  };
+}
+
+function parseUtcDailyId(period: string): Date | null {
+  const text = String(period || "").trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+}
+
+function parseUtcIsoWeekId(period: string): Date | null {
+  const text = String(period || "").trim();
+  const match = /^(\d{4})-W(\d{2})$/.exec(text);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(week) || week < 1 || week > 53) return null;
+  const jan4 = new Date(Date.UTC(year, 0, 4, 0, 0, 0));
+  const jan4Dow = jan4.getUTCDay() || 7;
+  const mondayWeek1 = new Date(jan4.getTime());
+  mondayWeek1.setUTCDate(mondayWeek1.getUTCDate() - jan4Dow + 1);
+  const mondayTarget = new Date(mondayWeek1.getTime());
+  mondayTarget.setUTCDate(mondayTarget.getUTCDate() + ((week - 1) * 7));
+  return mondayTarget;
+}
+
+function diffWholeDaysUtc(fromPeriod: string, toPeriod: string): number | null {
+  const from = parseUtcDailyId(fromPeriod);
+  const to = parseUtcDailyId(toPeriod);
+  if (!from || !to) return null;
+  return Math.floor((to.getTime() - from.getTime()) / 86400000);
+}
+
+function diffWholeWeeksUtc(fromPeriod: string, toPeriod: string): number | null {
+  const from = parseUtcIsoWeekId(fromPeriod);
+  const to = parseUtcIsoWeekId(toPeriod);
+  if (!from || !to) return null;
+  return Math.floor((to.getTime() - from.getTime()) / (7 * 86400000));
+}
+
+function sanitizeQuestStreakState(raw: unknown): QuestStreakState {
+  const source = isRecord(raw) ? raw : {};
+  return {
+    dailyCurrent: Math.max(0, Math.floor(Number(source.dailyCurrent) || 0)),
+    dailyBest: Math.max(0, Math.floor(Number(source.dailyBest) || 0)),
+    dailyLastPeriod: String(source.dailyLastPeriod || "").trim(),
+    weeklyCurrent: Math.max(0, Math.floor(Number(source.weeklyCurrent) || 0)),
+    weeklyBest: Math.max(0, Math.floor(Number(source.weeklyBest) || 0)),
+    weeklyLastPeriod: String(source.weeklyLastPeriod || "").trim(),
+  };
+}
+
+function isDailyQuestBucketComplete(bucket: DailyQuestBucket): boolean {
+  return DAILY_QUEST_DEFS.every((def) => {
+    const entry = bucket.quests[def.id];
+    return Boolean(entry?.claimed || Number(entry?.progress || 0) >= def.target);
+  });
+}
+
+function isWeeklyQuestBucketComplete(bucket: WeeklyQuestBucket): boolean {
+  return WEEKLY_QUEST_DEFS.every((def) => {
+    const entry = bucket.quests[def.id];
+    return Boolean(entry?.claimed || Number(entry?.progress || 0) >= def.target);
+  });
+}
+
+function reconcileQuestStreakState(
+  base: QuestStreakState,
+  daily: DailyQuestBucket,
+  weekly: WeeklyQuestBucket,
+): QuestStreakState {
+  const next: QuestStreakState = {
+    ...base,
+    dailyCurrent: Math.max(0, Math.floor(base.dailyCurrent || 0)),
+    dailyBest: Math.max(0, Math.floor(base.dailyBest || 0)),
+    weeklyCurrent: Math.max(0, Math.floor(base.weeklyCurrent || 0)),
+    weeklyBest: Math.max(0, Math.floor(base.weeklyBest || 0)),
+  };
+
+  if (next.dailyLastPeriod && next.dailyLastPeriod !== daily.period) {
+    const dailyGap = diffWholeDaysUtc(next.dailyLastPeriod, daily.period);
+    if (dailyGap !== null && dailyGap > 1) {
+      next.dailyCurrent = 0;
+    }
+  }
+  if (isDailyQuestBucketComplete(daily) && next.dailyLastPeriod !== daily.period) {
+    const dailyGap = diffWholeDaysUtc(next.dailyLastPeriod, daily.period);
+    if (!next.dailyLastPeriod) {
+      next.dailyCurrent = 1;
+    } else if (dailyGap === 1) {
+      next.dailyCurrent = Math.max(1, next.dailyCurrent + 1);
+    } else {
+      next.dailyCurrent = 1;
+    }
+    next.dailyBest = Math.max(next.dailyBest, next.dailyCurrent);
+    next.dailyLastPeriod = daily.period;
+  }
+
+  if (next.weeklyLastPeriod && next.weeklyLastPeriod !== weekly.period) {
+    const weeklyGap = diffWholeWeeksUtc(next.weeklyLastPeriod, weekly.period);
+    if (weeklyGap !== null && weeklyGap > 1) {
+      next.weeklyCurrent = 0;
+    }
+  }
+  if (isWeeklyQuestBucketComplete(weekly) && next.weeklyLastPeriod !== weekly.period) {
+    const weeklyGap = diffWholeWeeksUtc(next.weeklyLastPeriod, weekly.period);
+    if (!next.weeklyLastPeriod) {
+      next.weeklyCurrent = 1;
+    } else if (weeklyGap === 1) {
+      next.weeklyCurrent = Math.max(1, next.weeklyCurrent + 1);
+    } else {
+      next.weeklyCurrent = 1;
+    }
+    next.weeklyBest = Math.max(next.weeklyBest, next.weeklyCurrent);
+    next.weeklyLastPeriod = weekly.period;
+  }
+
+  return next;
+}
 
 const LEADERBOARD_PAGE_SIZE = 10;
 const LEADERBOARD_MODE_LIST = Object.entries(OFFICIAL_JUTSUS)
@@ -737,6 +883,7 @@ function createDefaultQuestState(now: Date): QuestState {
         w_xp: { progress: 0, claimed: false },
       },
     },
+    streak: createDefaultQuestStreakState(),
   };
 }
 
@@ -800,7 +947,10 @@ function sanitizeQuestState(raw: unknown, now: Date): QuestState {
         },
       },
     },
+    streak: createDefaultQuestStreakState(),
   };
+  const inputStreak = sanitizeQuestStreakState(source.streak);
+  result.streak = reconcileQuestStreakState(inputStreak, result.daily, result.weekly);
   return result;
 }
 
@@ -3172,7 +3322,7 @@ function PlayPageInner() {
       p_tutorial_seen_at: tutorialState.tutorialSeenAt,
       p_tutorial_version: tutorialState.tutorialVersion,
       p_mastery: rpcMastery,
-      p_quests: questState,
+      p_quests: null,
     });
 
     if (Object.keys(safeMastery).length > Object.keys(nextMastery).length) {
@@ -3180,7 +3330,7 @@ function PlayPageInner() {
     }
 
     return res;
-  }, [callBoundRpc, fetchProfileMetaDirect, identity, questState, tutorialMeta]);
+  }, [callBoundRpc, fetchProfileMetaDirect, identity, tutorialMeta]);
 
   const recordMasteryCompletion = useCallback(async (jutsuName: string, clearTime: number) => {
     if (!Number.isFinite(clearTime) || clearTime <= 0) return null;
@@ -4683,6 +4833,48 @@ function PlayPageInner() {
                     <div>{t("quest.dailyResetUtc", "Daily reset (UTC)")}: {formatCountdown(dailyResetAt.getTime() - now.getTime())}</div>
                     <div>{t("quest.weeklyResetUtc", "Weekly reset (UTC)")}: {formatCountdown(weeklyResetAt.getTime() - now.getTime())}</div>
                     <div>{t("quest.clockSource", "Clock source")}: {serverClockSynced ? t("quest.serverSynced", "Server-synced") : t("quest.localFallback", "Local fallback")}</div>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-emerald-300/35 bg-emerald-500/10 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-black uppercase tracking-[0.15em] text-emerald-200">
+                        {t("quest.dailyStreak", "Daily Streak")}
+                      </p>
+                      {isDailyQuestBucketComplete(questState.daily) && (
+                        <span className="rounded-full border border-emerald-300/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-200">
+                          {t("quest.periodComplete", "Period Complete")}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-2 flex items-end gap-2">
+                      <span className="text-3xl font-black text-white">{questState.streak.dailyCurrent}</span>
+                      <span className="pb-1 text-xs uppercase tracking-[0.14em] text-emerald-200">{t("quest.days", "days")}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-emerald-100/90">
+                      {t("quest.best", "Best")}: {questState.streak.dailyBest}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-blue-300/35 bg-blue-500/10 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-black uppercase tracking-[0.15em] text-blue-200">
+                        {t("quest.weeklyStreak", "Weekly Streak")}
+                      </p>
+                      {isWeeklyQuestBucketComplete(questState.weekly) && (
+                        <span className="rounded-full border border-blue-300/40 bg-blue-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-blue-200">
+                          {t("quest.periodComplete", "Period Complete")}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-2 flex items-end gap-2">
+                      <span className="text-3xl font-black text-white">{questState.streak.weeklyCurrent}</span>
+                      <span className="pb-1 text-xs uppercase tracking-[0.14em] text-blue-200">{t("quest.weeks", "weeks")}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-blue-100/90">
+                      {t("quest.best", "Best")}: {questState.streak.weeklyBest}
+                    </p>
                   </div>
                 </div>
 
