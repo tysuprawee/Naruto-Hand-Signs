@@ -110,6 +110,11 @@ interface QuestDefinition {
   reward: number;
 }
 
+interface StreakBonusTier {
+  target: number;
+  bonusPct: number;
+}
+
 interface TutorialStep {
   iconPath: string;
   title: string;
@@ -280,6 +285,31 @@ const QUEST_DEFS: QuestDefinition[] = [
 
 const DAILY_QUEST_DEFS = QUEST_DEFS.filter((def): def is QuestDefinition & { scope: "daily"; id: DailyQuestId } => def.scope === "daily");
 const WEEKLY_QUEST_DEFS = QUEST_DEFS.filter((def): def is QuestDefinition & { scope: "weekly"; id: WeeklyQuestId } => def.scope === "weekly");
+const DAILY_STREAK_BONUS_TIERS: StreakBonusTier[] = [
+  { target: 3, bonusPct: 5 },
+  { target: 7, bonusPct: 10 },
+  { target: 14, bonusPct: 15 },
+];
+const WEEKLY_STREAK_BONUS_TIERS: StreakBonusTier[] = [
+  { target: 2, bonusPct: 5 },
+  { target: 4, bonusPct: 10 },
+  { target: 8, bonusPct: 15 },
+];
+
+function resolveStreakBonusPct(streak: number, tiers: StreakBonusTier[]): number {
+  let bonus = 0;
+  for (const tier of tiers) {
+    if (streak >= tier.target) bonus = Math.max(bonus, tier.bonusPct);
+  }
+  return bonus;
+}
+
+function getNextStreakTier(streak: number, tiers: StreakBonusTier[]): StreakBonusTier | null {
+  for (const tier of tiers) {
+    if (streak < tier.target) return tier;
+  }
+  return null;
+}
 
 function createDefaultQuestStreakState(): QuestStreakState {
   return {
@@ -1760,6 +1790,11 @@ function PlayPageInner() {
   const now = new Date(clockNowMs + serverOffsetMs);
   const dailyResetAt = startOfTomorrowUtc(now);
   const weeklyResetAt = nextWeeklyResetUtc(now);
+  const dailyStreakBonusPct = resolveStreakBonusPct(questState.streak.dailyCurrent, DAILY_STREAK_BONUS_TIERS);
+  const weeklyStreakBonusPct = resolveStreakBonusPct(questState.streak.weeklyCurrent, WEEKLY_STREAK_BONUS_TIERS);
+  const activeStreakBonusPct = dailyStreakBonusPct + weeklyStreakBonusPct;
+  const nextDailyStreakTier = getNextStreakTier(questState.streak.dailyCurrent, DAILY_STREAK_BONUS_TIERS);
+  const nextWeeklyStreakTier = getNextStreakTier(questState.streak.weeklyCurrent, WEEKLY_STREAK_BONUS_TIERS);
   const calibrationReady = hasCalibrationProfile(calibrationProfile);
 
   const jutsuTiers = useMemo(() => {
@@ -3372,6 +3407,8 @@ function PlayPageInner() {
   ): Promise<{
     ok: boolean;
     xpAwarded: number;
+    streakBonusPct: number;
+    streakBonusXp: number;
     previousLevel: number;
     newLevel: number;
     reason?: string;
@@ -3381,6 +3418,8 @@ function PlayPageInner() {
       return {
         ok: false,
         xpAwarded: 0,
+        streakBonusPct: 0,
+        streakBonusXp: 0,
         previousLevel: progression.level,
         newLevel: progression.level,
         reason: "action_busy",
@@ -3394,6 +3433,8 @@ function PlayPageInner() {
       return {
         ok: false,
         xpAwarded: 0,
+        streakBonusPct: 0,
+        streakBonusXp: 0,
         previousLevel: progression.level,
         newLevel: progression.level,
         reason: "missing_identity",
@@ -3432,6 +3473,8 @@ function PlayPageInner() {
         return {
           ok: false,
           xpAwarded: 0,
+          streakBonusPct: 0,
+          streakBonusXp: 0,
           previousLevel,
           newLevel: previousLevel,
           reason: String(res.reason || "award_rejected"),
@@ -3441,6 +3484,8 @@ function PlayPageInner() {
 
       applyCompetitivePayload(res);
       const gained = Math.max(0, Math.floor(Number(res.xp_awarded) || xpGain));
+      const streakBonusPct = Math.max(0, Math.floor(Number(res.streak_bonus_pct) || 0));
+      const streakBonusXp = Math.max(0, Math.floor(Number(res.streak_bonus_xp) || 0));
       const profilePayload = isRecord(res.profile) ? res.profile : res;
       const nextProgression = sanitizeProgression(profilePayload);
       const unlocks = getUnlockedJutsusBetweenLevels(previousLevel, nextProgression.level);
@@ -3462,6 +3507,8 @@ function PlayPageInner() {
       return {
         ok: true,
         xpAwarded: gained,
+        streakBonusPct,
+        streakBonusXp,
         previousLevel,
         newLevel: nextProgression.level,
         levelUpPanel: levelUpPanelPayload,
@@ -3473,6 +3520,8 @@ function PlayPageInner() {
       return {
         ok: false,
         xpAwarded: 0,
+        streakBonusPct: 0,
+        streakBonusXp: 0,
         previousLevel,
         newLevel: previousLevel,
         reason: message,
@@ -3803,6 +3852,9 @@ function PlayPageInner() {
     const detailParts: string[] = [];
     if (secureRes.detailText) {
       detailParts.push(secureRes.detailText);
+    }
+    if (runRes.ok && runRes.streakBonusPct > 0) {
+      detailParts.push(`Streak boost +${runRes.streakBonusPct}% (+${runRes.streakBonusXp} XP)`);
     }
     if (masteryResult) {
       detailParts.push(
@@ -4836,6 +4888,17 @@ function PlayPageInner() {
                   </div>
                 </div>
 
+                <div className="mt-4 rounded-2xl border border-amber-300/40 bg-gradient-to-r from-amber-500/16 via-orange-500/12 to-red-500/16 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-black uppercase tracking-[0.16em] text-amber-200">
+                      {t("quest.activeStreakBoost", "Active Streak Boost")}
+                    </p>
+                    <p className="text-sm font-black text-white">
+                      +{activeStreakBonusPct}% XP {t("quest.everyRun", "every run")}
+                    </p>
+                  </div>
+                </div>
+
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   <div className="rounded-2xl border border-emerald-300/35 bg-emerald-500/10 p-4">
                     <div className="flex items-center justify-between gap-3">
@@ -4854,6 +4917,14 @@ function PlayPageInner() {
                     </div>
                     <p className="mt-1 text-xs text-emerald-100/90">
                       {t("quest.best", "Best")}: {questState.streak.dailyBest}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-emerald-100/95">
+                      {t("quest.xpBoost", "XP Boost")}: +{dailyStreakBonusPct}%
+                    </p>
+                    <p className="mt-1 text-[11px] text-emerald-100/80">
+                      {nextDailyStreakTier
+                        ? `${t("quest.nextMilestone", "Next milestone")}: ${nextDailyStreakTier.target} ${t("quest.days", "days")} (+${nextDailyStreakTier.bonusPct}%)`
+                        : t("quest.maxTierReached", "Max tier reached")}
                     </p>
                   </div>
 
@@ -4874,6 +4945,14 @@ function PlayPageInner() {
                     </div>
                     <p className="mt-1 text-xs text-blue-100/90">
                       {t("quest.best", "Best")}: {questState.streak.weeklyBest}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-blue-100/95">
+                      {t("quest.xpBoost", "XP Boost")}: +{weeklyStreakBonusPct}%
+                    </p>
+                    <p className="mt-1 text-[11px] text-blue-100/80">
+                      {nextWeeklyStreakTier
+                        ? `${t("quest.nextMilestone", "Next milestone")}: ${nextWeeklyStreakTier.target} ${t("quest.weeks", "weeks")} (+${nextWeeklyStreakTier.bonusPct}%)`
+                        : t("quest.maxTierReached", "Max tier reached")}
                     </p>
                   </div>
                 </div>

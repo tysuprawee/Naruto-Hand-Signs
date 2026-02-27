@@ -325,6 +325,40 @@ begin
 end;
 $$;
 
+create or replace function public.quest_streak_bonus_pct(
+  p_daily_current integer,
+  p_weekly_current integer
+)
+returns integer
+language plpgsql
+immutable
+as $$
+declare
+  v_daily integer := greatest(0, coalesce(p_daily_current, 0));
+  v_weekly integer := greatest(0, coalesce(p_weekly_current, 0));
+  v_daily_bonus integer := 0;
+  v_weekly_bonus integer := 0;
+begin
+  if v_daily >= 14 then
+    v_daily_bonus := 15;
+  elsif v_daily >= 7 then
+    v_daily_bonus := 10;
+  elsif v_daily >= 3 then
+    v_daily_bonus := 5;
+  end if;
+
+  if v_weekly >= 8 then
+    v_weekly_bonus := 15;
+  elsif v_weekly >= 4 then
+    v_weekly_bonus := 10;
+  elsif v_weekly >= 2 then
+    v_weekly_bonus := 5;
+  end if;
+
+  return least(40, v_daily_bonus + v_weekly_bonus);
+end;
+$$;
+
 create or replace function public.get_competitive_state_authoritative_bound(
     p_username text,
     p_discord_id text
@@ -414,6 +448,14 @@ declare
     v_result jsonb;
     v_profile jsonb;
     v_quests jsonb;
+    v_profile_quests jsonb;
+    v_reconciled_before jsonb;
+    v_daily_current integer := 0;
+    v_weekly_current integer := 0;
+    v_bonus_pct integer := 0;
+    v_base_xp integer := 0;
+    v_effective_xp integer := 0;
+    v_bonus_xp integer := 0;
     v_username_key text := lower(trim(coalesce(p_username, '')));
     v_discord_key text := trim(coalesce(p_discord_id, ''));
 begin
@@ -427,11 +469,38 @@ begin
         return jsonb_build_object('ok', false, 'reason', 'identity_mismatch');
     end if;
 
+    v_base_xp := greatest(0, coalesce(p_xp_gain, 0));
+    v_effective_xp := v_base_xp;
+
+    select p.quests
+    into v_profile_quests
+    from public.profiles p
+    where lower(p.username) = v_username_key
+      and coalesce(p.discord_id, '') = v_discord_key
+    limit 1;
+
+    if v_profile_quests is not null
+       and jsonb_typeof(v_profile_quests->'daily') = 'object'
+       and jsonb_typeof(v_profile_quests->'weekly') = 'object' then
+      v_reconciled_before := public.quest_reconcile_streak(v_profile_quests);
+      v_daily_current := public.quest_jsonb_int(v_reconciled_before, array['streak', 'dailyCurrent'], 0);
+      v_weekly_current := public.quest_jsonb_int(v_reconciled_before, array['streak', 'weeklyCurrent'], 0);
+      v_bonus_pct := public.quest_streak_bonus_pct(v_daily_current, v_weekly_current);
+    end if;
+
+    if v_bonus_pct > 0 and v_base_xp > 0 then
+      v_effective_xp := greatest(
+        v_base_xp,
+        ceil((v_base_xp::numeric * (100 + v_bonus_pct)::numeric) / 100)::integer
+      );
+    end if;
+    v_bonus_xp := greatest(0, v_effective_xp - v_base_xp);
+
     select to_jsonb(x)
     into v_result
     from public.award_jutsu_completion_authoritative(
         p_username,
-        greatest(0, coalesce(p_xp_gain, 0)),
+        v_effective_xp,
         greatest(0, coalesce(p_signs_landed, 0)),
         coalesce(p_is_challenge, false),
         coalesce(p_mode, '')
@@ -468,6 +537,13 @@ begin
           end if;
           v_result := jsonb_set(v_result, '{quests}', v_quests, true);
         end if;
+
+        v_result := v_result || jsonb_build_object(
+          'streak_bonus_pct', greatest(0, v_bonus_pct),
+          'streak_bonus_xp', greatest(0, v_bonus_xp),
+          'streak_daily', greatest(0, v_daily_current),
+          'streak_weekly', greatest(0, v_weekly_current)
+        );
 
         return v_result;
     end if;
