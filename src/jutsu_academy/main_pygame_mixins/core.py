@@ -861,6 +861,8 @@ class CoreMixin:
         self.detected_confidence = 0.0
         self.last_detected_hands = 0
         self.last_imputed_hands = 0
+        self.two_hand_distance_norm = None
+        self.two_hand_distance_px = None
         self.sign_vote_window = []
         self.last_vote_hits = 0
         self.vote_window_size = 2

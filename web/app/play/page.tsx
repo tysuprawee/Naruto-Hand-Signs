@@ -602,7 +602,9 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-function sanitizeSettings(raw: Partial<MenuSettingsState> | null | undefined): MenuSettingsState {
+type MenuSettingsInput = Partial<Record<keyof MenuSettingsState, unknown>>;
+
+function sanitizeSettings(raw: MenuSettingsInput | null | undefined): MenuSettingsState {
   return {
     musicVol: clampVolume(raw?.musicVol, DEFAULT_SETTINGS.musicVol),
     sfxVol: clampVolume(raw?.sfxVol, DEFAULT_SETTINGS.sfxVol),
