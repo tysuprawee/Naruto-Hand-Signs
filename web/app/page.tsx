@@ -150,32 +150,6 @@ export default function Home() {
                 VIEW RANKS
               </Link>
 
-              <div className="flex flex-wrap items-center gap-4">
-                <Link
-                  href="/download/win"
-                  onClick={() => trackClick("download_win")}
-                  className="h-14 px-4 sm:px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-base sm:text-lg font-bold rounded-lg flex items-center gap-2 sm:gap-3 hover:bg-zinc-800/80 hover:text-white transition-all cursor-pointer select-none whitespace-nowrap"
-                >
-                  {/* Windows/Microsoft Logo */}
-                  <svg className="w-5 h-5 fill-current" viewBox="0 0 88 88" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M0 12.402l35.687-4.86.016 34.423-35.67.216zm35.707 34.005l-.012 34.697-35.695-4.913V46.602zM39.98 6.01L87.314 0v41.527l-47.334.373zM87.314 46.223V88L39.98 81.385V46.613z" />
-                  </svg>
-                  Windows
-                </Link>
-
-                <Link
-                  href="/download/mac"
-                  onClick={() => trackClick("download_mac")}
-                  className="h-14 px-4 sm:px-8 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 text-base sm:text-lg font-bold rounded-lg flex items-center gap-2 sm:gap-3 hover:bg-zinc-800/80 hover:text-white transition-all whitespace-nowrap"
-                >
-                  {/* Apple Logo */}
-                  <svg className="w-5 h-5 fill-current" viewBox="0 0 814 1000" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81-105.6-207.4-105.6-328.1 0-192.8 125.5-295.1 248.3-295.1 65.4 0 119.9 42.8 160.8 42.8 39.2 0 100.4-45.3 174.6-45.3 28.2 0 129.4 2.5 196.5 96.1zM554.1 159.4c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.8 32.4-54.4 83.7-54.4 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.8-30.4 134.8-71.3z" />
-                  </svg>
-                  macOS (Apple Silicon)
-                </Link>
-              </div>
-
               <a
                 href="https://github.com/tysuprawee/Naruto-Hand-Signs"
                 target="_blank"

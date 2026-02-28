@@ -1301,6 +1301,34 @@ async function getStreamWithPreferences(cameraIdx: number, resolutionIdx: number
   return await navigator.mediaDevices.getUserMedia({ video: baseVideo });
 }
 
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall back to document copy.
+    }
+  }
+  if (typeof document === "undefined") return false;
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    area.setSelectionRange(0, area.value.length);
+    const copied = document.execCommand("copy");
+    document.body.removeChild(area);
+    return copied;
+  } catch {
+    return false;
+  }
+}
+
 export default function PlayArena({
   jutsuName,
   mode,
@@ -1457,6 +1485,7 @@ export default function PlayArena({
   const effectTimerRef = useRef<number | null>(null);
   const castResultTimerRef = useRef<number | null>(null);
   const calibrationReturnTimerRef = useRef<number | null>(null);
+  const shareStatusTimerRef = useRef<number | null>(null);
   const phoenixRafRef = useRef(0);
   const phoenixLastAtRef = useRef(0);
   const cameraFpsWindowStartRef = useRef(0);
@@ -1506,6 +1535,8 @@ export default function PlayArena({
   const [submitStatus, setSubmitStatus] = useState("");
   const [submitDetail, setSubmitDetail] = useState("");
   const [rankInfo, setRankInfo] = useState("");
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareStatus, setShareStatus] = useState("");
   const [comboCue, setComboCue] = useState("");
   const [showTwoHandsGuide, setShowTwoHandsGuide] = useState(false);
   const [sharinganBlinkHoldMs, setSharinganBlinkHoldMs] = useState(0);
@@ -2607,6 +2638,10 @@ export default function PlayArena({
       window.clearTimeout(calibrationReturnTimerRef.current);
       calibrationReturnTimerRef.current = null;
     }
+    if (shareStatusTimerRef.current) {
+      window.clearTimeout(shareStatusTimerRef.current);
+      shareStatusTimerRef.current = null;
+    }
     if (phoenixRafRef.current) {
       cancelAnimationFrame(phoenixRafRef.current);
       phoenixRafRef.current = 0;
@@ -2641,6 +2676,8 @@ export default function PlayArena({
     setSubmitStatus("");
     setSubmitDetail("");
     setRankInfo("");
+    setShareBusy(false);
+    setShareStatus("");
     setComboCue("");
     setShowTwoHandsGuide(false);
     setSharinganBlinkHoldMs(0);
@@ -2929,6 +2966,55 @@ export default function PlayArena({
     restrictedSigns,
     sequence.length,
   ]);
+
+  const handleShareResult = useCallback(async () => {
+    if (shareBusy || isCalibrationMode) return;
+    const elapsedText = formatElapsed(elapsedMs);
+    const signsDone = Math.max(signsLandedRef.current, sequence.length);
+    const modeLabel = isRankMode ? "rank mode" : "free mode";
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const shareUrl = `${origin}/play`;
+    const message = `I cleared ${jutsuTitle} in ${elapsedText} (${signsDone}/${sequence.length} signs) on Shinobi Academy ${modeLabel}. Can you beat this run? ${shareUrl}`;
+
+    setShareBusy(true);
+    try {
+      let shared = false;
+      let aborted = false;
+      if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        try {
+          await navigator.share({
+            title: "Shinobi Academy Challenge",
+            text: message,
+            url: shareUrl,
+          });
+          shared = true;
+        } catch (err) {
+          if (String((err as Error)?.name || "") === "AbortError") {
+            aborted = true;
+            setShareStatus("Share canceled.");
+          }
+        }
+      }
+
+      if (shared) {
+        setShareStatus("Result shared.");
+      } else if (!aborted) {
+        const copied = await copyTextToClipboard(message);
+        setShareStatus(copied
+          ? "Result copied. Paste it to challenge friends."
+          : "Share unavailable on this browser.");
+      }
+    } finally {
+      setShareBusy(false);
+      if (shareStatusTimerRef.current) {
+        window.clearTimeout(shareStatusTimerRef.current);
+      }
+      shareStatusTimerRef.current = window.setTimeout(() => {
+        setShareStatus("");
+        shareStatusTimerRef.current = null;
+      }, 2500);
+    }
+  }, [elapsedMs, isCalibrationMode, isRankMode, jutsuTitle, sequence.length, shareBusy]);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -5087,6 +5173,19 @@ export default function PlayArena({
                     {!!submitStatus && <p className="mt-3 text-sm font-bold text-emerald-200">{submitStatus}</p>}
                     {!!submitDetail && <p className="mt-1 text-xs text-zinc-200">{submitDetail}</p>}
                     {!!rankInfo && <p className="mt-1 text-xs font-bold text-amber-200">{rankInfo}</p>}
+                    {isRankMode && (
+                      <button
+                        type="button"
+                        onClick={() => void handleShareResult()}
+                        disabled={shareBusy}
+                        className="mt-4 flex h-10 w-full items-center justify-center rounded-xl border border-cyan-300/45 bg-cyan-500/20 text-[11px] font-black uppercase tracking-[0.14em] text-cyan-100 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {shareBusy ? "SHARING..." : "SHARE RESULT"}
+                      </button>
+                    )}
+                    {isRankMode && !!shareStatus && (
+                      <p className="mt-2 text-[11px] text-cyan-100">{shareStatus}</p>
+                    )}
                     {isRankMode && (
                       <div className="mt-6 grid grid-cols-2 gap-3">
                         <button

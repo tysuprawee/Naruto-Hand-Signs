@@ -97,6 +97,15 @@ interface QuestState {
   streak: QuestStreakState;
 }
 
+interface RetentionState {
+  dailyPeriod: string;
+  dailyMissionSeconds: number;
+  dailyMissionClaimed: boolean;
+  dailyMissionRewardPending: boolean;
+  lastActiveAt: string;
+  comebackRunsRemaining: number;
+}
+
 interface AuthIdentity {
   username: string;
   discordId: string;
@@ -196,8 +205,14 @@ const SETTINGS_STORAGE_KEY = "jutsu-play-menu-settings-v1";
 const MENU_MUTE_STORAGE_KEY = "jutsu-play-menu-mute-v1";
 const PENDING_RANK_QUEUE_PREFIX = "jutsu-play-pending-rank-submit-v1";
 const CALIBRATION_SKIP_PREFIX = "jutsu-play-calibration-skip-v1";
+const RETENTION_STORAGE_PREFIX = "jutsu-play-retention-v1";
 const PENDING_RANK_QUEUE_MAX = 20;
 const PENDING_RANK_REPLAY_BATCH = 4;
+const DAILY_MISSION_TARGET_SECONDS = 180;
+const DAILY_MISSION_REWARD_XP = 180;
+const COMEBACK_INACTIVE_DAYS = 7;
+const COMEBACK_BONUS_PCT = 35;
+const COMEBACK_BONUS_RUNS = 3;
 const WEB_APP_VERSION = "1.0.0";
 const DEFAULT_RUNTIME_DATASET = {
   version: "",
@@ -983,6 +998,13 @@ function formatCountdown(msLeft: number): string {
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
+function formatDurationMmSs(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const mm = Math.floor(safe / 60);
+  const ss = safe % 60;
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
 function parseMaybeMessageList(raw: unknown): string[] {
   if (Array.isArray(raw)) {
     return raw
@@ -1024,6 +1046,73 @@ function createDefaultQuestState(now: Date): QuestState {
     },
     streak: createDefaultQuestStreakState(),
   };
+}
+
+function createDefaultRetentionState(now: Date): RetentionState {
+  return {
+    dailyPeriod: utcDailyId(now),
+    dailyMissionSeconds: 0,
+    dailyMissionClaimed: false,
+    dailyMissionRewardPending: false,
+    lastActiveAt: "",
+    comebackRunsRemaining: 0,
+  };
+}
+
+function sanitizeRetentionState(raw: unknown, now: Date): RetentionState {
+  const source = isRecord(raw) ? raw : {};
+  const base = createDefaultRetentionState(now);
+  const dailyMissionSeconds = Math.max(0, Math.floor(Number(source.dailyMissionSeconds) || 0));
+  return {
+    dailyPeriod: String(source.dailyPeriod || base.dailyPeriod),
+    dailyMissionSeconds: Math.max(0, Math.min(DAILY_MISSION_TARGET_SECONDS, dailyMissionSeconds)),
+    dailyMissionClaimed: parseBoolean(source.dailyMissionClaimed, false),
+    dailyMissionRewardPending: parseBoolean(source.dailyMissionRewardPending, false),
+    lastActiveAt: String(source.lastActiveAt || "").trim(),
+    comebackRunsRemaining: Math.max(0, Math.floor(Number(source.comebackRunsRemaining) || 0)),
+  };
+}
+
+function reconcileRetentionState(base: RetentionState, now: Date): RetentionState {
+  const currentDailyId = utcDailyId(now);
+  const next: RetentionState = {
+    ...base,
+    dailyMissionSeconds: Math.max(0, Math.min(DAILY_MISSION_TARGET_SECONDS, Math.floor(Number(base.dailyMissionSeconds) || 0))),
+    comebackRunsRemaining: Math.max(0, Math.floor(Number(base.comebackRunsRemaining) || 0)),
+  };
+
+  if (next.dailyPeriod !== currentDailyId) {
+    next.dailyPeriod = currentDailyId;
+    next.dailyMissionSeconds = 0;
+    next.dailyMissionClaimed = false;
+    next.dailyMissionRewardPending = false;
+  }
+
+  if (next.dailyMissionSeconds >= DAILY_MISSION_TARGET_SECONDS) {
+    next.dailyMissionClaimed = true;
+  }
+
+  const lastActiveMs = Date.parse(next.lastActiveAt);
+  if (Number.isFinite(lastActiveMs)) {
+    const lastActiveDaily = utcDailyId(new Date(lastActiveMs));
+    const gapDays = diffWholeDaysUtc(lastActiveDaily, currentDailyId);
+    if (gapDays !== null && gapDays >= COMEBACK_INACTIVE_DAYS && next.comebackRunsRemaining <= 0) {
+      next.comebackRunsRemaining = COMEBACK_BONUS_RUNS;
+    }
+  }
+
+  return next;
+}
+
+function retentionStateEquals(a: RetentionState, b: RetentionState): boolean {
+  return (
+    a.dailyPeriod === b.dailyPeriod
+    && a.dailyMissionSeconds === b.dailyMissionSeconds
+    && a.dailyMissionClaimed === b.dailyMissionClaimed
+    && a.dailyMissionRewardPending === b.dailyMissionRewardPending
+    && a.lastActiveAt === b.lastActiveAt
+    && a.comebackRunsRemaining === b.comebackRunsRemaining
+  );
 }
 
 function sanitizeProgression(raw: unknown): ProgressionState {
@@ -1334,6 +1423,10 @@ function buildPendingRankQueueStorageKey(discordId: string): string {
 
 function buildCalibrationSkipStorageKey(discordId: string): string {
   return `${CALIBRATION_SKIP_PREFIX}:${String(discordId || "").trim()}`;
+}
+
+function buildRetentionStorageKey(discordId: string): string {
+  return `${RETENTION_STORAGE_PREFIX}:${String(discordId || "").trim()}`;
 }
 
 function makePendingRankRecordId(): string {
@@ -1841,6 +1934,7 @@ function PlayPageInner() {
   const [menuMusicMuted, setMenuMusicMuted] = useState(() => readStoredMenuMute());
   const [progression, setProgression] = useState<ProgressionState>(() => createInitialProgression());
   const [questState, setQuestState] = useState<QuestState>(() => createDefaultQuestState(new Date()));
+  const [retentionState, setRetentionState] = useState<RetentionState>(() => createDefaultRetentionState(new Date()));
   const [mastery, setMastery] = useState<MasteryMap>({});
   const [tutorialMeta, setTutorialMeta] = useState<TutorialMetaState>({
     tutorialSeen: false,
@@ -1897,6 +1991,7 @@ function PlayPageInner() {
   );
 
   const now = new Date(clockNowMs + serverOffsetMs);
+  const currentUtcDailyId = utcDailyId(now);
   const dailyResetAt = startOfTomorrowUtc(now);
   const weeklyResetAt = nextWeeklyResetUtc(now);
   const dailyStreakBonusPct = resolveStreakBonusPct(questState.streak.dailyCurrent, DAILY_STREAK_BONUS_TIERS);
@@ -1917,6 +2012,28 @@ function PlayPageInner() {
     () => buildDynamicWeeklyQuestDefs(questState.weekly.period, questIdentitySeed),
     [questIdentitySeed, questState.weekly.period],
   );
+  const effectiveRetentionState = useMemo(
+    () => reconcileRetentionState(retentionState, now),
+    [retentionState, now],
+  );
+  const dailyMissionProgressPct = Math.max(
+    0,
+    Math.min(1, effectiveRetentionState.dailyMissionSeconds / Math.max(1, DAILY_MISSION_TARGET_SECONDS)),
+  );
+  const dailyMissionRemainingSeconds = Math.max(0, DAILY_MISSION_TARGET_SECONDS - effectiveRetentionState.dailyMissionSeconds);
+  const dailyMissionActiveRewardPending = effectiveRetentionState.dailyMissionRewardPending;
+  const comebackBoostRunsRemaining = effectiveRetentionState.comebackRunsRemaining;
+  const comebackBoostActive = comebackBoostRunsRemaining > 0;
+  const questVarietyHighlight = useMemo(() => {
+    const allDefs: QuestDefinition[] = [...dailyQuestDefs, ...weeklyQuestDefs];
+    if (allDefs.length === 0) return null;
+    const seed = `${questState.daily.period}|${questState.weekly.period}|${questIdentitySeed}|variety`;
+    return allDefs[hashQuestSeed(seed) % allDefs.length] || null;
+  }, [dailyQuestDefs, weeklyQuestDefs, questIdentitySeed, questState.daily.period, questState.weekly.period]);
+  const questVarietyCode = useMemo(() => {
+    const seed = `${questState.daily.period}|${questState.weekly.period}|${questIdentitySeed}|rotation`;
+    return hashQuestSeed(seed).toString(16).slice(0, 6).toUpperCase();
+  }, [questIdentitySeed, questState.daily.period, questState.weekly.period]);
   const calibrationReady = hasCalibrationProfile(calibrationProfile);
 
   const jutsuTiers = useMemo(() => {
@@ -1988,6 +2105,10 @@ function PlayPageInner() {
     const discordId = String(identity?.discordId || "").trim();
     return discordId ? buildCalibrationSkipStorageKey(discordId) : "";
   }, [identity?.discordId]);
+  const retentionStorageKey = useMemo(() => {
+    const discordId = String(identity?.discordId || "").trim();
+    return discordId ? buildRetentionStorageKey(discordId) : "";
+  }, [identity?.discordId]);
   const effectiveMenuMusicVol = useMemo(
     () => clampVolume(view === "settings" ? draftSettings.musicVol : savedSettings.musicVol, DEFAULT_SETTINGS.musicVol),
     [draftSettings.musicVol, savedSettings.musicVol, view],
@@ -2024,6 +2145,44 @@ function PlayPageInner() {
       setCalibrationGateSkipped(false);
     }
   }, [calibrationGateSkipped, calibrationReady]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const nowDate = new Date();
+    if (!retentionStorageKey) {
+      setRetentionState(createDefaultRetentionState(nowDate));
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(retentionStorageKey);
+      if (!raw) {
+        setRetentionState(reconcileRetentionState(createDefaultRetentionState(nowDate), nowDate));
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      const state = reconcileRetentionState(sanitizeRetentionState(parsed, nowDate), nowDate);
+      setRetentionState(state);
+    } catch {
+      setRetentionState(reconcileRetentionState(createDefaultRetentionState(nowDate), nowDate));
+    }
+  }, [retentionStorageKey]);
+
+  useEffect(() => {
+    const dayAnchor = parseUtcDailyId(currentUtcDailyId) || new Date();
+    setRetentionState((prev) => {
+      const next = reconcileRetentionState(prev, dayAnchor);
+      return retentionStateEquals(prev, next) ? prev : next;
+    });
+  }, [currentUtcDailyId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !retentionStorageKey) return;
+    try {
+      window.localStorage.setItem(retentionStorageKey, JSON.stringify(retentionState));
+    } catch {
+      // Ignore localStorage write failures.
+    }
+  }, [retentionState, retentionStorageKey]);
 
   const applyCompetitivePayload = useCallback((payload: Record<string, unknown>) => {
     const payloadResult = firstRecord(payload.result);
@@ -2097,7 +2256,7 @@ function PlayPageInner() {
       playUiSfx("/sounds/reward.mp3", 0.9);
     }
     if (levelUpPanel && !masteryPanel && !prev.level) {
-      playUiSfx("/sounds/reward.mp3", 0.85);
+      playUiSfx("/sounds/level.mp3", 0.9);
     }
     rewardModalSfxStateRef.current = {
       mastery: Boolean(masteryPanel),
@@ -3948,6 +4107,25 @@ function PlayPageInner() {
   }, [replayPendingRankSubmits]);
 
   const handleArenaComplete = useCallback(async (result: PlayArenaResult): Promise<boolean | PlayArenaCompleteFeedback> => {
+    const retentionForRun = reconcileRetentionState(effectiveRetentionState, now);
+    const runSecondsRaw = Number(result.elapsedSeconds || 0);
+    const runSeconds = Number.isFinite(runSecondsRaw)
+      ? Math.max(0, Math.min(900, runSecondsRaw))
+      : 0;
+    const baseXpGain = getRunXpGain(result.jutsuName);
+    const projectedMissionSeconds = Math.max(
+      retentionForRun.dailyMissionSeconds,
+      Math.min(DAILY_MISSION_TARGET_SECONDS, retentionForRun.dailyMissionSeconds + runSeconds),
+    );
+    const missionUnlockedThisRun = !retentionForRun.dailyMissionClaimed
+      && projectedMissionSeconds >= DAILY_MISSION_TARGET_SECONDS;
+    const missionBonusArmed = retentionForRun.dailyMissionRewardPending || missionUnlockedThisRun;
+    const dailyMissionBonusXp = missionBonusArmed ? DAILY_MISSION_REWARD_XP : 0;
+    const comebackBonusXp = retentionForRun.comebackRunsRemaining > 0
+      ? Math.max(1, Math.floor(baseXpGain * (COMEBACK_BONUS_PCT / 100)))
+      : 0;
+    const xpOverride = baseXpGain + dailyMissionBonusXp + comebackBonusXp;
+
     const masteryResult = await recordMasteryCompletion(result.jutsuName, result.elapsedSeconds);
     const secureRes = result.mode === "rank"
       ? await submitRankRunSecure(result)
@@ -3955,7 +4133,26 @@ function PlayPageInner() {
     const runRes = await recordTrainingRun(result.mode, {
       signsLanded: result.signsLanded,
       jutsuName: result.jutsuName,
-      xpOverride: getRunXpGain(result.jutsuName),
+      xpOverride,
+    });
+
+    setRetentionState((prev) => {
+      const start = reconcileRetentionState(prev, now);
+      const next: RetentionState = {
+        ...start,
+        dailyMissionSeconds: Math.max(
+          start.dailyMissionSeconds,
+          Math.min(DAILY_MISSION_TARGET_SECONDS, start.dailyMissionSeconds + runSeconds),
+        ),
+        dailyMissionClaimed: start.dailyMissionClaimed || missionUnlockedThisRun,
+        dailyMissionRewardPending: missionBonusArmed && !runRes.ok,
+        lastActiveAt: runRes.ok ? toUtcIsoNoMs(now) : start.lastActiveAt,
+        comebackRunsRemaining: start.comebackRunsRemaining,
+      };
+      if (runRes.ok && next.comebackRunsRemaining > 0) {
+        next.comebackRunsRemaining = Math.max(0, next.comebackRunsRemaining - 1);
+      }
+      return next;
     });
 
     const fallbackEffectDurationMs = Math.max(
@@ -3982,6 +4179,14 @@ function PlayPageInner() {
     if (runRes.ok && runRes.streakBonusPct > 0) {
       detailParts.push(`Streak boost +${runRes.streakBonusPct}% (+${runRes.streakBonusXp} XP)`);
     }
+    if (runRes.ok && dailyMissionBonusXp > 0) {
+      detailParts.push(`Daily mission +${dailyMissionBonusXp} XP`);
+    } else if (!runRes.ok && missionUnlockedThisRun) {
+      detailParts.push("Daily mission completed (reward pending next successful run)");
+    }
+    if (runRes.ok && comebackBonusXp > 0) {
+      detailParts.push(`Comeback boost +${COMEBACK_BONUS_PCT}% (+${comebackBonusXp} XP)`);
+    }
     if (masteryResult) {
       detailParts.push(
         masteryResult.previousBest === null
@@ -3992,6 +4197,13 @@ function PlayPageInner() {
     const isRankRun = result.mode === "rank";
     if (isRankRun && !runRes.ok && runRes.reason) {
       detailParts.push(`XP sync skipped: ${runRes.reason}`);
+    }
+    if (missionUnlockedThisRun) {
+      if (runRes.ok) {
+        setQuestNotice(`Daily 3-minute mission complete (+${DAILY_MISSION_REWARD_XP} XP).`);
+      } else {
+        setQuestNotice("Daily 3-minute mission complete. Reward will apply on your next successful run.");
+      }
     }
 
     return {
@@ -4005,7 +4217,7 @@ function PlayPageInner() {
       rankText: secureRes.rankText,
       xpAwarded: runRes.ok ? runRes.xpAwarded : 0,
     };
-  }, [queueRunCompletionPanels, recordMasteryCompletion, recordTrainingRun, submitRankRunSecure]);
+  }, [effectiveRetentionState, now, queueRunCompletionPanels, recordMasteryCompletion, recordTrainingRun, submitRankRunSecure]);
 
   const handleCalibrationComplete = useCallback(async (profile: CalibrationProfile): Promise<boolean> => {
     setCalibrationProfile(profile);
@@ -4177,6 +4389,23 @@ function PlayPageInner() {
           ? { name: t("mastery.gold", "GOLD"), target: masteryThresholds.gold }
           : null
     : null;
+  const levelUpDelta = levelUpPanel
+    ? Math.max(0, levelUpPanel.newLevel - levelUpPanel.previousLevel)
+    : 0;
+  const alertModalLines = useMemo(() => {
+    if (!alertModal) return [];
+    return String(alertModal.message || "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }, [alertModal]);
+  const alertRewardXp = useMemo(() => {
+    for (const line of alertModalLines) {
+      const match = /\+(\d+)\s*XP/i.exec(line);
+      if (match) return Math.max(0, Math.floor(Number(match[1]) || 0));
+    }
+    return 0;
+  }, [alertModalLines]);
   useEffect(() => {
     if (!masteryPanel) {
       setMasteryBarDisplayPct(0);
@@ -5060,6 +5289,54 @@ function PlayPageInner() {
                       <p className="text-2xl font-black tracking-tight text-white md:text-3xl">
                         +{activeStreakBonusPct}% XP
                       </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-2xl border border-cyan-300/35 bg-cyan-500/8 p-4 shadow-[0_12px_24px_rgba(6,182,212,0.12)]">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-cyan-200">
+                          {t("quest.directiveOfDay", "Directive Of The Day")}
+                        </p>
+                        <span className="rounded-full border border-cyan-300/45 bg-cyan-400/10 px-2 py-0.5 text-[10px] font-black tracking-[0.12em] text-cyan-100">
+                          #{questVarietyCode}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-white">
+                        {questVarietyHighlight ? getQuestDisplayTitle(questVarietyHighlight) : t("quest.none", "No directive available")}
+                      </p>
+                      {questVarietyHighlight?.subtitle && (
+                        <p className="mt-1 text-[11px] text-cyan-100/90">{questVarietyHighlight.subtitle}</p>
+                      )}
+                      <p className="mt-2 text-[11px] text-cyan-100/70">
+                        {t("quest.rotationHint", "Directive rotates each UTC reset to keep quests fresh.")}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl border border-emerald-300/35 bg-emerald-500/8 p-4 shadow-[0_12px_24px_rgba(16,185,129,0.12)]">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-emerald-200">
+                          {t("quest.dailyMission", "Daily 3-Minute Mission")}
+                        </p>
+                        <span className="text-xs font-black text-emerald-100">
+                          {Math.min(DAILY_MISSION_TARGET_SECONDS, Math.floor(effectiveRetentionState.dailyMissionSeconds))}/{DAILY_MISSION_TARGET_SECONDS}s
+                        </span>
+                      </div>
+                      <div className="mt-3 h-2.5 rounded-full bg-zinc-800/95 p-[1px]">
+                        <div className="h-full rounded-full bg-gradient-to-r from-emerald-300 via-emerald-400 to-teal-300" style={{ width: `${dailyMissionProgressPct * 100}%` }} />
+                      </div>
+                      <p className="mt-2 text-xs text-emerald-100/90">
+                        {effectiveRetentionState.dailyMissionClaimed
+                          ? (dailyMissionActiveRewardPending
+                            ? `Reward pending: +${DAILY_MISSION_REWARD_XP} XP on next successful run`
+                            : `Completed today (+${DAILY_MISSION_REWARD_XP} XP)`)
+                          : `${formatDurationMmSs(dailyMissionRemainingSeconds)} remaining to unlock +${DAILY_MISSION_REWARD_XP} XP`}
+                      </p>
+                      {comebackBoostActive && (
+                        <p className="mt-2 text-[11px] font-semibold text-amber-200">
+                          {`Comeback boost active: +${COMEBACK_BONUS_PCT}% XP for ${comebackBoostRunsRemaining} run${comebackBoostRunsRemaining === 1 ? "" : "s"}`}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -6164,95 +6441,110 @@ function PlayPageInner() {
               type="button"
               aria-label="Close level-up panel"
               onClick={() => setLevelUpPanel(null)}
-              className="absolute inset-0 bg-black/75"
+              className="absolute inset-0 bg-black/80 backdrop-blur-[2px]"
             />
 
-            <div
-              className="relative w-full max-w-[460px] rounded-[22px] border p-6 shadow-[0_30px_90px_rgba(0,0,0,0.65)]"
-              style={{
-                backgroundColor: "rgba(12, 10, 18, 0.96)",
-                borderColor: "rgb(200, 160, 40)",
-              }}
-            >
-              <div
-                className="pointer-events-none absolute inset-[2px] rounded-[20px] border"
-                style={{ borderColor: "rgba(255, 220, 80, 0.24)" }}
-              />
+            <div className="relative w-full max-w-[520px] overflow-hidden rounded-[26px] border border-amber-200/55 bg-[radial-gradient(circle_at_22%_15%,rgba(255,210,120,0.2),transparent_45%),radial-gradient(circle_at_78%_85%,rgba(110,180,255,0.18),transparent_42%),linear-gradient(180deg,rgba(20,16,28,0.98)_0%,rgba(9,10,18,0.98)_100%)] shadow-[0_36px_110px_rgba(0,0,0,0.72)]">
+              <div className="pointer-events-none absolute -left-20 -top-16 h-48 w-48 rounded-full bg-amber-300/22 blur-3xl" />
+              <div className="pointer-events-none absolute -right-20 -bottom-16 h-52 w-52 rounded-full bg-cyan-300/18 blur-3xl" />
+              <div className="pointer-events-none absolute inset-[2px] rounded-[24px] border border-amber-100/18" />
 
-              <div className="mb-2 flex items-center justify-center gap-2">
-                {[0, 1, 2, 3, 4, 5, 6].map((n) => (
-                  <Image
-                    key={`level-star-${n}`}
-                    src="/pics/mastery/star_small.png"
-                    alt="star"
-                    width={14}
-                    height={14}
-                    className="h-[14px] w-[14px] object-contain"
-                  />
-                ))}
-              </div>
+              <button
+                type="button"
+                aria-label={t("common.close", "Close")}
+                onClick={() => setLevelUpPanel(null)}
+                className="absolute right-4 top-4 z-20 flex h-8 w-8 items-center justify-center rounded-full border border-white/25 bg-black/35 text-zinc-200 hover:border-white/45 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
 
-              <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 210, 60)" }}>{t("levelUp.title", "LEVEL UP")}</p>
-              {!!levelUpPanel.sourceLabel && (
-                <p className="mt-1 text-center text-[11px] uppercase tracking-[0.18em]" style={{ color: "rgb(160, 150, 120)" }}>{levelUpPanel.sourceLabel}</p>
-              )}
-
-              <p className="mt-3 text-center text-[56px] font-black leading-none" style={{ color: "rgb(255, 245, 180)" }}>LV.{levelUpPanel.newLevel}</p>
-              <p className="mt-1 text-center text-xs font-bold" style={{ color: "rgb(180, 165, 120)" }}>
-                LV.{levelUpPanel.previousLevel} → LV.{levelUpPanel.newLevel}
-              </p>
-
-              <div className="mt-4 flex justify-center">
-                <div
-                  className="inline-flex rounded-full border px-6 py-2 text-center"
-                  style={{
-                    borderColor: "rgba(200, 160, 40, 0.7)",
-                    backgroundColor: "rgba(200, 160, 40, 0.16)",
-                  }}
-                >
-                  <p className="text-sm font-black uppercase tracking-wide" style={{ color: "rgb(255, 220, 80)" }}>{levelUpPanel.rank}</p>
+              <div className="relative px-6 pb-6 pt-7">
+                <div className="mb-3 flex items-center justify-center gap-2">
+                  {[0, 1, 2, 3, 4, 5, 6].map((n) => (
+                    <Image
+                      key={`level-star-${n}`}
+                      src="/pics/mastery/star_small.png"
+                      alt="star"
+                      width={14}
+                      height={14}
+                      className="h-[14px] w-[14px] object-contain"
+                    />
+                  ))}
                 </div>
-              </div>
 
-              {levelUpPanel.unlocked.length > 0 && (
-                <div className="mt-5">
-                  <p className="text-center text-[11px] font-black uppercase tracking-[0.17em]" style={{ color: "rgb(140, 215, 155)" }}>
-                    {t("levelUp.newJutsuUnlocked", "New Jutsu Unlocked")}
-                  </p>
-                  <div className="mt-3 space-y-2">
-                    {levelUpPanel.unlocked.slice(0, 4).map((name) => (
-                      <div
-                        key={name}
-                        className="rounded-lg border px-3 py-2 text-center text-xs font-bold"
-                        style={{
-                          borderColor: "rgba(70, 200, 100, 0.7)",
-                          backgroundColor: "rgba(50, 170, 80, 0.16)",
-                          color: "rgb(180, 255, 200)",
-                        }}
-                      >
-                        {getJutsuUiName(name)}
-                      </div>
-                    ))}
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <span className="rounded-full border border-amber-300/45 bg-amber-400/15 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100">
+                    {t("levelUp.title", "LEVEL UP")}
+                  </span>
+                  {!!levelUpPanel.sourceLabel && (
+                    <span className="rounded-full border border-zinc-500/45 bg-zinc-800/55 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-zinc-200">
+                      {levelUpPanel.sourceLabel}
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-5 flex justify-center">
+                  <div className="relative flex h-[132px] w-[132px] items-center justify-center rounded-full border border-amber-200/50 bg-gradient-to-b from-amber-200/20 to-amber-400/5">
+                    <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle,rgba(255,230,140,0.22)_0%,rgba(255,230,140,0)_65%)]" />
+                    <p className="relative text-center text-[46px] font-black leading-none text-amber-100">
+                      {levelUpPanel.newLevel}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-zinc-600/65 bg-zinc-900/55 px-3 py-2 text-center">
+                    <p className="text-[10px] font-black uppercase tracking-[0.15em] text-zinc-400">Previous</p>
+                    <p className="mt-1 text-lg font-black text-zinc-100">LV.{levelUpPanel.previousLevel}</p>
+                  </div>
+                  <div className="rounded-xl border border-amber-300/55 bg-amber-500/12 px-3 py-2 text-center">
+                    <p className="text-[10px] font-black uppercase tracking-[0.15em] text-amber-200">Current</p>
+                    <p className="mt-1 text-lg font-black text-amber-100">LV.{levelUpPanel.newLevel}</p>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <span className="rounded-full border border-amber-300/55 bg-amber-500/14 px-4 py-1.5 text-xs font-black uppercase tracking-[0.14em] text-amber-100">
+                    {levelUpPanel.rank}
+                  </span>
+                  {levelUpDelta > 0 && (
+                    <span className="rounded-full border border-emerald-300/45 bg-emerald-500/12 px-3 py-1.5 text-[11px] font-black uppercase tracking-[0.12em] text-emerald-200">
+                      +{levelUpDelta} Level{levelUpDelta === 1 ? "" : "s"}
+                    </span>
+                  )}
+                </div>
+
+                {levelUpPanel.unlocked.length > 0 && (
+                  <div className="mt-5 rounded-2xl border border-emerald-300/35 bg-emerald-500/7 p-4">
+                    <p className="text-center text-[11px] font-black uppercase tracking-[0.16em] text-emerald-200">
+                      {t("levelUp.newJutsuUnlocked", "New Jutsu Unlocked")}
+                    </p>
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {levelUpPanel.unlocked.slice(0, 4).map((name) => (
+                        <div
+                          key={name}
+                          className="rounded-lg border border-emerald-300/45 bg-emerald-500/12 px-3 py-2 text-center text-xs font-bold text-emerald-100"
+                        >
+                          {getJutsuUiName(name)}
+                        </div>
+                      ))}
+                    </div>
                     {levelUpPanel.unlocked.length > 4 && (
-                      <p className="text-center text-[11px]" style={{ color: "rgb(140, 160, 140)" }}>
+                      <p className="mt-2 text-center text-[11px] text-emerald-100/70">
                         +{levelUpPanel.unlocked.length - 4} {t("levelUp.more", "more")}
                       </p>
                     )}
                   </div>
-                </div>
-              )}
+                )}
 
-              <button
-                type="button"
-                onClick={() => setLevelUpPanel(null)}
-                className="mt-6 flex h-[46px] w-full items-center justify-center rounded-[13px] border text-sm font-black text-white hover:bg-[#d77d14]"
-                style={{
-                  backgroundColor: "rgb(165, 85, 10)",
-                  borderColor: "rgb(255, 200, 60)",
-                }}
-              >
-                {t("levelUp.awesome", "Awesome")}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setLevelUpPanel(null)}
+                  className="mt-6 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-amber-300/70 bg-gradient-to-r from-orange-500 to-amber-500 text-sm font-black tracking-[0.08em] text-zinc-950 hover:brightness-110"
+                >
+                  {t("levelUp.awesome", "Awesome")}
+                </button>
+              </div>
             </div>
           </div>
         )
@@ -6337,22 +6629,56 @@ function PlayPageInner() {
               type="button"
               aria-label="Close alert modal"
               onClick={() => setAlertModal(null)}
-              className="absolute inset-0 bg-black/80"
+              className="absolute inset-0 bg-black/82 backdrop-blur-[2px]"
             />
-            <div className="relative w-full max-w-[620px] rounded-[20px] border border-orange-300/70 bg-[#121729]/95 p-6 shadow-[0_28px_80px_rgba(0,0,0,0.68)]">
-              <div className="pointer-events-none absolute inset-x-[8px] top-[8px] h-[64px] rounded-[14px] bg-orange-400/10" />
-              <p className="relative text-center text-2xl font-black text-orange-200">{alertModal.title}</p>
-              <p className="relative mt-6 whitespace-pre-line text-center text-sm leading-relaxed text-zinc-100">
-                {alertModal.message}
-              </p>
-              <div className="relative mt-7 flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => setAlertModal(null)}
-                  className="flex h-12 min-w-[220px] items-center justify-center rounded-xl bg-ninja-accent px-6 text-sm font-black tracking-wide text-white hover:bg-ninja-accent-glow"
-                >
-                  {alertModal.buttonText}
-                </button>
+
+            <div className="relative w-full max-w-[660px] overflow-hidden rounded-[24px] border border-orange-200/65 bg-[radial-gradient(circle_at_15%_8%,rgba(255,180,80,0.22),transparent_42%),radial-gradient(circle_at_82%_88%,rgba(98,198,255,0.16),transparent_38%),linear-gradient(180deg,rgba(16,20,36,0.97)_0%,rgba(10,12,24,0.97)_100%)] p-6 shadow-[0_30px_90px_rgba(0,0,0,0.72)]">
+              <div className="pointer-events-none absolute -left-16 -top-16 h-48 w-48 rounded-full bg-orange-300/25 blur-3xl" />
+              <div className="pointer-events-none absolute -right-20 -bottom-20 h-52 w-52 rounded-full bg-cyan-300/14 blur-3xl" />
+              <div className="pointer-events-none absolute inset-[2px] rounded-[22px] border border-orange-100/18" />
+
+              <div className="relative">
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-300/55 bg-amber-400/14 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Quest Complete
+                  </span>
+                  {alertRewardXp > 0 && (
+                    <span className="rounded-full border border-emerald-300/50 bg-emerald-500/12 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-100">
+                      +{alertRewardXp} XP
+                    </span>
+                  )}
+                </div>
+
+                <p className="mt-3 text-center text-2xl font-black text-orange-100">{alertModal.title}</p>
+
+                <div className="mt-5 space-y-2">
+                  {alertModalLines.length > 0 ? alertModalLines.map((line, idx) => (
+                    <p
+                      key={`alert-line-${idx}`}
+                      className={`rounded-lg border px-4 py-2 text-center text-sm leading-relaxed ${idx === 0
+                        ? "border-orange-300/45 bg-orange-500/10 text-zinc-100"
+                        : "border-zinc-600/70 bg-zinc-900/45 text-zinc-200"
+                        }`}
+                    >
+                      {line}
+                    </p>
+                  )) : (
+                    <p className="rounded-lg border border-zinc-600/70 bg-zinc-900/45 px-4 py-2 text-center text-sm leading-relaxed text-zinc-200">
+                      {alertModal.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-7 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => setAlertModal(null)}
+                    className="flex h-12 min-w-[240px] items-center justify-center rounded-xl border border-orange-200/60 bg-gradient-to-r from-orange-500 to-amber-500 px-6 text-sm font-black tracking-[0.1em] text-zinc-950 hover:brightness-110"
+                  >
+                    {alertModal.buttonText}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
