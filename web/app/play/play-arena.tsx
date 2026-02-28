@@ -218,6 +218,7 @@ const ONE_HAND_ASSIST_IDLE_THRESHOLD = 3.2;
 const ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD = 2.4;
 const ONE_HAND_EXPECTED_IDLE_MARGIN = 0.18;
 const FULL_FEATURE_LENGTH = HAND_FEATURE_LENGTH * 2;
+const TWO_HAND_EXEC_DISTANCE_MAX = 0.2;
 const LEFT_HAND_FEATURE_MASK = Array.from({ length: HAND_FEATURE_LENGTH }, (_, i) => i);
 const RIGHT_HAND_FEATURE_MASK = Array.from({ length: HAND_FEATURE_LENGTH }, (_, i) => i + HAND_FEATURE_LENGTH);
 const FACE_ANCHOR_STICKY_MS = 2000;
@@ -585,6 +586,27 @@ function palmCenter(landmarks: Landmark[]): [number, number, number] {
   }
   if (count <= 0) return [0, 0, 0];
   return [sx / count, sy / count, sz / count];
+}
+
+function computeTwoHandDistance(
+  landmarks: Landmark[][],
+  frameWidth: number,
+  frameHeight: number,
+): { norm: number; px: number } | null {
+  if (!Array.isArray(landmarks) || landmarks.length < 2) return null;
+  const centers: Array<[number, number, number]> = [];
+  for (const hand of landmarks) {
+    if (!Array.isArray(hand) || hand.length < 21) continue;
+    centers.push(palmCenter(hand));
+    if (centers.length >= 2) break;
+  }
+  if (centers.length < 2) return null;
+
+  const dx = centers[0][0] - centers[1][0];
+  const dy = centers[0][1] - centers[1][1];
+  const norm = Math.hypot(dx, dy);
+  const px = Math.hypot(dx * Math.max(1, frameWidth), dy * Math.max(1, frameHeight));
+  return { norm, px };
 }
 
 function centerDistanceSq(a: [number, number, number], b: [number, number, number]): number {
@@ -3738,6 +3760,11 @@ export default function PlayArena({
       }
 
       latestLandmarksRef.current = result.landmarks ?? [];
+      const twoHandDistanceNow = computeTwoHandDistance(
+        result.landmarks ?? [],
+        Number(video.videoWidth || 0),
+        Number(video.videoHeight || 0),
+      );
       const face = faceRef.current;
       let faceMotion: FaceMotionState = { anchor: null, yaw: 0, pitch: 0 };
       let faceResult: FaceResultShape = { faceLandmarks: [], faceBlendshapes: [] };
@@ -3821,6 +3848,13 @@ export default function PlayArena({
       const lowFpsAssistActive = isLikelyLowPowerMobile && fpsRef.current > 0 && fpsRef.current < LOW_FPS_ASSIST_THRESHOLD;
       const assistUnlockedForStep = assistModeEnabled && oneHandAssistUnlockedStepRef.current === stepIdxForAssist;
       const requiresTwoHandsNow = restrictedSigns;
+      const exceedsTwoHandDistanceGate = Boolean(
+        requiresTwoHandsNow
+        && numHands >= 2
+        && twoHandDistanceNow
+        && Number.isFinite(twoHandDistanceNow.norm)
+        && twoHandDistanceNow.norm > TWO_HAND_EXEC_DISTANCE_MAX,
+      );
       const effectiveVoteMinConfidence = restrictedSigns
         ? GAME_MIN_CONFIDENCE
         : (numHands >= 2 ? GAME_MIN_CONFIDENCE : ONE_HAND_PASS_GATE_MIN_CONFIDENCE);
@@ -3961,7 +3995,8 @@ export default function PlayArena({
           rawConfidence *= imputedHands >= 2 ? 0.72 : 0.88;
         }
 
-        if (!isCalibrationMode && requiresTwoHandsNow && numHands < 2) {
+      if (!isCalibrationMode && requiresTwoHandsNow && (numHands < 2 || exceedsTwoHandDistanceGate)) {
+        if (numHands < 2) {
           const matchedExpectedWithOneHand = expectedStepSign
             ? signsMatch(
               rawLabel,
@@ -3975,18 +4010,22 @@ export default function PlayArena({
           if (assistModeEnabled && !assistUnlockedForStep && matchedExpectedWithOneHand) {
             oneHandAssistUnlockedStepRef.current = stepIdxForAssist;
           }
-          voteWindowRef.current = [];
-          voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
-          setRawDetectedLabel("Show both hands");
-          setRawDetectedConfidence(0);
-          setVoteHits(0);
-          setDetectedLabel("Show both hands");
-          setDetectedConfidence(0);
-          return;
         }
+        voteWindowRef.current = [];
+        voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
+        setRawDetectedLabel(exceedsTwoHandDistanceGate ? "Bring hands closer" : "Show both hands");
+        setRawDetectedConfidence(0);
+        setVoteHits(0);
+        setDetectedLabel(exceedsTwoHandDistanceGate ? "Bring hands closer" : "Show both hands");
+        setDetectedConfidence(0);
+        return;
+      }
 
         const lightingPass = !isRankMode || lightingStatusRef.current === "good";
-        const allowDetection = lightingPass && numHands > 0 && (!requiresTwoHandsNow || numHands >= 2);
+        const allowDetection = lightingPass
+          && numHands > 0
+          && (!requiresTwoHandsNow || numHands >= 2)
+          && (!requiresTwoHandsNow || !exceedsTwoHandDistanceGate);
         const voteTtlMs = lowFpsAssistActive ? LOW_FPS_VOTE_TTL_MS : VOTE_TTL_MS;
         const vote = applyTemporalVote(
           voteWindowRef.current,

@@ -874,6 +874,9 @@ class CoreMixin:
         self.last_stable_vote_label = "idle"
         self.last_stable_vote_conf = 0.0
         self.last_stable_vote_time = 0.0
+        self.last_candidate_vote_label = "idle"
+        self.last_candidate_vote_conf = 0.0
+        self.last_candidate_vote_time = 0.0
         self.show_detection_panel = False
         self.model_toggle_rect = pygame.Rect(0, 0, 0, 0)
         self.diag_toggle_rect = pygame.Rect(0, 0, 0, 0)

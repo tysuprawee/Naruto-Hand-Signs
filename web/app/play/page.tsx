@@ -108,7 +108,12 @@ interface QuestDefinition {
   title: string;
   target: number;
   reward: number;
+  subtitle?: string;
+  localizeTitle?: boolean;
 }
+
+type DailyQuestDefinition = QuestDefinition & { scope: "daily"; id: DailyQuestId };
+type WeeklyQuestDefinition = QuestDefinition & { scope: "weekly"; id: WeeklyQuestId };
 
 interface StreakBonusTier {
   target: number;
@@ -274,7 +279,7 @@ const RESOLUTION_OPTIONS: Array<{ width: number; height: number; label: string }
   { width: 1920, height: 1080, label: "1920x1080" },
 ];
 
-const QUEST_DEFS: QuestDefinition[] = [
+const QUEST_BASE_DEFS: QuestDefinition[] = [
   { scope: "daily", id: "d_signs", title: "Land 25 correct signs", target: 25, reward: 120 },
   { scope: "daily", id: "d_jutsus", title: "Complete 5 jutsu runs", target: 5, reward: 180 },
   { scope: "daily", id: "d_xp", title: "Earn 450 XP", target: 450, reward: 250 },
@@ -283,8 +288,97 @@ const QUEST_DEFS: QuestDefinition[] = [
   { scope: "weekly", id: "w_xp", title: "Earn 4000 XP", target: 4000, reward: 1200 },
 ];
 
-const DAILY_QUEST_DEFS = QUEST_DEFS.filter((def): def is QuestDefinition & { scope: "daily"; id: DailyQuestId } => def.scope === "daily");
-const WEEKLY_QUEST_DEFS = QUEST_DEFS.filter((def): def is QuestDefinition & { scope: "weekly"; id: WeeklyQuestId } => def.scope === "weekly");
+const DAILY_QUEST_BASE_DEFS = QUEST_BASE_DEFS.filter((def): def is DailyQuestDefinition => def.scope === "daily");
+const WEEKLY_QUEST_BASE_DEFS = QUEST_BASE_DEFS.filter((def): def is WeeklyQuestDefinition => def.scope === "weekly");
+const QUEST_THEME_JUTSU_NAMES = Object.keys(OFFICIAL_JUTSUS)
+  .sort((a, b) => a.localeCompare(b));
+
+const QUEST_DYNAMIC_TEMPLATES: Record<QuestId, Array<{ title: string; subtitle: string }>> = {
+  d_signs: [
+    { title: "Seal Precision Drill: Land {target} correct signs", subtitle: "Theme focus: {jutsu}. Any sign sequence counts toward progress." },
+    { title: "Academy Form Check: Hit {target} clean hand signs", subtitle: "Keep both hands visible and chain stable detections." },
+    { title: "Chakra Control Warmup: Confirm {target} correct signs", subtitle: "Inspired by {jutsu}. Accuracy over speed." },
+    { title: "Practice Circuit: Register {target} valid signs", subtitle: "Any mode contributes to this mission." },
+    { title: "Ninja Fundamentals: Land {target} successful signs", subtitle: "Stack clean inputs and keep the combo flowing." },
+  ],
+  d_jutsus: [
+    { title: "Mission Rotation: Complete {target} jutsu runs", subtitle: "Theme focus: {jutsu}. Free or rank runs both count." },
+    { title: "Field Exercise: Finish {target} full jutsu clears", subtitle: "Push consistent pacing through complete sequences." },
+    { title: "Dojo Session: Clear {target} jutsu attempts", subtitle: "Any unlocked jutsu can be used for progress." },
+    { title: "Shinobi Reps: Complete {target} run completions", subtitle: "Steady clears build daily streak momentum." },
+    { title: "Combat Routine: Finish {target} jutsu cycles", subtitle: "Use this to farm XP and unlocks efficiently." },
+  ],
+  d_xp: [
+    { title: "Growth Target: Earn {target} XP today", subtitle: "Theme focus: {jutsu}. Quest and run rewards both apply." },
+    { title: "Level Push: Farm {target} XP in one daily period", subtitle: "Keep chaining runs to maximize streak boost value." },
+    { title: "Training Grind: Collect {target} XP", subtitle: "Clear quests and jutsu runs to hit the mark fast." },
+    { title: "Academy Advancement: Gain {target} XP", subtitle: "Every completed run contributes toward this quota." },
+    { title: "Power Build: Accumulate {target} XP today", subtitle: "Stack mission claims and regular run rewards." },
+  ],
+  w_jutsus: [
+    { title: "Weekly Output: Complete {target} jutsu runs", subtitle: "Theme focus: {jutsu}. Build volume across the full week." },
+    { title: "Long Arc Training: Finish {target} jutsu clears", subtitle: "Daily consistency keeps this objective on pace." },
+    { title: "Shinobi Marathon: Clear {target} jutsu cycles", subtitle: "Any unlocked move set can contribute." },
+    { title: "Dojo Grind Week: Complete {target} total runs", subtitle: "Keep free and rank sessions rotating." },
+    { title: "Weekly Trial Path: Reach {target} jutsu completions", subtitle: "Reliable clears fuel weekly streak progress." },
+  ],
+  w_challenges: [
+    { title: "Rank Track: Finish {target} rank mode runs", subtitle: "Theme focus: {jutsu}. Push secure submissions all week." },
+    { title: "Competitive Week: Complete {target} ranked clears", subtitle: "Run proof submissions count when runs complete." },
+    { title: "Leaderboard Prep: Finish {target} rank attempts", subtitle: "Use rank mode reps to sharpen timings." },
+    { title: "Exam Week: Land {target} successful rank runs", subtitle: "Consistent completions keep weekly streak alive." },
+    { title: "Challenge Quota: Complete {target} rank mode sessions", subtitle: "Secure run tokens and consistent execution matter." },
+  ],
+  w_xp: [
+    { title: "Weekly Growth Plan: Earn {target} XP", subtitle: "Theme focus: {jutsu}. Quests and runs stack together." },
+    { title: "Power Week: Farm {target} XP total", subtitle: "Spread sessions across the week to avoid a final-day crunch." },
+    { title: "Progression Surge: Collect {target} XP", subtitle: "Keep quest claims on cooldown and chain run clears." },
+    { title: "Rank Advancement Week: Gain {target} XP", subtitle: "Use streak boosts to scale your XP gain." },
+    { title: "Shinobi XP Contract: Reach {target} XP", subtitle: "Sustain momentum through daily play windows." },
+  ],
+};
+
+function hashQuestSeed(input: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function fillQuestTemplate(template: string, context: { target: number; reward: number; jutsu: string }): string {
+  return template
+    .replaceAll("{target}", String(context.target))
+    .replaceAll("{reward}", String(context.reward))
+    .replaceAll("{jutsu}", context.jutsu);
+}
+
+function buildDynamicQuestDef<T extends QuestDefinition>(base: T, period: string, identitySeed: string): T {
+  const templates = QUEST_DYNAMIC_TEMPLATES[base.id];
+  if (!Array.isArray(templates) || templates.length === 0) return base;
+
+  const themeSeed = `${identitySeed}|${base.scope}|${base.id}|${period}`;
+  const template = templates[hashQuestSeed(themeSeed) % templates.length];
+  const jutsu = QUEST_THEME_JUTSU_NAMES[hashQuestSeed(`${themeSeed}|jutsu`) % Math.max(1, QUEST_THEME_JUTSU_NAMES.length)] || "Shadow Clone";
+  const context = { target: base.target, reward: base.reward, jutsu };
+
+  return {
+    ...base,
+    title: fillQuestTemplate(template.title, context),
+    subtitle: fillQuestTemplate(template.subtitle, context),
+    localizeTitle: false,
+  };
+}
+
+function buildDynamicDailyQuestDefs(period: string, identitySeed: string): DailyQuestDefinition[] {
+  return DAILY_QUEST_BASE_DEFS.map((def) => buildDynamicQuestDef(def, period, identitySeed));
+}
+
+function buildDynamicWeeklyQuestDefs(period: string, identitySeed: string): WeeklyQuestDefinition[] {
+  return WEEKLY_QUEST_BASE_DEFS.map((def) => buildDynamicQuestDef(def, period, identitySeed));
+}
+
 const DAILY_STREAK_BONUS_TIERS: StreakBonusTier[] = [
   { target: 3, bonusPct: 5 },
   { target: 7, bonusPct: 10 },
@@ -377,14 +471,14 @@ function sanitizeQuestStreakState(raw: unknown): QuestStreakState {
 }
 
 function isDailyQuestBucketComplete(bucket: DailyQuestBucket): boolean {
-  return DAILY_QUEST_DEFS.every((def) => {
+  return DAILY_QUEST_BASE_DEFS.every((def) => {
     const entry = bucket.quests[def.id];
     return Boolean(entry?.claimed || Number(entry?.progress || 0) >= def.target);
   });
 }
 
 function isWeeklyQuestBucketComplete(bucket: WeeklyQuestBucket): boolean {
-  return WEEKLY_QUEST_DEFS.every((def) => {
+  return WEEKLY_QUEST_BASE_DEFS.every((def) => {
     const entry = bucket.quests[def.id];
     return Boolean(entry?.claimed || Number(entry?.progress || 0) >= def.target);
   });
@@ -1807,6 +1901,19 @@ function PlayPageInner() {
   const activeStreakBonusPct = dailyStreakBonusPct + weeklyStreakBonusPct;
   const nextDailyStreakTier = getNextStreakTier(questState.streak.dailyCurrent, DAILY_STREAK_BONUS_TIERS);
   const nextWeeklyStreakTier = getNextStreakTier(questState.streak.weeklyCurrent, WEEKLY_STREAK_BONUS_TIERS);
+  const questIdentitySeed = useMemo(() => {
+    if (identity?.discordId) return identity.discordId;
+    if (identity?.username) return identity.username.toLowerCase();
+    return "guest";
+  }, [identity?.discordId, identity?.username]);
+  const dailyQuestDefs = useMemo(
+    () => buildDynamicDailyQuestDefs(questState.daily.period, questIdentitySeed),
+    [questIdentitySeed, questState.daily.period],
+  );
+  const weeklyQuestDefs = useMemo(
+    () => buildDynamicWeeklyQuestDefs(questState.weekly.period, questIdentitySeed),
+    [questIdentitySeed, questState.weekly.period],
+  );
   const calibrationReady = hasCalibrationProfile(calibrationProfile);
 
   const jutsuTiers = useMemo(() => {
@@ -4003,9 +4110,10 @@ function PlayPageInner() {
   const tutorialLines = tutorial.lines.map((line, lineIdx) => (
     t(`tutorial.steps.${tutorialStep}.lines.${lineIdx}`, line)
   ));
-  const getQuestDisplayTitle = useCallback((def: QuestDefinition): string => (
-    t(`quest.def.${def.id}.title`, def.title)
-  ), [t]);
+  const getQuestDisplayTitle = useCallback((def: QuestDefinition): string => {
+    if (def.localizeTitle === false) return def.title;
+    return t(`quest.def.${def.id}.title`, def.title);
+  }, [t]);
   const localizedAboutSections = useMemo(() => (
     ABOUT_SECTIONS.map((section, sectionIdx) => ({
       ...section,
@@ -4878,187 +4986,270 @@ function PlayPageInner() {
             )}
 
             {view === "quest_board" && (
-              <div className="mx-auto w-full max-w-5xl rounded-3xl border border-ninja-border bg-ninja-panel/92 p-6 shadow-[0_18px_55px_rgba(0,0,0,0.5)] md:p-8">
+              <div className="relative mx-auto w-full max-w-6xl overflow-hidden rounded-[2rem] border border-zinc-700/70 bg-[linear-gradient(180deg,rgba(18,22,40,0.96)_0%,rgba(10,12,24,0.96)_100%)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.62)] md:p-8">
+                <div className="pointer-events-none absolute inset-0">
+                  <div className="absolute -top-28 left-24 h-72 w-72 rounded-full bg-cyan-400/10 blur-[90px]" />
+                  <div className="absolute -right-24 top-16 h-80 w-80 rounded-full bg-orange-500/12 blur-[100px]" />
+                  <div className="absolute -bottom-36 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-indigo-500/14 blur-[110px]" />
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_10%,rgba(255,255,255,0.05),transparent_40%),radial-gradient(circle_at_80%_20%,rgba(255,138,76,0.08),transparent_42%)]" />
+                </div>
                 <button
                   type="button"
                   onClick={() => setView("mode_select")}
-                  className="mb-6 flex items-center gap-2 text-sm font-black text-ninja-dim hover:text-white transition-colors"
+                  className="relative z-10 mb-6 flex items-center gap-2 text-sm font-black tracking-wide text-zinc-400 transition-colors hover:text-white"
                 >
                   <ArrowLeft className="h-4 w-4" />
                   {t("common.back", "BACK")}
                 </button>
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-3xl font-black tracking-tight text-white">{t("quest.boardTitle", "QUEST BOARD")}</h2>
-                    <p className="mt-1 text-sm text-ninja-dim">
-                      {t("quest.boardSubtitle", "Server-authoritative quest state and claim rewards (same guarded RPC path as pygame).")}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-ninja-border bg-ninja-bg/40 px-4 py-2 text-xs text-zinc-300">
-                    <div>{t("quest.dailyResetUtc", "Daily reset (UTC)")}: {formatCountdown(dailyResetAt.getTime() - now.getTime())}</div>
-                    <div>{t("quest.weeklyResetUtc", "Weekly reset (UTC)")}: {formatCountdown(weeklyResetAt.getTime() - now.getTime())}</div>
-                    <div>{t("quest.clockSource", "Clock source")}: {serverClockSynced ? t("quest.serverSynced", "Server-synced") : t("quest.localFallback", "Local fallback")}</div>
-                  </div>
-                </div>
 
-                <div className="mt-4 rounded-2xl border border-amber-300/40 bg-gradient-to-r from-amber-500/16 via-orange-500/12 to-red-500/16 px-4 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs font-black uppercase tracking-[0.16em] text-amber-200">
-                      {t("quest.activeStreakBoost", "Active Streak Boost")}
-                    </p>
-                    <p className="text-sm font-black text-white">
-                      +{activeStreakBonusPct}% XP {t("quest.everyRun", "every jutsu play")}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-2xl border border-emerald-300/35 bg-emerald-500/10 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs font-black uppercase tracking-[0.15em] text-emerald-200">
-                        {t("quest.dailyStreak", "Daily Streak")}
+                <div className="relative z-10 space-y-5">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <p className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-300/85">Mission Control</p>
+                      <h2 className="mt-1 text-3xl font-black tracking-tight text-white md:text-4xl">
+                        {t("quest.boardTitle", "QUEST BOARD")}
+                      </h2>
+                      <p className="mt-1 text-sm text-zinc-300/85">
+                        {t("quest.boardSubtitle", "Server-authoritative quest state and claim rewards (same guarded RPC path as pygame).")}
                       </p>
-                      {isDailyQuestBucketComplete(questState.daily) && (
-                        <span className="rounded-full border border-emerald-300/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-200">
-                          {t("quest.periodComplete", "Period Complete")}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-2 flex items-end gap-2">
-                      <span className="text-3xl font-black text-white">{questState.streak.dailyCurrent}</span>
-                      <span className="pb-1 text-xs uppercase tracking-[0.14em] text-emerald-200">{t("quest.days", "days")}</span>
-                    </div>
-                    <p className="mt-1 text-xs text-emerald-100/90">
-                      {t("quest.best", "Best")}: {questState.streak.dailyBest}
-                    </p>
-                    <p className="mt-1 text-xs font-semibold text-emerald-100/95">
-                      {t("quest.xpBoost", "XP Boost")}: +{dailyStreakBonusPct}%
-                    </p>
-                    <p className="mt-1 text-[11px] text-emerald-100/80">
-                      {nextDailyStreakTier
-                        ? `${t("quest.nextMilestone", "Next milestone")}: ${nextDailyStreakTier.target} ${t("quest.days", "days")} (+${nextDailyStreakTier.bonusPct}%)`
-                        : t("quest.maxTierReached", "Max tier reached")}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-blue-300/35 bg-blue-500/10 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs font-black uppercase tracking-[0.15em] text-blue-200">
-                        {t("quest.weeklyStreak", "Weekly Streak")}
+                      <p className="mt-2 text-xs uppercase tracking-[0.16em] text-amber-200/85">
+                        Rotating directives refresh each daily and weekly UTC reset.
                       </p>
-                      {isWeeklyQuestBucketComplete(questState.weekly) && (
-                        <span className="rounded-full border border-blue-300/40 bg-blue-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-blue-200">
-                          {t("quest.periodComplete", "Period Complete")}
+                    </div>
+                    <div className="rounded-2xl border border-zinc-600/70 bg-black/35 px-4 py-3 text-xs text-zinc-200 shadow-[0_12px_24px_rgba(0,0,0,0.35)]">
+                      <p className="mb-1 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">Reset Tracker</p>
+                      <div className="grid gap-1.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-zinc-400">{t("quest.dailyResetUtc", "Daily reset (UTC)")}</span>
+                          <span className="font-mono text-[12px] font-black text-cyan-200">{formatCountdown(dailyResetAt.getTime() - now.getTime())}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-zinc-400">{t("quest.weeklyResetUtc", "Weekly reset (UTC)")}</span>
+                          <span className="font-mono text-[12px] font-black text-cyan-200">{formatCountdown(weeklyResetAt.getTime() - now.getTime())}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-zinc-400">{t("quest.clockSource", "Clock source")}</span>
+                          <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-emerald-300">
+                            {serverClockSynced ? t("quest.serverSynced", "Server-synced") : t("quest.localFallback", "Local fallback")}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="relative overflow-hidden rounded-2xl border border-amber-300/45 bg-gradient-to-r from-amber-500/20 via-orange-500/16 to-rose-500/20 px-4 py-4">
+                    <div className="pointer-events-none absolute inset-y-0 right-0 w-72 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.20),transparent_72%)]" />
+                    <div className="relative flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-amber-200">
+                          {t("quest.activeStreakBoost", "Active Streak Boost")}
+                        </p>
+                        <p className="mt-1 text-xs text-amber-100/90">
+                          Boost applies to every completed jutsu run.
+                        </p>
+                      </div>
+                      <p className="text-2xl font-black tracking-tight text-white md:text-3xl">
+                        +{activeStreakBonusPct}% XP
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-emerald-300/45 bg-[linear-gradient(145deg,rgba(16,185,129,0.18)_0%,rgba(10,23,22,0.7)_100%)] p-4 shadow-[0_14px_28px_rgba(16,185,129,0.15)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-black uppercase tracking-[0.15em] text-emerald-200">
+                          {t("quest.dailyStreak", "Daily Streak")}
+                        </p>
+                        {isDailyQuestBucketComplete(questState.daily) && (
+                          <span className="rounded-full border border-emerald-300/55 bg-emerald-400/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-100">
+                            {t("quest.periodComplete", "Period Complete")}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-2 flex items-end gap-2">
+                        <span className="text-4xl font-black tabular-nums text-white">{questState.streak.dailyCurrent}</span>
+                        <span className="pb-1 text-xs uppercase tracking-[0.14em] text-emerald-200">{t("quest.days", "days")}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-emerald-100/90">{t("quest.best", "Best")}: {questState.streak.dailyBest}</p>
+                      <p className="mt-1 text-xs font-semibold text-emerald-100/95">{t("quest.xpBoost", "XP Boost")}: +{dailyStreakBonusPct}%</p>
+                      <p className="mt-1 text-[11px] text-emerald-100/80">
+                        {nextDailyStreakTier
+                          ? `${t("quest.nextMilestone", "Next milestone")}: ${nextDailyStreakTier.target} ${t("quest.days", "days")} (+${nextDailyStreakTier.bonusPct}%)`
+                          : t("quest.maxTierReached", "Max tier reached")}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl border border-blue-300/45 bg-[linear-gradient(145deg,rgba(59,130,246,0.18)_0%,rgba(11,18,36,0.75)_100%)] p-4 shadow-[0_14px_28px_rgba(59,130,246,0.15)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-black uppercase tracking-[0.15em] text-blue-200">
+                          {t("quest.weeklyStreak", "Weekly Streak")}
+                        </p>
+                        {isWeeklyQuestBucketComplete(questState.weekly) && (
+                          <span className="rounded-full border border-blue-300/55 bg-blue-400/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-blue-100">
+                            {t("quest.periodComplete", "Period Complete")}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-2 flex items-end gap-2">
+                        <span className="text-4xl font-black tabular-nums text-white">{questState.streak.weeklyCurrent}</span>
+                        <span className="pb-1 text-xs uppercase tracking-[0.14em] text-blue-200">{t("quest.weeks", "weeks")}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-blue-100/90">{t("quest.best", "Best")}: {questState.streak.weeklyBest}</p>
+                      <p className="mt-1 text-xs font-semibold text-blue-100/95">{t("quest.xpBoost", "XP Boost")}: +{weeklyStreakBonusPct}%</p>
+                      <p className="mt-1 text-[11px] text-blue-100/80">
+                        {nextWeeklyStreakTier
+                          ? `${t("quest.nextMilestone", "Next milestone")}: ${nextWeeklyStreakTier.target} ${t("quest.weeks", "weeks")} (+${nextWeeklyStreakTier.bonusPct}%)`
+                          : t("quest.maxTierReached", "Max tier reached")}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-5 lg:grid-cols-2">
+                    <section className="rounded-2xl border border-zinc-700/80 bg-zinc-950/45 p-4 shadow-[0_14px_30px_rgba(0,0,0,0.45)] backdrop-blur-sm">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <Image src="/pics/quests/daily_icon.png" alt={t("quest.daily", "Daily")} width={32} height={32} className="h-8 w-8 object-contain" />
+                          <h3 className="text-sm font-black uppercase tracking-[0.16em] text-emerald-300">{t("quest.daily", "Daily")}</h3>
+                        </div>
+                        <span className="rounded-full border border-emerald-400/35 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-200">
+                          24H
                         </span>
-                      )}
-                    </div>
-                    <div className="mt-2 flex items-end gap-2">
-                      <span className="text-3xl font-black text-white">{questState.streak.weeklyCurrent}</span>
-                      <span className="pb-1 text-xs uppercase tracking-[0.14em] text-blue-200">{t("quest.weeks", "weeks")}</span>
-                    </div>
-                    <p className="mt-1 text-xs text-blue-100/90">
-                      {t("quest.best", "Best")}: {questState.streak.weeklyBest}
-                    </p>
-                    <p className="mt-1 text-xs font-semibold text-blue-100/95">
-                      {t("quest.xpBoost", "XP Boost")}: +{weeklyStreakBonusPct}%
-                    </p>
-                    <p className="mt-1 text-[11px] text-blue-100/80">
-                      {nextWeeklyStreakTier
-                        ? `${t("quest.nextMilestone", "Next milestone")}: ${nextWeeklyStreakTier.target} ${t("quest.weeks", "weeks")} (+${nextWeeklyStreakTier.bonusPct}%)`
-                        : t("quest.maxTierReached", "Max tier reached")}
-                    </p>
+                      </div>
+                      <div className="space-y-3">
+                        {dailyQuestDefs.map((def) => {
+                          const entry = questState.daily.quests[def.id];
+                          const pct = Math.max(0, Math.min(1, entry.progress / Math.max(1, def.target)));
+                          const ready = entry.progress >= def.target && !entry.claimed;
+                          const questTitle = getQuestDisplayTitle(def);
+                          const cardTone = entry.claimed
+                            ? "border-emerald-400/45 bg-emerald-500/8"
+                            : ready
+                              ? "border-amber-300/55 bg-amber-500/8"
+                              : "border-zinc-700/85 bg-black/35";
+                          const progressTone = entry.claimed
+                            ? "from-emerald-300 via-emerald-400 to-teal-300"
+                            : ready
+                              ? "from-amber-300 via-orange-400 to-orange-500"
+                              : "from-orange-500 via-orange-500 to-amber-300";
+                          return (
+                            <div key={def.id} className={`rounded-xl border p-3 transition-colors ${cardTone}`}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-semibold leading-snug text-white">{questTitle}</p>
+                                    {ready && !entry.claimed && (
+                                      <span className="rounded-full border border-amber-300/65 bg-amber-400/15 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.15em] text-amber-200">
+                                        Ready
+                                      </span>
+                                    )}
+                                  </div>
+                                  {!!def.subtitle && (
+                                    <p className="mt-1 text-[11px] text-zinc-300/80">{def.subtitle}</p>
+                                  )}
+                                </div>
+                                <span className="text-xs font-bold tabular-nums text-zinc-300">{Math.min(entry.progress, def.target)}/{def.target}</span>
+                              </div>
+                              <div className="mt-3 h-2.5 rounded-full bg-zinc-800/95 p-[1px]">
+                                <div className={`h-full rounded-full bg-gradient-to-r ${progressTone}`} style={{ width: `${pct * 100}%` }} />
+                              </div>
+                              <div className="mt-3 flex items-center justify-between">
+                                <span className="text-xs font-black tracking-[0.08em] text-amber-300">+{def.reward} XP</span>
+                                {entry.claimed ? (
+                                  <span className="rounded-md border border-emerald-300/45 bg-emerald-500/15 px-2 py-1 text-xs font-black tracking-[0.1em] text-emerald-200">
+                                    {t("quest.claimed", "CLAIMED")}
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={!ready || actionBusy || !stateReady || !identityLinked}
+                                    onClick={() => void claimQuest(def)}
+                                    className="rounded-lg border border-amber-200/45 bg-gradient-to-r from-orange-500 to-amber-500 px-3 py-1.5 text-[11px] font-black tracking-[0.08em] text-zinc-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45"
+                                  >
+                                    {claimBusyKey === `${def.scope}:${def.id}`
+                                      ? t("quest.claiming", "CLAIMING...")
+                                      : t("quest.claim", "CLAIM")}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-zinc-700/80 bg-zinc-950/45 p-4 shadow-[0_14px_30px_rgba(0,0,0,0.45)] backdrop-blur-sm">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <Image src="/pics/quests/weekly_icon.png" alt={t("quest.weekly", "Weekly")} width={32} height={32} className="h-8 w-8 object-contain" />
+                          <h3 className="text-sm font-black uppercase tracking-[0.16em] text-blue-300">{t("quest.weekly", "Weekly")}</h3>
+                        </div>
+                        <span className="rounded-full border border-blue-300/35 bg-blue-500/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-blue-200">
+                          7D
+                        </span>
+                      </div>
+                      <div className="space-y-3">
+                        {weeklyQuestDefs.map((def) => {
+                          const entry = questState.weekly.quests[def.id];
+                          const pct = Math.max(0, Math.min(1, entry.progress / Math.max(1, def.target)));
+                          const ready = entry.progress >= def.target && !entry.claimed;
+                          const questTitle = getQuestDisplayTitle(def);
+                          const cardTone = entry.claimed
+                            ? "border-emerald-400/45 bg-emerald-500/8"
+                            : ready
+                              ? "border-amber-300/55 bg-amber-500/8"
+                              : "border-zinc-700/85 bg-black/35";
+                          const progressTone = entry.claimed
+                            ? "from-emerald-300 via-emerald-400 to-teal-300"
+                            : ready
+                              ? "from-amber-300 via-orange-400 to-orange-500"
+                              : "from-orange-500 via-orange-500 to-amber-300";
+                          return (
+                            <div key={def.id} className={`rounded-xl border p-3 transition-colors ${cardTone}`}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-semibold leading-snug text-white">{questTitle}</p>
+                                    {ready && !entry.claimed && (
+                                      <span className="rounded-full border border-amber-300/65 bg-amber-400/15 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.15em] text-amber-200">
+                                        Ready
+                                      </span>
+                                    )}
+                                  </div>
+                                  {!!def.subtitle && (
+                                    <p className="mt-1 text-[11px] text-zinc-300/80">{def.subtitle}</p>
+                                  )}
+                                </div>
+                                <span className="text-xs font-bold tabular-nums text-zinc-300">{Math.min(entry.progress, def.target)}/{def.target}</span>
+                              </div>
+                              <div className="mt-3 h-2.5 rounded-full bg-zinc-800/95 p-[1px]">
+                                <div className={`h-full rounded-full bg-gradient-to-r ${progressTone}`} style={{ width: `${pct * 100}%` }} />
+                              </div>
+                              <div className="mt-3 flex items-center justify-between">
+                                <span className="text-xs font-black tracking-[0.08em] text-amber-300">+{def.reward} XP</span>
+                                {entry.claimed ? (
+                                  <span className="rounded-md border border-emerald-300/45 bg-emerald-500/15 px-2 py-1 text-xs font-black tracking-[0.1em] text-emerald-200">
+                                    {t("quest.claimed", "CLAIMED")}
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={!ready || actionBusy || !stateReady || !identityLinked}
+                                    onClick={() => void claimQuest(def)}
+                                    className="rounded-lg border border-amber-200/45 bg-gradient-to-r from-orange-500 to-amber-500 px-3 py-1.5 text-[11px] font-black tracking-[0.08em] text-zinc-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45"
+                                  >
+                                    {claimBusyKey === `${def.scope}:${def.id}`
+                                      ? t("quest.claiming", "CLAIMING...")
+                                      : t("quest.claim", "CLAIM")}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
                   </div>
                 </div>
-
-                <div className="mt-6 grid gap-5 lg:grid-cols-2">
-                  <section className="rounded-2xl border border-ninja-border bg-ninja-bg/35 p-4">
-                    <div className="mb-3 flex items-center gap-3">
-                      <Image src="/pics/quests/daily_icon.png" alt={t("quest.daily", "Daily")} width={32} height={32} className="h-8 w-8 object-contain" />
-                      <h3 className="text-sm font-black uppercase tracking-[0.16em] text-emerald-300">{t("quest.daily", "Daily")}</h3>
-                    </div>
-                    <div className="space-y-3">
-                      {QUEST_DEFS.filter((q) => q.scope === "daily").map((def) => {
-                        const entry = questState.daily.quests[def.id as DailyQuestId];
-                        const pct = Math.max(0, Math.min(1, entry.progress / Math.max(1, def.target)));
-                        const ready = entry.progress >= def.target && !entry.claimed;
-                        const questTitle = getQuestDisplayTitle(def);
-                        return (
-                          <div key={def.id} className="rounded-xl border border-ninja-border bg-black/25 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-sm font-semibold text-white">{questTitle}</p>
-                              <span className="text-xs text-zinc-300">{Math.min(entry.progress, def.target)}/{def.target}</span>
-                            </div>
-                            <div className="mt-2 h-2 rounded-full bg-zinc-700">
-                              <div className="h-2 rounded-full bg-orange-500" style={{ width: `${pct * 100}%` }} />
-                            </div>
-                            <div className="mt-2 flex items-center justify-between">
-                              <span className="text-xs font-bold text-amber-300">+{def.reward} XP</span>
-                              {entry.claimed ? (
-                                <span className="text-xs font-black text-emerald-300">{t("quest.claimed", "CLAIMED")}</span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={!ready || actionBusy || !stateReady || !identityLinked}
-                                  onClick={() => void claimQuest(def)}
-                                  className="rounded-md px-3 py-1 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50 bg-orange-600 hover:bg-orange-500"
-                                >
-                                  {claimBusyKey === `${def.scope}:${def.id}`
-                                    ? t("quest.claiming", "CLAIMING...")
-                                    : t("quest.claim", "CLAIM")}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </section>
-
-                  <section className="rounded-2xl border border-ninja-border bg-ninja-bg/35 p-4">
-                    <div className="mb-3 flex items-center gap-3">
-                      <Image src="/pics/quests/weekly_icon.png" alt={t("quest.weekly", "Weekly")} width={32} height={32} className="h-8 w-8 object-contain" />
-                      <h3 className="text-sm font-black uppercase tracking-[0.16em] text-blue-300">{t("quest.weekly", "Weekly")}</h3>
-                    </div>
-                    <div className="space-y-3">
-                      {QUEST_DEFS.filter((q) => q.scope === "weekly").map((def) => {
-                        const entry = questState.weekly.quests[def.id as WeeklyQuestId];
-                        const pct = Math.max(0, Math.min(1, entry.progress / Math.max(1, def.target)));
-                        const ready = entry.progress >= def.target && !entry.claimed;
-                        const questTitle = getQuestDisplayTitle(def);
-                        return (
-                          <div key={def.id} className="rounded-xl border border-ninja-border bg-black/25 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-sm font-semibold text-white">{questTitle}</p>
-                              <span className="text-xs text-zinc-300">{Math.min(entry.progress, def.target)}/{def.target}</span>
-                            </div>
-                            <div className="mt-2 h-2 rounded-full bg-zinc-700">
-                              <div className="h-2 rounded-full bg-orange-500" style={{ width: `${pct * 100}%` }} />
-                            </div>
-                            <div className="mt-2 flex items-center justify-between">
-                              <span className="text-xs font-bold text-amber-300">+{def.reward} XP</span>
-                              {entry.claimed ? (
-                                <span className="text-xs font-black text-emerald-300">{t("quest.claimed", "CLAIMED")}</span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={!ready || actionBusy || !stateReady || !identityLinked}
-                                  onClick={() => void claimQuest(def)}
-                                  className="rounded-md px-3 py-1 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50 bg-orange-600 hover:bg-orange-500"
-                                >
-                                  {claimBusyKey === `${def.scope}:${def.id}`
-                                    ? t("quest.claiming", "CLAIMING...")
-                                    : t("quest.claim", "CLAIM")}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </section>
-                </div>
-
-
               </div>
             )}
 
@@ -5563,18 +5754,6 @@ function PlayPageInner() {
                     />
                   </label>
 
-                  <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
-                    <span>{t("settings.noEffects", "Disable Jutsu Effects")}</span>
-                    <input
-                      type="checkbox"
-                      checked={draftSettings.noEffects}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        setDraftSettings((prev) => ({ ...prev, noEffects: checked }));
-                      }}
-                      className="h-4 w-4 accent-orange-500"
-                    />
-                  </label>
                 </div>
 
                 <div className="mt-8 flex flex-wrap gap-3">

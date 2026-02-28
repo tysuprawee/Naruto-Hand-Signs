@@ -55,11 +55,16 @@ class GameplayMixin:
         self.detected_confidence = 0.0
         self.last_detected_hands = 0
         self.last_imputed_hands = 0
+        self.two_hand_distance_norm = None
+        self.two_hand_distance_px = None
         self.last_vote_hits = 0
         self.sign_vote_window = []
         self.last_stable_vote_label = "idle"
         self.last_stable_vote_conf = 0.0
         self.last_stable_vote_time = 0.0
+        self.last_candidate_vote_label = "idle"
+        self.last_candidate_vote_conf = 0.0
+        self.last_candidate_vote_time = 0.0
         if getattr(self, "recorder", None) and hasattr(self.recorder, "reset_temporal_state"):
             self.recorder.reset_temporal_state()
 
@@ -429,7 +434,7 @@ class GameplayMixin:
         self.calibration_message_until = time.time() + 5.0
         self._restore_calibration_diag_state()
 
-    def _apply_temporal_vote(self, raw_sign, raw_conf, allow_detection, hard_reset=False):
+    def _apply_temporal_vote(self, raw_sign, raw_conf, allow_detection, hard_reset=False, hands_now=0):
         now = time.time()
         self.sign_vote_window = [
             item for item in self.sign_vote_window
@@ -442,9 +447,13 @@ class GameplayMixin:
             self.last_stable_vote_label = "idle"
             self.last_stable_vote_conf = 0.0
             self.last_stable_vote_time = 0.0
+            self.last_candidate_vote_label = "idle"
+            self.last_candidate_vote_conf = 0.0
+            self.last_candidate_vote_time = 0.0
             return "idle", 0.0
 
         normalized = str(raw_sign or "idle").strip().lower()
+        hands_now = int(max(0, hands_now))
         invalid_frame = (not allow_detection) or normalized in ("idle", "unknown")
         if not invalid_frame:
             self.sign_vote_window.append({
@@ -454,6 +463,9 @@ class GameplayMixin:
             })
             if len(self.sign_vote_window) > self.vote_window_size:
                 self.sign_vote_window = self.sign_vote_window[-self.vote_window_size:]
+            self.last_candidate_vote_label = normalized
+            self.last_candidate_vote_conf = float(max(0.0, raw_conf))
+            self.last_candidate_vote_time = now
 
         counts = {}
         conf_sums = {}
@@ -477,8 +489,32 @@ class GameplayMixin:
             self.last_stable_vote_time = now
             return best_label, avg_conf
         if invalid_frame:
+            reused_label, reused_conf = self._reuse_recent_candidate_vote(now, True, hands_now)
+            if reused_label not in ("", "idle", "unknown"):
+                return reused_label, reused_conf
             return self._reuse_recent_stable_vote(now, True)
         return "idle", avg_conf
+
+    def _reuse_recent_candidate_vote(self, now, invalid_frame, hands_now):
+        if (not invalid_frame) or hands_now < 2:
+            return "idle", 0.0
+
+        label = str(getattr(self, "last_candidate_vote_label", "idle") or "idle").strip().lower()
+        conf = float(getattr(self, "last_candidate_vote_conf", 0.0) or 0.0)
+        seen_at = float(getattr(self, "last_candidate_vote_time", 0.0) or 0.0)
+        if label in ("", "idle", "unknown") or seen_at <= 0.0 or conf <= 0.0:
+            return "idle", 0.0
+
+        elapsed = max(0.0, now - seen_at)
+        if elapsed > 0.35:
+            return "idle", 0.0
+
+        frame_count = max(1.0, elapsed / (1.0 / 30.0))
+        reused_conf = conf * (0.90 ** frame_count)
+        min_conf = max(0.15, float(getattr(self, "vote_min_confidence", 0.45)) * 0.60)
+        if reused_conf < min_conf:
+            return "idle", 0.0
+        return label, float(max(0.0, reused_conf))
 
     def _reuse_recent_stable_vote(self, now, invalid_frame):
         if not invalid_frame:
@@ -533,7 +569,12 @@ class GameplayMixin:
         if self.settings.get("restricted_signs", False):
             allow_detection = allow_detection and effective_hands >= 2
 
-        stable_sign, stable_conf = self._apply_temporal_vote(raw_sign, raw_conf, allow_detection)
+        stable_sign, stable_conf = self._apply_temporal_vote(
+            raw_sign,
+            raw_conf,
+            allow_detection,
+            hands_now=num_hands,
+        )
 
         self.raw_detected_sign = raw_sign
         self.raw_detected_confidence = float(raw_conf)
@@ -764,6 +805,9 @@ class GameplayMixin:
     def detect_hands(self, frame):
         """Detect hand landmarks for skeleton visualization and tracking."""
         if not self.hand_landmarker and not self.hand_landmarker_image and not self.legacy_hands:
+            self.last_mp_result = None
+            self.two_hand_distance_norm = None
+            self.two_hand_distance_px = None
             return
             
         try:
@@ -830,14 +874,30 @@ class GameplayMixin:
                 if errors:
                     self.hand_detector_error = " | ".join(errors[-3:])
                 self.last_mp_result = None
+                self.two_hand_distance_norm = None
+                self.two_hand_distance_px = None
                 return
 
             self.last_mp_result = result
             self.last_palm_spans = []
+            self.two_hand_distance_norm = None
+            self.two_hand_distance_px = None
             
             if result.hand_landmarks:
                 self.hand_lost_frames = 0
                 h, w = frame.shape[:2]
+
+                if len(result.hand_landmarks) == 2:
+                    center_indices = [0, 5, 9, 13, 17]
+                    centers = []
+                    for landmarks in result.hand_landmarks[:2]:
+                        center_x = sum(landmarks[i].x for i in center_indices) / len(center_indices)
+                        center_y = sum(landmarks[i].y for i in center_indices) / len(center_indices)
+                        centers.append((center_x, center_y))
+                    dx = float(centers[0][0] - centers[1][0])
+                    dy = float(centers[0][1] - centers[1][1])
+                    self.two_hand_distance_norm = float(math.hypot(dx, dy))
+                    self.two_hand_distance_px = float(math.hypot(dx * w, dy * h))
 
                 # Build candidates for each detected hand, then choose one consistently.
                 candidates = []
@@ -979,8 +1039,12 @@ class GameplayMixin:
                 self.smooth_hand_pos = None
                 self.smooth_hand_effect_scale = None
                 self.hand_effect_scale = 1.0
+                self.two_hand_distance_norm = None
+                self.two_hand_distance_px = None
         except Exception as e:
             self.last_mp_result = None
+            self.two_hand_distance_norm = None
+            self.two_hand_distance_px = None
             self.hand_detector_error = str(e)
             print(f"[!] detect_hands error: {e}")
 

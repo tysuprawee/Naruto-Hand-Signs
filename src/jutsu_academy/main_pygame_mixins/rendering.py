@@ -1273,12 +1273,19 @@ class RenderingMixin:
                     raw_sign = str(yolo_sign or "idle").strip().lower()
                     raw_conf = float(max(0.0, yolo_conf))
                     allow_detection = bool(lighting_ok) and raw_sign not in ("", "idle")
-                    stable_sign, stable_conf = self._apply_temporal_vote(raw_sign, raw_conf, allow_detection)
+                    stable_sign, stable_conf = self._apply_temporal_vote(
+                        raw_sign,
+                        raw_conf,
+                        allow_detection,
+                        hands_now=1 if raw_sign not in ("", "idle") else 0,
+                    )
                     self.raw_detected_sign = raw_sign
                     self.raw_detected_confidence = raw_conf
                     self.detected_sign = stable_sign
                     self.detected_confidence = float(stable_conf)
                     self.last_detected_hands = 1 if raw_sign not in ("", "idle") else 0
+                    self.two_hand_distance_norm = None
+                    self.two_hand_distance_px = None
                     self._update_calibration_sample(raw_sign, raw_conf, self.last_detected_hands)
 
                 cam_surface = self.cv2_to_pygame(frame)
@@ -1347,6 +1354,13 @@ class RenderingMixin:
             ("SAMPLES", str(len(getattr(self, "calibration_samples", []) or [])), COLORS["text_dim"]),
             ("PROGRESS", f"{progress}%" if self.calibration_active else "READY", COLORS["text"]),
         ]
+        two_hand_distance_norm = getattr(self, "two_hand_distance_norm", None)
+        if isinstance(two_hand_distance_norm, (int, float)):
+            two_hand_distance_px = getattr(self, "two_hand_distance_px", None)
+            distance_value = f"{float(two_hand_distance_norm):.3f}"
+            if isinstance(two_hand_distance_px, (int, float)):
+                distance_value = f"{distance_value} ({int(round(float(two_hand_distance_px)))} px)"
+            side_lines.insert(4, ("2H DIST", distance_value, COLORS["accent"]))
 
         y = side_rect.y + 14
         row_h = 42

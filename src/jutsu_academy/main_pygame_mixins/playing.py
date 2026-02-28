@@ -544,13 +544,20 @@ class PlayingMixin:
                     raw_sign = str(yolo_sign or "idle").strip().lower()
                     raw_conf = float(max(0.0, yolo_conf))
                     allow_detection = bool(lighting_ok) and raw_sign not in ("", "idle")
-                    stable_sign, stable_conf = self._apply_temporal_vote(raw_sign, raw_conf, allow_detection)
+                    stable_sign, stable_conf = self._apply_temporal_vote(
+                        raw_sign,
+                        raw_conf,
+                        allow_detection,
+                        hands_now=1 if raw_sign not in ("", "idle") else 0,
+                    )
 
                     self.raw_detected_sign = raw_sign
                     self.raw_detected_confidence = raw_conf
                     self.detected_sign = stable_sign
                     self.detected_confidence = float(stable_conf)
                     self.last_detected_hands = 1 if raw_sign not in ("", "idle") else 0
+                    self.two_hand_distance_norm = None
+                    self.two_hand_distance_px = None
                     self._update_calibration_sample(raw_sign, raw_conf, self.last_detected_hands)
                     detected = stable_sign
             else:
@@ -564,6 +571,8 @@ class PlayingMixin:
             self.detected_sign = "idle"
             self.detected_confidence = 0.0
             self.last_detected_hands = 0
+            self.two_hand_distance_norm = None
+            self.two_hand_distance_px = None
 
         # Use smoothed hand anchor for effects/overlays to reduce jitter.
         effect_hand_pos = self.smooth_hand_pos if self.smooth_hand_pos else self.hand_pos
@@ -823,10 +832,11 @@ class PlayingMixin:
         
         self.screen.blit(cam_surface, (cam_x, cam_y))
 
-        # ── "Show both hands" overlay (MediaPipe only, no effect, 2 s with only 1 hand) ──
+        # ── "Show both hands" + live 2-hand distance overlay ───────────────────
         use_mp = bool(self.settings.get("use_mediapipe_signs", False))
+        hands_now = int(getattr(self, "last_detected_hands", 0) or 0)
+
         if use_mp and not self.jutsu_active:
-            hands_now = int(getattr(self, "last_detected_hands", 0))
             if hands_now != 1:
                 # 0 hands (idle) or 2+ hands both reset the timer — only 1 hand triggers it
                 self._no_hands_since = time.time()
@@ -874,6 +884,27 @@ class PlayingMixin:
         else:
             # reset timer when effect is playing or model is YOLO
             self._no_hands_since = None
+
+        # Always show live distance when 2 hands are visible with MediaPipe.
+        if use_mp and hands_now >= 2:
+            dist_norm = getattr(self, "two_hand_distance_norm", None)
+            if isinstance(dist_norm, (int, float)):
+                dist_px = getattr(self, "two_hand_distance_px", None)
+                dist_label = f"2H DIST {float(dist_norm):.3f}"
+                if isinstance(dist_px, (int, float)):
+                    dist_label = f"{dist_label}  ({int(round(float(dist_px)))} px)"
+
+                dist_font = self.fonts.get("tiny") or self.fonts["body_sm"]
+                dist_surf = dist_font.render(dist_label, True, (190, 255, 220))
+                box_w = dist_surf.get_width() + 20
+                box_h = dist_surf.get_height() + 10
+                dist_bg = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+                pygame.draw.rect(dist_bg, (8, 20, 16, 190), dist_bg.get_rect(), border_radius=8)
+                pygame.draw.rect(dist_bg, (80, 200, 150, 190), dist_bg.get_rect(), 1, border_radius=8)
+                dx = cam_x + (new_w - box_w) // 2
+                dy = cam_y + 12
+                self.screen.blit(dist_bg, (dx, dy))
+                self.screen.blit(dist_surf, (dx + 10, dy + 5))
         
         if self.jutsu_active:
             jutsu_name = self.jutsu_names[self.current_jutsu_idx]
@@ -1032,6 +1063,13 @@ class PlayingMixin:
         ]
         if using_mp:
             info_lines.insert(1, f"MP BACKEND: {mp_backend}")
+            two_hand_distance_norm = getattr(self, "two_hand_distance_norm", None)
+            if isinstance(two_hand_distance_norm, (int, float)):
+                two_hand_distance_px = getattr(self, "two_hand_distance_px", None)
+                distance_line = f"2H DIST: {float(two_hand_distance_norm):.3f}"
+                if isinstance(two_hand_distance_px, (int, float)):
+                    distance_line = f"{distance_line} ({int(round(float(two_hand_distance_px)))} px)"
+                info_lines.insert(3, distance_line)
             info_lines.append(
                 f"RAW: {str(getattr(self, 'raw_detected_sign', 'idle')).upper()} {int(float(getattr(self, 'raw_detected_confidence', 0.0) or 0.0) * 100)}%"
             )
