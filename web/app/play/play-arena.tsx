@@ -164,6 +164,7 @@ interface PlayArenaProps {
   jutsuName: string;
   mode: PlayMode;
   restrictedSigns: boolean;
+  ramTigerShared: boolean;
   easyMode: boolean;
   debugHands: boolean;
   viewportFit?: boolean;
@@ -211,6 +212,8 @@ const GAME_MIN_CONFIDENCE = 0.2;
 const VOTE_OCCLUSION_GRACE_MS = 240;
 const VOTE_REUSE_CONF_DECAY = 0.90;
 const LOW_FPS_ASSIST_THRESHOLD = 12;
+const DEBUG_HANDS_MIN_FPS = 10;
+const RENDER_FRAME_INTERVAL_MS = 1000 / 30;
 const LOW_FPS_VOTE_TTL_MS = 1400;
 const KNN_IDLE_DIST_THRESHOLD = 1.8;
 const ONE_HAND_PASS_GATE_MIN_CONFIDENCE = 0.75;
@@ -523,14 +526,24 @@ function normalizeLabel(label: string): string {
   return aliases[token] || token;
 }
 
-function getRequiredDatasetLabels(sequence: string[]): string[] {
+function getRequiredDatasetLabels(sequence: string[], ramTigerShared: boolean): string[] {
   const labels = new Set<string>(["idle"]);
   for (const raw of sequence) {
     const normalized = normalizeLabel(raw);
     if (!normalized) continue;
     labels.add(normalized);
+    if (ramTigerShared && (normalized === "ram" || normalized === "tiger")) {
+      labels.add("ram");
+      labels.add("tiger");
+    }
   }
   return [...labels];
+}
+
+function signsEquivalent(a: string, b: string, ramTigerShared: boolean): boolean {
+  if (a === b) return true;
+  if (!ramTigerShared) return false;
+  return (a === "ram" && b === "tiger") || (a === "tiger" && b === "ram");
 }
 
 function signsMatch(
@@ -540,18 +553,19 @@ function signsMatch(
   rawDetectedSign: string,
   rawDetectedConfidence: number,
   voteMinConfidence: number,
+  ramTigerShared: boolean,
 ): boolean {
   const target = normalizeLabel(targetSign);
   if (!target || target === "idle") return false;
   const minConf = clamp(Number(voteMinConfidence || 0), 0, 1);
 
   const stable = normalizeLabel(detectedSign);
-  if (stable === target && Number(detectedConfidence || 0) >= minConf) {
+  if (signsEquivalent(stable, target, ramTigerShared) && Number(detectedConfidence || 0) >= minConf) {
     return true;
   }
 
   const raw = normalizeLabel(rawDetectedSign);
-  return raw === target && Number(rawDetectedConfidence || 0) >= minConf;
+  return signsEquivalent(raw, target, ramTigerShared) && Number(rawDetectedConfidence || 0) >= minConf;
 }
 
 function toDisplayLabel(label: string): string {
@@ -1291,6 +1305,7 @@ export default function PlayArena({
   jutsuName,
   mode,
   restrictedSigns,
+  ramTigerShared = true,
   easyMode,
   debugHands,
   viewportFit = false,
@@ -1393,6 +1408,7 @@ export default function PlayArena({
   const activeEffectRef = useRef("");
   const renderRafRef = useRef(0);
   const detectRafRef = useRef(0);
+  const lastRenderDrawAtRef = useRef(0);
   const lastDetectRef = useRef(0);
   const voteWindowRef = useRef<VoteEntry[]>([]);
   const voteStableRef = useRef<VoteStableState>({ label: "idle", confidence: 0, timeMs: 0 });
@@ -1592,7 +1608,7 @@ export default function PlayArena({
   }, [sfxVolume]);
 
   const ensureDatasetRowsForSequence = useCallback(async (targetSequence: string[]) => {
-    const requiredLabels = getRequiredDatasetLabels(targetSequence);
+    const requiredLabels = getRequiredDatasetLabels(targetSequence, ramTigerShared);
     const missingLabels = requiredLabels.filter((label) => !loadedDatasetRowsByLabelRef.current.has(label));
     if (missingLabels.length === 0) {
       setLoadedDatasetLabels([...loadedDatasetRowsByLabelRef.current.keys()].sort((a, b) => a.localeCompare(b)));
@@ -1665,7 +1681,7 @@ export default function PlayArena({
     } finally {
       datasetLoadingRef.current = false;
     }
-  }, [datasetChecksumHint, datasetSourceUrl, datasetVersionToken]);
+  }, [datasetChecksumHint, datasetSourceUrl, datasetVersionToken, ramTigerShared]);
 
   const queueSfx = useCallback((src: string, delayMs = 0, volume = 1) => {
     const timer = window.setTimeout(() => {
@@ -3364,6 +3380,7 @@ export default function PlayArena({
         if (cancelled) return;
         videoStallSinceRef.current = 0;
         lastVideoMediaTimeRef.current = -1;
+        lastRenderDrawAtRef.current = 0;
         cameraFpsWindowStartRef.current = 0;
         cameraFpsFrameCountRef.current = 0;
         fpsRef.current = 0;
@@ -3496,6 +3513,7 @@ export default function PlayArena({
       handBackendRef.current = "none";
       cameraFailureRef.current = "none";
       setCameraFailure("none");
+      lastRenderDrawAtRef.current = 0;
       cameraFpsWindowStartRef.current = 0;
       cameraFpsFrameCountRef.current = 0;
       fpsRef.current = 0;
@@ -3591,6 +3609,8 @@ export default function PlayArena({
       if (!video || !canvas) return;
 
       const nowMs = performance.now();
+      if ((nowMs - lastRenderDrawAtRef.current) < RENDER_FRAME_INTERVAL_MS) return;
+      lastRenderDrawAtRef.current = nowMs;
       const stream = streamRef.current;
       const track = stream?.getVideoTracks?.()[0] ?? null;
       if (!stream || !track || track.readyState === "ended") {
@@ -3660,7 +3680,7 @@ export default function PlayArena({
       ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
       ctx.restore();
 
-      if (debugHands) {
+      if (debugHands && fpsRef.current >= DEBUG_HANDS_MIN_FPS) {
         for (const hand of latestLandmarksRef.current) {
           drawLandmarks(ctx, hand, canvas.width, canvas.height);
         }
@@ -4005,6 +4025,7 @@ export default function PlayArena({
               rawLabel,
               rawConfidence,
               effectiveVoteMinConfidence,
+              ramTigerShared,
             )
             : false;
           if (assistModeEnabled && !assistUnlockedForStep && matchedExpectedWithOneHand) {
@@ -4098,6 +4119,7 @@ export default function PlayArena({
         rawLabel,
         rawConfidence,
         effectiveVoteMinConfidence,
+        ramTigerShared,
       )) return;
 
       playSfx("/sounds/each.mp3", 0.9);
@@ -4187,6 +4209,7 @@ export default function PlayArena({
     jutsuName,
     playSfx,
     pushComboCue,
+    ramTigerShared,
     restrictedSigns,
     sequence,
     sharinganChargeLabel,

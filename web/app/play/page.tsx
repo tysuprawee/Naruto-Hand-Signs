@@ -131,6 +131,7 @@ interface MenuSettingsState {
   sfxVol: number;
   debugHands: boolean;
   restrictedSigns: boolean;
+  ramTigerShared: boolean;
   easyMode: boolean;
   cameraIdx: number;
   resolutionIdx: number;
@@ -264,8 +265,9 @@ type LightingReadiness = "good" | "low_light" | "overexposed" | "low_contrast";
 const DEFAULT_SETTINGS: MenuSettingsState = {
   musicVol: 0.5,
   sfxVol: 0.7,
-  debugHands: true,
+  debugHands: false,
   restrictedSigns: false,
+  ramTigerShared: true,
   easyMode: false,
   cameraIdx: 0,
   resolutionIdx: 0,
@@ -704,6 +706,7 @@ function sanitizeSettings(raw: MenuSettingsInput | null | undefined): MenuSettin
     sfxVol: clampVolume(raw?.sfxVol, DEFAULT_SETTINGS.sfxVol),
     debugHands: parseBoolean(raw?.debugHands, DEFAULT_SETTINGS.debugHands),
     restrictedSigns: parseBoolean(raw?.restrictedSigns, DEFAULT_SETTINGS.restrictedSigns),
+    ramTigerShared: parseBoolean(raw?.ramTigerShared, DEFAULT_SETTINGS.ramTigerShared),
     easyMode: false,
     cameraIdx: clampInt(raw?.cameraIdx, 0, 16, DEFAULT_SETTINGS.cameraIdx),
     resolutionIdx: clampInt(raw?.resolutionIdx, 0, 2, DEFAULT_SETTINGS.resolutionIdx),
@@ -2878,6 +2881,7 @@ function PlayPageInner() {
         camera_idx: DEFAULT_SETTINGS.cameraIdx,
         debug_hands: DEFAULT_SETTINGS.debugHands,
         restricted_signs: DEFAULT_SETTINGS.restrictedSigns,
+        ram_tiger_shared: DEFAULT_SETTINGS.ramTigerShared,
         easy_mode: DEFAULT_SETTINGS.easyMode,
         resolution_idx: DEFAULT_SETTINGS.resolutionIdx,
         fullscreen: DEFAULT_SETTINGS.fullscreen,
@@ -3065,6 +3069,7 @@ function PlayPageInner() {
         cameraIdx: Number(cloud.camera_idx ?? cloud.cameraIdx),
         debugHands: cloud.debug_hands ?? cloud.debugHands,
         restrictedSigns: cloud.restricted_signs ?? cloud.restrictedSigns,
+        ramTigerShared: cloud.ram_tiger_shared ?? cloud.ramTigerShared,
         resolutionIdx: Number(cloud.resolution_idx ?? cloud.resolutionIdx),
         fullscreen: cloud.fullscreen,
       });
@@ -3410,6 +3415,7 @@ function PlayPageInner() {
           camera_idx: next.cameraIdx,
           debug_hands: next.debugHands,
           restricted_signs: next.restrictedSigns,
+          ram_tiger_shared: next.ramTigerShared,
           easy_mode: false,
           resolution_idx: next.resolutionIdx,
           fullscreen: next.fullscreen,
@@ -4761,6 +4767,7 @@ function PlayPageInner() {
                 jutsuName={selectedJutsu}
                 mode="calibration"
                 restrictedSigns={savedSettings.restrictedSigns}
+                ramTigerShared={savedSettings.ramTigerShared}
                 easyMode={false}
                 debugHands={savedSettings.debugHands}
                 sfxVolume={savedSettings.sfxVol}
@@ -4783,6 +4790,7 @@ function PlayPageInner() {
                   jutsuName={selectedJutsu}
                   mode="free"
                   restrictedSigns={savedSettings.restrictedSigns}
+                  ramTigerShared={savedSettings.ramTigerShared}
                   easyMode={false}
                   debugHands={savedSettings.debugHands}
                   sfxVolume={savedSettings.sfxVol}
@@ -4820,6 +4828,7 @@ function PlayPageInner() {
                   jutsuName={selectedJutsu}
                   mode="rank"
                   restrictedSigns={savedSettings.restrictedSigns}
+                  ramTigerShared={savedSettings.ramTigerShared}
                   easyMode={false}
                   debugHands={savedSettings.debugHands}
                   sfxVolume={savedSettings.sfxVol}
@@ -5736,6 +5745,24 @@ function PlayPageInner() {
                       onChange={(event) => {
                         const checked = event.target.checked;
                         setDraftSettings((prev) => ({ ...prev, restrictedSigns: checked }));
+                      }}
+                      className="h-4 w-4 accent-orange-500"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between gap-3 rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
+                    <span className="flex flex-col">
+                      <span>{t("settings.ramTigerShared", "Ram/Tiger Assist")}</span>
+                      <span className="text-xs text-zinc-400">
+                        {t("settings.ramTigerSharedHint", "Allow Ram or Tiger to count for either sign in a sequence.")}
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={draftSettings.ramTigerShared}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setDraftSettings((prev) => ({ ...prev, ramTigerShared: checked }));
                       }}
                       className="h-4 w-4 accent-orange-500"
                     />
