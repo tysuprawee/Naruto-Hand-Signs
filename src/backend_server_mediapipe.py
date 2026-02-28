@@ -60,6 +60,8 @@ VOTE_WINDOW_SIZE = 5
 VOTE_REQUIRED_HITS = 3
 VOTE_MIN_CONFIDENCE = 0.45
 VOTE_ENTRY_TTL_S = 0.7
+VOTE_OCCLUSION_GRACE_S = 0.24
+VOTE_REUSE_CONF_DECAY = 0.90
 
 HAND_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 4),
@@ -181,8 +183,13 @@ class GodotMediaPipeServer:
         self.vote_required_hits = VOTE_REQUIRED_HITS
         self.vote_min_confidence = VOTE_MIN_CONFIDENCE
         self.vote_entry_ttl_s = VOTE_ENTRY_TTL_S
+        self.vote_occlusion_grace_s = VOTE_OCCLUSION_GRACE_S
+        self.vote_reuse_conf_decay = VOTE_REUSE_CONF_DECAY
         self.sign_vote_window = []
         self.last_vote_hits = 0
+        self.last_stable_vote_label = "idle"
+        self.last_stable_vote_conf = 0.0
+        self.last_stable_vote_time = 0.0
 
         self.fps_counter = 0
         self.fps_start_time = time.time()
@@ -220,20 +227,17 @@ class GodotMediaPipeServer:
         ]
 
         normalized = str(raw_sign or "idle").strip().lower()
-        if (not allow_detection) or normalized in ("idle", "unknown"):
-            self.sign_vote_window = []
-            self.last_vote_hits = 0
-            return "idle", 0.0
-
-        self.sign_vote_window.append(
-            {
-                "label": normalized,
-                "conf": float(max(0.0, raw_conf)),
-                "time": now,
-            }
-        )
-        if len(self.sign_vote_window) > self.vote_window_size:
-            self.sign_vote_window = self.sign_vote_window[-self.vote_window_size:]
+        invalid_frame = (not allow_detection) or normalized in ("idle", "unknown")
+        if not invalid_frame:
+            self.sign_vote_window.append(
+                {
+                    "label": normalized,
+                    "conf": float(max(0.0, raw_conf)),
+                    "time": now,
+                }
+            )
+            if len(self.sign_vote_window) > self.vote_window_size:
+                self.sign_vote_window = self.sign_vote_window[-self.vote_window_size:]
 
         counts = {}
         conf_sums = {}
@@ -244,7 +248,7 @@ class GodotMediaPipeServer:
 
         if not counts:
             self.last_vote_hits = 0
-            return "idle", 0.0
+            return self._reuse_recent_stable_vote(now, invalid_frame)
 
         best_label = max(counts.keys(), key=lambda lbl: (counts[lbl], conf_sums.get(lbl, 0.0)))
         best_hits = int(counts[best_label])
@@ -252,8 +256,31 @@ class GodotMediaPipeServer:
         self.last_vote_hits = best_hits
 
         if best_hits >= self.vote_required_hits and avg_conf >= self.vote_min_confidence:
+            self.last_stable_vote_label = best_label
+            self.last_stable_vote_conf = avg_conf
+            self.last_stable_vote_time = now
             return best_label, avg_conf
+        if invalid_frame:
+            return self._reuse_recent_stable_vote(now, True)
         return "idle", avg_conf
+
+    def _reuse_recent_stable_vote(self, now, invalid_frame):
+        if not invalid_frame:
+            return "idle", 0.0
+
+        last_label = str(getattr(self, "last_stable_vote_label", "idle") or "idle").strip().lower()
+        last_conf = float(getattr(self, "last_stable_vote_conf", 0.0) or 0.0)
+        last_time = float(getattr(self, "last_stable_vote_time", 0.0) or 0.0)
+        if last_label in ("", "idle", "unknown") or last_time <= 0.0:
+            return "idle", 0.0
+
+        elapsed = max(0.0, now - last_time)
+        if elapsed > float(self.vote_occlusion_grace_s):
+            return "idle", 0.0
+
+        frame_count = max(1.0, elapsed / (1.0 / 30.0))
+        reused_conf = last_conf * (float(self.vote_reuse_conf_decay) ** frame_count)
+        return last_label, float(max(0.0, reused_conf))
 
     def _extract_hand_payload(self, mp_result, frame_shape):
         if not mp_result or not mp_result.hand_landmarks:
@@ -332,6 +359,7 @@ class GodotMediaPipeServer:
         raw_sign = "idle"
         raw_conf = 0.0
         min_dist = float("inf")
+        imputed_hands = 0
 
         if num_hands > 0:
             features = self.recorder.process_tasks_landmarks(
@@ -340,15 +368,20 @@ class GodotMediaPipeServer:
             )
             label, raw_conf, min_dist = self.recorder.predict_with_confidence(features)
             raw_sign = str(label or "idle").strip().lower()
+            if hasattr(self.recorder, "get_last_imputed_hand_mask"):
+                imputed_mask = self.recorder.get_last_imputed_hand_mask()
+                imputed_hands = int(sum(1 for v in imputed_mask if float(v) >= 0.5))
+
+        effective_hands = int(num_hands + imputed_hands)
 
         restricted_signs = bool(self.settings.get("restricted_signs", True))
-        if restricted_signs and num_hands < 2:
+        if restricted_signs and effective_hands < 2:
             raw_sign = "idle"
             raw_conf = 0.0
 
         allow_detection = lighting_ok and num_hands > 0
         if restricted_signs:
-            allow_detection = allow_detection and num_hands >= 2
+            allow_detection = allow_detection and effective_hands >= 2
 
         stable_sign, stable_conf = self._apply_temporal_vote(raw_sign, raw_conf, allow_detection)
         dist_value = None if not math.isfinite(min_dist) else round(float(min_dist), 4)
@@ -367,6 +400,8 @@ class GodotMediaPipeServer:
                 "stable_confidence": round(float(stable_conf), 3),
                 "distance": dist_value,
                 "hands": int(num_hands),
+                "imputed_hands": int(imputed_hands),
+                "effective_hands": int(effective_hands),
                 "restricted_signs": restricted_signs,
                 "lighting_status": lighting_status,
                 "lighting_mean": round(float(lighting_mean), 2),

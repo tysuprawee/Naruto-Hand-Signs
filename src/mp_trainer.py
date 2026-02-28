@@ -150,12 +150,15 @@ class SignRecorder:
         self.data_buffer = []
         self.distance_threshold = 1.8
         self.auto_mirror_on_save = True
+        self.max_missing_hold_frames = max(0, int(os.getenv("MP_HAND_SLOT_HOLD_FRAMES", "8")))
+        self.missing_decay_per_frame = max(0.0, min(1.0, float(os.getenv("MP_HAND_SLOT_MISSING_DECAY", "0.92"))))
         
         # Delayed Record State
         self.countdown_start = 0
         self.is_counting_down = False
         self.is_auto_recording = False
         self.auto_record_start = 0
+        self.reset_temporal_state()
         
         # Ensure database exists
         DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +174,18 @@ class SignRecorder:
         self.knn = None
         self.knn_labels = []
         self._load_and_train()
+
+    def reset_temporal_state(self):
+        """Clear short-lived hand slot tracking used for occlusion resilience."""
+        self.hand_slot_states = [None, None]
+        self.last_missing_hand_mask = [1.0, 1.0]
+        self.last_imputed_hand_mask = [0.0, 0.0]
+
+    def get_last_missing_hand_mask(self):
+        return list(getattr(self, "last_missing_hand_mask", [1.0, 1.0]))
+
+    def get_last_imputed_hand_mask(self):
+        return list(getattr(self, "last_imputed_hand_mask", [0.0, 0.0]))
     
     def _load_and_train(self):
         """Train a KNN model in memory if CSV has data."""
@@ -239,46 +254,132 @@ class SignRecorder:
         """
         Convert MP Tasks API results to a normalized feature vector (126 floats).
         """
-        if not hand_landmarks:
-            return [0.0] * 126
-            
-        h1_data = [0.0] * 63 
-        h2_data = [0.0] * 63
+        detections = []
+        for landmarks in (hand_landmarks or [])[:2]:
+            detections.append(
+                {
+                    "coords": self._normalize_hand(landmarks),
+                    "center": self._palm_center(landmarks),
+                }
+            )
 
-        # Some runtimes can return landmarks with partial/empty handedness metadata.
-        # Still map landmarks deterministically so prediction continues.
-        if not handedness:
-            for idx, landmarks in enumerate(hand_landmarks[:2]):
-                coords = self._normalize_hand(landmarks)
-                if idx == 0:
-                    h1_data = coords
-                else:
-                    h2_data = coords
-            return h1_data + h2_data
+        assigned = self._assign_detections_to_slots(detections)
+        features = []
+        missing_mask = []
+        imputed_mask = []
 
-        for idx, landmarks in enumerate(hand_landmarks):
-            if idx >= 2:
-                break
+        for slot_idx in range(2):
+            detected = assigned[slot_idx]
+            if detected is not None:
+                self.hand_slot_states[slot_idx] = {
+                    "coords": detected["coords"],
+                    "center": detected["center"],
+                    "missing": 0,
+                }
+                features.extend(detected["coords"])
+                missing_mask.append(0.0)
+                imputed_mask.append(0.0)
+                continue
 
-            label = ""
-            if idx < len(handedness):
-                hands_list = handedness[idx] or []
-                if hands_list:
-                    label = str(getattr(hands_list[0], "category_name", "") or "")
-
-            coords = self._normalize_hand(landmarks)
-
-            if label == "Left":
-                h1_data = coords
-            elif label == "Right":
-                h2_data = coords
+            slot_state = self.hand_slot_states[slot_idx]
+            if (
+                slot_state is not None
+                and int(slot_state.get("missing", 0)) < self.max_missing_hold_frames
+            ):
+                missing_frames = int(slot_state.get("missing", 0)) + 1
+                slot_state["missing"] = missing_frames
+                decay = float(self.missing_decay_per_frame ** missing_frames)
+                held_coords = [float(v) * decay for v in slot_state["coords"]]
+                features.extend(held_coords)
+                missing_mask.append(1.0)
+                imputed_mask.append(1.0)
             else:
-                if h1_data == [0.0] * 63:
-                    h1_data = coords
-                else:
-                    h2_data = coords
+                self.hand_slot_states[slot_idx] = None
+                features.extend([0.0] * 63)
+                missing_mask.append(1.0)
+                imputed_mask.append(0.0)
 
-        return h1_data + h2_data
+        self.last_missing_hand_mask = missing_mask
+        self.last_imputed_hand_mask = imputed_mask
+        return features
+
+    def _palm_center(self, landmarks):
+        idxs = [0, 5, 9, 13, 17]
+        return (
+            float(sum(landmarks[i].x for i in idxs) / len(idxs)),
+            float(sum(landmarks[i].y for i in idxs) / len(idxs)),
+            float(sum(landmarks[i].z for i in idxs) / len(idxs)),
+        )
+
+    def _center_distance_sq(self, center_a, center_b):
+        dx = float(center_a[0]) - float(center_b[0])
+        dy = float(center_a[1]) - float(center_b[1])
+        dz = (float(center_a[2]) - float(center_b[2])) * 0.5
+        return (dx * dx) + (dy * dy) + (dz * dz)
+
+    def _assign_detections_to_slots(self, detections):
+        """
+        Assign observed hands to slot 0/1 using nearest previous slot center.
+        This avoids left/right identity flips when hands overlap.
+        """
+        assigned = [None, None]
+        if not detections:
+            return assigned
+
+        prev_centers = []
+        for slot in self.hand_slot_states:
+            if slot and "center" in slot:
+                prev_centers.append(slot["center"])
+            else:
+                prev_centers.append(None)
+
+        if len(detections) == 1:
+            det = detections[0]
+            if prev_centers[0] is not None and prev_centers[1] is not None:
+                d0 = self._center_distance_sq(det["center"], prev_centers[0])
+                d1 = self._center_distance_sq(det["center"], prev_centers[1])
+                slot_idx = 0 if d0 <= d1 else 1
+            elif prev_centers[0] is not None:
+                slot_idx = 0
+            elif prev_centers[1] is not None:
+                slot_idx = 1
+            else:
+                slot_idx = 0 if self.hand_slot_states[0] is None else 1
+            assigned[slot_idx] = det
+            return assigned
+
+        det_a, det_b = detections[0], detections[1]
+        has0 = prev_centers[0] is not None
+        has1 = prev_centers[1] is not None
+
+        if has0 and has1:
+            cost_native = self._center_distance_sq(det_a["center"], prev_centers[0]) + \
+                self._center_distance_sq(det_b["center"], prev_centers[1])
+            cost_swapped = self._center_distance_sq(det_a["center"], prev_centers[1]) + \
+                self._center_distance_sq(det_b["center"], prev_centers[0])
+            if cost_native <= cost_swapped:
+                assigned[0], assigned[1] = det_a, det_b
+            else:
+                assigned[0], assigned[1] = det_b, det_a
+            return assigned
+
+        if has0 and not has1:
+            first = det_a if self._center_distance_sq(det_a["center"], prev_centers[0]) <= \
+                self._center_distance_sq(det_b["center"], prev_centers[0]) else det_b
+            second = det_b if first is det_a else det_a
+            assigned[0], assigned[1] = first, second
+            return assigned
+
+        if has1 and not has0:
+            first = det_a if self._center_distance_sq(det_a["center"], prev_centers[1]) <= \
+                self._center_distance_sq(det_b["center"], prev_centers[1]) else det_b
+            second = det_b if first is det_a else det_a
+            assigned[0], assigned[1] = second, first
+            return assigned
+
+        ordered = sorted([det_a, det_b], key=lambda d: float(d["center"][0]))
+        assigned[0], assigned[1] = ordered[0], ordered[1]
+        return assigned
 
     def _normalize_hand(self, landmarks):
         """
@@ -371,6 +472,13 @@ class SignRecorder:
         threshold = max(0.1, float(getattr(self, "distance_threshold", 1.8)))
         normalized = min(1.0, min_dist / threshold)
         confidence = max(0.0, 1.0 - normalized)
+
+        imputed_mask = getattr(self, "last_imputed_hand_mask", [0.0, 0.0])
+        imputed_slots = sum(1 for v in imputed_mask if float(v) >= 0.5)
+        if imputed_slots == 1:
+            confidence *= 0.88
+        elif imputed_slots >= 2:
+            confidence *= 0.72
 
         if min_dist > threshold:
             return "Idle", 0.0, min_dist

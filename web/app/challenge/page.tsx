@@ -48,6 +48,13 @@ interface VoteResult {
   label: string;
   confidence: number;
   hits: number;
+  stable: VoteStableState;
+}
+
+interface VoteStableState {
+  label: string;
+  confidence: number;
+  timeMs: number;
 }
 
 interface LightingResult {
@@ -60,6 +67,12 @@ interface Landmark {
   x: number;
   y: number;
   z: number;
+}
+
+interface HandSlotState {
+  center: [number, number, number];
+  coords: number[];
+  missingFrames: number;
 }
 
 interface HandednessCategory {
@@ -195,6 +208,10 @@ const VOTE_WINDOW_SIZE = 2;
 const VOTE_REQUIRED_HITS = 2;
 const VOTE_MIN_CONFIDENCE = 0.45;
 const VOTE_ENTRY_TTL_MS = 700;
+const VOTE_OCCLUSION_GRACE_MS = 240;
+const VOTE_REUSE_CONF_DECAY = 0.90;
+const HAND_SLOT_HOLD_FRAMES = 8;
+const HAND_SLOT_DECAY_PER_FRAME = 0.92;
 
 const HOLD_THRESHOLD = 8;
 const DATASET_CONFIG_TYPE = "dataset";
@@ -412,42 +429,177 @@ function getHandednessLabel(result: HandsResultShape, handIndex: number): string
   return String(raw).trim().toLowerCase();
 }
 
-function buildFeatures(result: HandsResultShape): { features: number[]; numHands: number } {
+function palmCenter(landmarks: Landmark[]): [number, number, number] {
+  const idxs = [0, 5, 9, 13, 17];
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  let count = 0;
+  for (const idx of idxs) {
+    const point = landmarks[idx];
+    if (!point) continue;
+    sx += point.x;
+    sy += point.y;
+    sz += point.z;
+    count += 1;
+  }
+  if (count <= 0) return [0, 0, 0];
+  return [sx / count, sy / count, sz / count];
+}
+
+function centerDistanceSq(a: [number, number, number], b: [number, number, number]): number {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  const dz = (a[2] - b[2]) * 0.5;
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function assignDetectionsToSlots(
+  detections: Array<{ coords: number[]; center: [number, number, number]; handedness: string }>,
+  slots: [HandSlotState | null, HandSlotState | null],
+): Array<{ coords: number[]; center: [number, number, number]; handedness: string } | null> {
+  const assigned: Array<{ coords: number[]; center: [number, number, number]; handedness: string } | null> = [null, null];
+  if (detections.length <= 0) return assigned;
+
+  const prev0 = slots[0]?.center || null;
+  const prev1 = slots[1]?.center || null;
+
+  if (detections.length === 1) {
+    const det = detections[0];
+    let slotIdx = 0;
+    if (prev0 && prev1) {
+      slotIdx = centerDistanceSq(det.center, prev0) <= centerDistanceSq(det.center, prev1) ? 0 : 1;
+    } else if (prev0) {
+      slotIdx = 0;
+    } else if (prev1) {
+      slotIdx = 1;
+    } else if (det.handedness === "right") {
+      slotIdx = 1;
+    } else if (det.handedness === "left") {
+      slotIdx = 0;
+    } else {
+      slotIdx = slots[0] ? 1 : 0;
+    }
+    assigned[slotIdx] = det;
+    return assigned;
+  }
+
+  const detA = detections[0];
+  const detB = detections[1];
+  if (prev0 && prev1) {
+    const nativeCost = centerDistanceSq(detA.center, prev0) + centerDistanceSq(detB.center, prev1);
+    const swappedCost = centerDistanceSq(detA.center, prev1) + centerDistanceSq(detB.center, prev0);
+    if (nativeCost <= swappedCost) {
+      assigned[0] = detA;
+      assigned[1] = detB;
+    } else {
+      assigned[0] = detB;
+      assigned[1] = detA;
+    }
+    return assigned;
+  }
+
+  if (prev0 && !prev1) {
+    const first = centerDistanceSq(detA.center, prev0) <= centerDistanceSq(detB.center, prev0) ? detA : detB;
+    assigned[0] = first;
+    assigned[1] = first === detA ? detB : detA;
+    return assigned;
+  }
+
+  if (prev1 && !prev0) {
+    const first = centerDistanceSq(detA.center, prev1) <= centerDistanceSq(detB.center, prev1) ? detA : detB;
+    assigned[1] = first;
+    assigned[0] = first === detA ? detB : detA;
+    return assigned;
+  }
+
+  const left = detections.find((det) => det.handedness === "left");
+  const right = detections.find((det) => det.handedness === "right");
+  if (left && right) {
+    assigned[0] = left;
+    assigned[1] = right;
+    return assigned;
+  }
+
+  const sortedByX = [...detections].sort((a, b) => a.center[0] - b.center[0]);
+  assigned[0] = sortedByX[0] || null;
+  assigned[1] = sortedByX[1] || null;
+  return assigned;
+}
+
+function buildFeatures(
+  result: HandsResultShape,
+  slots: [HandSlotState | null, HandSlotState | null],
+): { features: number[]; numHands: number; imputedHands: number; effectiveHands: number } {
   const landmarks = result.landmarks ?? [];
   const numHands = landmarks.length;
+  if (numHands <= 0) {
+    for (let slotIdx = 0; slotIdx < 2; slotIdx += 1) {
+      const slot = slots[slotIdx];
+      if (!slot) continue;
+      slot.missingFrames += 1;
+      if (slot.missingFrames > HAND_SLOT_HOLD_FRAMES) {
+        slots[slotIdx] = null;
+      }
+    }
+    return { features: [], numHands: 0, imputedHands: 0, effectiveHands: 0 };
+  }
 
-  let h1 = new Array(63).fill(0);
-  let h2 = new Array(63).fill(0);
-  let h1Set = false;
-  let h2Set = false;
-
+  const detections: Array<{ coords: number[]; center: [number, number, number]; handedness: string }> = [];
   for (let i = 0; i < landmarks.length; i += 1) {
-    const normalized = normalizeHand(landmarks[i] ?? []);
+    const hand = landmarks[i] ?? [];
+    if (hand.length < 21) continue;
+    const normalized = normalizeHand(hand);
+    if (normalized.length !== 63) continue;
     const handedness = getHandednessLabel(result, i);
+    detections.push({
+      coords: normalized,
+      center: palmCenter(hand),
+      handedness,
+    });
+    if (detections.length >= 2) break;
+  }
 
-    // Match python recorder behavior: Left -> h1, Right -> h2.
-    if (handedness === "left") {
-      h1 = normalized;
-      h1Set = true;
+  const assigned = assignDetectionsToSlots(detections, slots);
+  const features: number[] = [];
+  let imputedHands = 0;
+
+  for (let slotIdx = 0; slotIdx < 2; slotIdx += 1) {
+    const detected = assigned[slotIdx];
+    if (detected) {
+      slots[slotIdx] = {
+        center: detected.center,
+        coords: detected.coords,
+        missingFrames: 0,
+      };
+      features.push(...detected.coords);
       continue;
     }
-    if (handedness === "right") {
-      h2 = normalized;
-      h2Set = true;
+
+    const slot = slots[slotIdx];
+    if (slot && slot.missingFrames < HAND_SLOT_HOLD_FRAMES) {
+      const nextMissing = slot.missingFrames + 1;
+      slot.missingFrames = nextMissing;
+      const decay = HAND_SLOT_DECAY_PER_FRAME ** nextMissing;
+      for (const value of slot.coords) {
+        features.push(value * decay);
+      }
+      imputedHands += 1;
       continue;
     }
 
-    // Fallback if handedness metadata is missing.
-    if (!h1Set) {
-      h1 = normalized;
-      h1Set = true;
-    } else if (!h2Set) {
-      h2 = normalized;
-      h2Set = true;
+    slots[slotIdx] = null;
+    for (let i = 0; i < 63; i += 1) {
+      features.push(0);
     }
   }
 
-  return { features: [...h1, ...h2], numHands };
+  return {
+    features,
+    numHands,
+    imputedHands,
+    effectiveHands: numHands + imputedHands,
+  };
 }
 
 function applyTemporalVote(
@@ -455,19 +607,37 @@ function applyTemporalVote(
   rawSign: string,
   rawConf: number,
   allowDetection: boolean,
-  nowMs: number
+  nowMs: number,
+  stable: VoteStableState
 ): VoteResult {
   const filtered = window.filter((item) => nowMs - item.timeMs <= VOTE_ENTRY_TTL_MS);
   const normalized = String(rawSign || "idle").trim().toLowerCase();
+  const invalidFrame = !allowDetection || normalized === "idle" || normalized === "unknown";
 
-  if (!allowDetection || normalized === "idle" || normalized === "unknown") {
-    return { window: [], label: "idle", confidence: 0, hits: 0 };
+  const reuseStable = (): VoteResult => {
+    const stableLabel = String(stable.label || "idle").trim().toLowerCase();
+    if (!invalidFrame || !stableLabel || stableLabel === "idle" || stableLabel === "unknown" || stable.timeMs <= 0) {
+      return { window: filtered, label: "idle", confidence: 0, hits: 0, stable };
+    }
+    const elapsed = Math.max(0, nowMs - stable.timeMs);
+    if (elapsed > VOTE_OCCLUSION_GRACE_MS) {
+      return { window: filtered, label: "idle", confidence: 0, hits: 0, stable };
+    }
+    const frameCount = Math.max(1, elapsed / (1000 / 30));
+    const conf = Math.max(0, stable.confidence * (VOTE_REUSE_CONF_DECAY ** frameCount));
+    return { window: filtered, label: stableLabel, confidence: conf, hits: 0, stable };
+  };
+
+  if (invalidFrame && filtered.length <= 0) {
+    return reuseStable();
   }
 
-  const nextWindow = [
-    ...filtered,
-    { label: normalized, conf: Math.max(0, rawConf), timeMs: nowMs },
-  ].slice(-VOTE_WINDOW_SIZE);
+  const nextWindow = invalidFrame
+    ? filtered
+    : [
+      ...filtered,
+      { label: normalized, conf: Math.max(0, rawConf), timeMs: nowMs },
+    ].slice(-VOTE_WINDOW_SIZE);
 
   const counts = new Map<string, number>();
   const confSums = new Map<string, number>();
@@ -478,7 +648,7 @@ function applyTemporalVote(
   }
 
   if (counts.size === 0) {
-    return { window: nextWindow, label: "idle", confidence: 0, hits: 0 };
+    return reuseStable();
   }
 
   let bestLabel = "idle";
@@ -499,10 +669,19 @@ function applyTemporalVote(
   // we still accept to avoid "5/5 but no change" UX stalls.
   const hasHardConsensus = bestHits >= VOTE_WINDOW_SIZE;
   if ((bestHits >= VOTE_REQUIRED_HITS && avgConf >= VOTE_MIN_CONFIDENCE) || hasHardConsensus) {
-    return { window: nextWindow, label: bestLabel, confidence: avgConf, hits: bestHits };
+    return {
+      window: nextWindow,
+      label: bestLabel,
+      confidence: avgConf,
+      hits: bestHits,
+      stable: { label: bestLabel, confidence: avgConf, timeMs: nowMs },
+    };
   }
 
-  return { window: nextWindow, label: "idle", confidence: avgConf, hits: bestHits };
+  if (invalidFrame) {
+    return reuseStable();
+  }
+  return { window: nextWindow, label: "idle", confidence: avgConf, hits: bestHits, stable };
 }
 
 function drawLandmarks(
@@ -579,6 +758,8 @@ export default function ChallengePage() {
   const holdRef = useRef<{ label: string; count: number }>({ label: "", count: 0 });
   const triggeredSignRef = useRef<string>("");
   const voteWindowRef = useRef<VoteEntry[]>([]);
+  const voteStableRef = useRef<VoteStableState>({ label: "idle", confidence: 0, timeMs: 0 });
+  const handSlotsRef = useRef<[HandSlotState | null, HandSlotState | null]>([null, null]);
   const lightingLastTimeRef = useRef<number>(0);
   const lightingRef = useRef<LightingResult>({ status: "good", mean: 0, contrast: 0 });
   const lightingSampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -956,7 +1137,7 @@ export default function ChallengePage() {
       }
       latestLandmarksRef.current = result.landmarks ?? [];
 
-      const { features, numHands } = buildFeatures(result);
+      const { features, numHands, imputedHands, effectiveHands } = buildFeatures(result, handSlotsRef.current);
       if (numHands !== detectedHandsUiRef.current) {
         detectedHandsUiRef.current = numHands;
         setDetectedHands(numHands);
@@ -965,6 +1146,7 @@ export default function ChallengePage() {
 
       if (numHands < 1) {
         voteWindowRef.current = [];
+        voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
         triggeredSignRef.current = "";
         if (voteHitsUiRef.current !== 0) {
           voteHitsUiRef.current = 0;
@@ -994,19 +1176,30 @@ export default function ChallengePage() {
       const rawPrediction = knn.predictWithConfidence(features);
       let rawSign = String(rawPrediction.label || "Idle").trim().toLowerCase();
       let rawConf = Math.max(0, Number(rawPrediction.confidence || 0));
+      if (imputedHands > 0) {
+        rawConf *= imputedHands >= 2 ? 0.72 : 0.88;
+      }
 
-      if (RESTRICTED_SIGNS && numHands < 2) {
+      if (RESTRICTED_SIGNS && effectiveHands < 2) {
         rawSign = "idle";
         rawConf = 0;
       }
 
       let allowDetection = lightingOk && numHands > 0;
       if (RESTRICTED_SIGNS) {
-        allowDetection = allowDetection && numHands >= 2;
+        allowDetection = allowDetection && effectiveHands >= 2;
       }
 
-      const vote = applyTemporalVote(voteWindowRef.current, rawSign, rawConf, allowDetection, now);
+      const vote = applyTemporalVote(
+        voteWindowRef.current,
+        rawSign,
+        rawConf,
+        allowDetection,
+        now,
+        voteStableRef.current,
+      );
       voteWindowRef.current = vote.window;
+      voteStableRef.current = vote.stable;
       if (vote.hits !== voteHitsUiRef.current) {
         voteHitsUiRef.current = vote.hits;
         setVoteHits(vote.hits);

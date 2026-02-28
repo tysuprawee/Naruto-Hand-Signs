@@ -24,6 +24,12 @@ export interface VoteEntry {
     timeMs: number;
 }
 
+export interface VoteStableState {
+    label: string;
+    confidence: number;
+    timeMs: number;
+}
+
 export const DEFAULT_FILTERS: CalibrationProfile = {
     version: 1,
     samples: 0,
@@ -91,23 +97,51 @@ export function applyTemporalVote(
     voteWindowSize: number,
     voteTtlMs: number,
     requiredHits: number,
-    minConfidence: number
-): { label: string; confidence: number; hits: number; nextWindow: VoteEntry[] } {
+    minConfidence: number,
+    stableState?: VoteStableState,
+    occlusionGraceMs: number = 240,
+    reuseConfidenceDecay: number = 0.90
+): { label: string; confidence: number; hits: number; nextWindow: VoteEntry[]; nextStableState: VoteStableState } {
     const next = window.filter((item) => nowMs - item.timeMs <= voteTtlMs);
     const normalized = String(rawLabel || "idle").trim().toLowerCase();
+    const prevStable: VoteStableState = stableState || { label: "idle", confidence: 0, timeMs: 0 };
+    let nextStableState: VoteStableState = {
+        label: String(prevStable.label || "idle").trim().toLowerCase(),
+        confidence: Math.max(0, Number(prevStable.confidence || 0)),
+        timeMs: Math.max(0, Number(prevStable.timeMs || 0)),
+    };
 
-    if (!allowDetection || normalized === "idle" || normalized === "unknown") {
-        return { label: "idle", confidence: 0, hits: 0, nextWindow: [] };
+    const invalidFrame = !allowDetection || normalized === "idle" || normalized === "unknown";
+    if (!invalidFrame) {
+        next.push({
+            label: normalized,
+            confidence: Math.max(0, rawConfidence),
+            timeMs: nowMs,
+        });
+        if (next.length > voteWindowSize) {
+            next.splice(0, next.length - voteWindowSize);
+        }
     }
 
-    next.push({
-        label: normalized,
-        confidence: Math.max(0, rawConfidence),
-        timeMs: nowMs,
-    });
-    if (next.length > voteWindowSize) {
-        next.splice(0, next.length - voteWindowSize);
-    }
+    const reuseRecentStable = (): { label: string; confidence: number; hits: number; nextWindow: VoteEntry[]; nextStableState: VoteStableState } => {
+        const label = String(nextStableState.label || "idle").trim().toLowerCase();
+        if (!invalidFrame || !label || label === "idle" || label === "unknown" || nextStableState.timeMs <= 0) {
+            return { label: "idle", confidence: 0, hits: 0, nextWindow: next, nextStableState };
+        }
+        const elapsed = Math.max(0, nowMs - nextStableState.timeMs);
+        if (elapsed > Math.max(50, occlusionGraceMs)) {
+            return { label: "idle", confidence: 0, hits: 0, nextWindow: next, nextStableState };
+        }
+        const frameCount = Math.max(1, elapsed / (1000 / 30));
+        const decay = Math.max(0.5, Math.min(0.99, reuseConfidenceDecay)) ** frameCount;
+        return {
+            label,
+            confidence: Math.max(0, nextStableState.confidence * decay),
+            hits: 0,
+            nextWindow: next,
+            nextStableState,
+        };
+    };
 
     const counts = new Map<string, { hits: number; confSum: number }>();
     for (const item of next) {
@@ -115,6 +149,10 @@ export function applyTemporalVote(
         score.hits += 1;
         score.confSum += item.confidence;
         counts.set(item.label, score);
+    }
+
+    if (counts.size === 0) {
+        return reuseRecentStable();
     }
 
     let bestLabel = "idle";
@@ -133,10 +171,19 @@ export function applyTemporalVote(
     // accept to avoid stalls on weaker/mobile devices.
     const hasHardConsensus = bestHits >= voteWindowSize;
     if ((bestHits >= requiredHits && bestAvgConf >= minConfidence) || hasHardConsensus) {
-        return { label: bestLabel, confidence: bestAvgConf, hits: bestHits, nextWindow: next };
+        nextStableState = {
+            label: bestLabel,
+            confidence: bestAvgConf,
+            timeMs: nowMs,
+        };
+        return { label: bestLabel, confidence: bestAvgConf, hits: bestHits, nextWindow: next, nextStableState };
     }
 
-    return { label: "idle", confidence: bestAvgConf, hits: bestHits, nextWindow: next };
+    if (invalidFrame) {
+        return reuseRecentStable();
+    }
+
+    return { label: "idle", confidence: bestAvgConf, hits: bestHits, nextWindow: next, nextStableState };
 }
 
 export interface CalibrationSample {

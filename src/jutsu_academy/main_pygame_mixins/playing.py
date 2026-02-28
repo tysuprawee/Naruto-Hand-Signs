@@ -558,7 +558,7 @@ class PlayingMixin:
                 self.detect_hands(frame)
                 self.detect_face(frame)
         else:
-            self._apply_temporal_vote("idle", 0.0, False)
+            self._apply_temporal_vote("idle", 0.0, False, hard_reset=True)
             self.raw_detected_sign = "idle"
             self.raw_detected_confidence = 0.0
             self.detected_sign = "idle"

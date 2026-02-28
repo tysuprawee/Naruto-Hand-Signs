@@ -54,8 +54,14 @@ class GameplayMixin:
         self.detected_sign = "idle"
         self.detected_confidence = 0.0
         self.last_detected_hands = 0
+        self.last_imputed_hands = 0
         self.last_vote_hits = 0
         self.sign_vote_window = []
+        self.last_stable_vote_label = "idle"
+        self.last_stable_vote_conf = 0.0
+        self.last_stable_vote_time = 0.0
+        if getattr(self, "recorder", None) and hasattr(self.recorder, "reset_temporal_state"):
+            self.recorder.reset_temporal_state()
 
     def toggle_detection_model(self):
         """Switch active sign detector backend."""
@@ -423,26 +429,31 @@ class GameplayMixin:
         self.calibration_message_until = time.time() + 5.0
         self._restore_calibration_diag_state()
 
-    def _apply_temporal_vote(self, raw_sign, raw_conf, allow_detection):
+    def _apply_temporal_vote(self, raw_sign, raw_conf, allow_detection, hard_reset=False):
         now = time.time()
         self.sign_vote_window = [
             item for item in self.sign_vote_window
             if now - item.get("time", 0.0) <= self.vote_entry_ttl_s
         ]
 
-        normalized = str(raw_sign or "idle").strip().lower()
-        if (not allow_detection) or normalized in ("idle", "unknown"):
+        if hard_reset:
             self.sign_vote_window = []
             self.last_vote_hits = 0
+            self.last_stable_vote_label = "idle"
+            self.last_stable_vote_conf = 0.0
+            self.last_stable_vote_time = 0.0
             return "idle", 0.0
 
-        self.sign_vote_window.append({
-            "label": normalized,
-            "conf": float(max(0.0, raw_conf)),
-            "time": now,
-        })
-        if len(self.sign_vote_window) > self.vote_window_size:
-            self.sign_vote_window = self.sign_vote_window[-self.vote_window_size:]
+        normalized = str(raw_sign or "idle").strip().lower()
+        invalid_frame = (not allow_detection) or normalized in ("idle", "unknown")
+        if not invalid_frame:
+            self.sign_vote_window.append({
+                "label": normalized,
+                "conf": float(max(0.0, raw_conf)),
+                "time": now,
+            })
+            if len(self.sign_vote_window) > self.vote_window_size:
+                self.sign_vote_window = self.sign_vote_window[-self.vote_window_size:]
 
         counts = {}
         conf_sums = {}
@@ -453,7 +464,7 @@ class GameplayMixin:
 
         if not counts:
             self.last_vote_hits = 0
-            return "idle", 0.0
+            return self._reuse_recent_stable_vote(now, invalid_frame)
 
         best_label = max(counts.keys(), key=lambda label: (counts[label], conf_sums.get(label, 0.0)))
         best_hits = int(counts[best_label])
@@ -461,8 +472,33 @@ class GameplayMixin:
         self.last_vote_hits = best_hits
 
         if best_hits >= self.vote_required_hits and avg_conf >= self.vote_min_confidence:
+            self.last_stable_vote_label = best_label
+            self.last_stable_vote_conf = avg_conf
+            self.last_stable_vote_time = now
             return best_label, avg_conf
+        if invalid_frame:
+            return self._reuse_recent_stable_vote(now, True)
         return "idle", avg_conf
+
+    def _reuse_recent_stable_vote(self, now, invalid_frame):
+        if not invalid_frame:
+            return "idle", 0.0
+
+        last_label = str(getattr(self, "last_stable_vote_label", "idle") or "idle").strip().lower()
+        last_conf = float(getattr(self, "last_stable_vote_conf", 0.0) or 0.0)
+        last_time = float(getattr(self, "last_stable_vote_time", 0.0) or 0.0)
+        if last_label in ("", "idle", "unknown") or last_time <= 0.0:
+            return "idle", 0.0
+
+        elapsed = max(0.0, now - last_time)
+        grace_s = self._clamp(getattr(self, "vote_occlusion_grace_s", 0.24), 0.05, 0.8)
+        if elapsed > grace_s:
+            return "idle", 0.0
+
+        decay_base = self._clamp(getattr(self, "vote_reuse_conf_decay", 0.90), 0.5, 0.99)
+        frame_count = max(1.0, elapsed / (1.0 / 30.0))
+        reused_conf = last_conf * (decay_base ** frame_count)
+        return last_label, float(max(0.0, reused_conf))
 
     def predict_sign_with_filters(self, frame, lighting_ok):
         self.last_mp_result = None
@@ -471,6 +507,7 @@ class GameplayMixin:
         raw_sign = "idle"
         raw_conf = 0.0
         num_hands = 0
+        imputed_hands = 0
 
         if self.last_mp_result and self.last_mp_result.hand_landmarks:
             num_hands = len(self.last_mp_result.hand_landmarks)
@@ -480,8 +517,13 @@ class GameplayMixin:
             )
             label, raw_conf, _ = self.recorder.predict_with_confidence(features)
             raw_sign = str(label).strip().lower()
+            if hasattr(self.recorder, "get_last_imputed_hand_mask"):
+                imputed_mask = self.recorder.get_last_imputed_hand_mask()
+                imputed_hands = int(sum(1 for v in imputed_mask if float(v) >= 0.5))
 
-        if self.settings.get("restricted_signs", False) and num_hands < 2:
+        effective_hands = int(num_hands + imputed_hands)
+
+        if self.settings.get("restricted_signs", False) and effective_hands < 2:
             raw_sign = "idle"
             raw_conf = 0.0
 
@@ -489,7 +531,7 @@ class GameplayMixin:
         # detecting signs even when lighting quality is not ideal.
         allow_detection = num_hands > 0 and (lighting_ok or self.game_mode != "challenge")
         if self.settings.get("restricted_signs", False):
-            allow_detection = allow_detection and num_hands >= 2
+            allow_detection = allow_detection and effective_hands >= 2
 
         stable_sign, stable_conf = self._apply_temporal_vote(raw_sign, raw_conf, allow_detection)
 
@@ -498,6 +540,7 @@ class GameplayMixin:
         self.detected_sign = stable_sign
         self.detected_confidence = float(stable_conf)
         self.last_detected_hands = int(num_hands)
+        self.last_imputed_hands = int(imputed_hands)
 
         self._update_calibration_sample(raw_sign, raw_conf, num_hands)
         return stable_sign

@@ -129,7 +129,7 @@ export default function Home() {
                 href="/play?noEffects=true"
                 className="group h-14 px-8 bg-ninja-accent hover:bg-ninja-accent-glow text-white text-lg font-bold rounded-lg flex items-center gap-3 transition-all shadow-[0_0_20px_rgba(255,120,50,0.3)] hover:shadow-[0_0_30px_rgba(255,120,50,0.5)] hover:-translate-y-1"
               >
-                PLAY NOW (NO VISUAL EFFECTS)
+                PLAY NOW (EXPERIMENTAL)
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </Link>
 

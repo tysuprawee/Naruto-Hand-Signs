@@ -592,17 +592,27 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.max(min, Math.min(max, Math.floor(num)));
 }
 
+function parseBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value !== 0 : fallback;
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return fallback;
+  if (["true", "1", "yes", "on"].includes(text)) return true;
+  if (["false", "0", "no", "off"].includes(text)) return false;
+  return fallback;
+}
+
 function sanitizeSettings(raw: Partial<MenuSettingsState> | null | undefined): MenuSettingsState {
   return {
     musicVol: clampVolume(raw?.musicVol, DEFAULT_SETTINGS.musicVol),
     sfxVol: clampVolume(raw?.sfxVol, DEFAULT_SETTINGS.sfxVol),
-    debugHands: typeof raw?.debugHands === "boolean" ? raw.debugHands : DEFAULT_SETTINGS.debugHands,
-    restrictedSigns: false,
+    debugHands: parseBoolean(raw?.debugHands, DEFAULT_SETTINGS.debugHands),
+    restrictedSigns: parseBoolean(raw?.restrictedSigns, DEFAULT_SETTINGS.restrictedSigns),
     easyMode: false,
     cameraIdx: clampInt(raw?.cameraIdx, 0, 16, DEFAULT_SETTINGS.cameraIdx),
     resolutionIdx: clampInt(raw?.resolutionIdx, 0, 2, DEFAULT_SETTINGS.resolutionIdx),
-    noEffects: typeof raw?.noEffects === "boolean" ? raw.noEffects : DEFAULT_SETTINGS.noEffects,
-    fullscreen: typeof raw?.fullscreen === "boolean" ? raw.fullscreen : DEFAULT_SETTINGS.fullscreen,
+    noEffects: parseBoolean(raw?.noEffects, DEFAULT_SETTINGS.noEffects),
+    fullscreen: parseBoolean(raw?.fullscreen, DEFAULT_SETTINGS.fullscreen),
   };
 }
 
@@ -2944,9 +2954,10 @@ function PlayPageInner() {
         musicVol: Number(cloud.music_vol ?? cloud.musicVol),
         sfxVol: Number(cloud.sfx_vol ?? cloud.sfxVol),
         cameraIdx: Number(cloud.camera_idx ?? cloud.cameraIdx),
-        debugHands: Boolean(cloud.debug_hands ?? cloud.debugHands ?? true),
+        debugHands: cloud.debug_hands ?? cloud.debugHands,
+        restrictedSigns: cloud.restricted_signs ?? cloud.restrictedSigns,
         resolutionIdx: Number(cloud.resolution_idx ?? cloud.resolutionIdx),
-        fullscreen: Boolean(cloud.fullscreen),
+        fullscreen: cloud.fullscreen,
       });
       setSavedSettings(cloudSettings);
       setDraftSettings(cloudSettings);
@@ -3289,7 +3300,7 @@ function PlayPageInner() {
           sfx_vol: next.sfxVol,
           camera_idx: next.cameraIdx,
           debug_hands: next.debugHands,
-          restricted_signs: false,
+          restricted_signs: next.restrictedSigns,
           easy_mode: false,
           resolution_idx: next.resolutionIdx,
           fullscreen: next.fullscreen,
@@ -4639,7 +4650,7 @@ function PlayPageInner() {
               <PlayArena
                 jutsuName={selectedJutsu}
                 mode="calibration"
-                restrictedSigns={false}
+                restrictedSigns={savedSettings.restrictedSigns}
                 easyMode={false}
                 debugHands={savedSettings.debugHands}
                 sfxVolume={savedSettings.sfxVol}
@@ -4661,7 +4672,7 @@ function PlayPageInner() {
                 <PlayArena
                   jutsuName={selectedJutsu}
                   mode="free"
-                  restrictedSigns={false}
+                  restrictedSigns={savedSettings.restrictedSigns}
                   easyMode={false}
                   debugHands={savedSettings.debugHands}
                   sfxVolume={savedSettings.sfxVol}
@@ -4698,7 +4709,7 @@ function PlayPageInner() {
                 <PlayArena
                   jutsuName={selectedJutsu}
                   mode="rank"
-                  restrictedSigns={false}
+                  restrictedSigns={savedSettings.restrictedSigns}
                   easyMode={false}
                   debugHands={savedSettings.debugHands}
                   sfxVolume={savedSettings.sfxVol}
@@ -4894,7 +4905,7 @@ function PlayPageInner() {
                       {t("quest.activeStreakBoost", "Active Streak Boost")}
                     </p>
                     <p className="text-sm font-black text-white">
-                      +{activeStreakBonusPct}% XP {t("quest.everyRun", "every run")}
+                      +{activeStreakBonusPct}% XP {t("quest.everyRun", "every jutsu play")}
                     </p>
                   </div>
                 </div>
@@ -5333,7 +5344,7 @@ function PlayPageInner() {
 
                   <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
                     <span className="text-xs font-mono text-zinc-300">
-                      {t("leaderboard.page", "PAGE")} {leaderboardPage + 1} / {leaderboardPageCount} • {leaderboardTotalCount} {t("leaderboard.entries", "ENTRIES")}
+                      {t("leaderboard.page", "PAGE")} {leaderboardPage + 1}
                     </span>
                     <div className="flex items-center gap-2">
                       <button
@@ -5514,6 +5525,24 @@ function PlayPageInner() {
                       onChange={(event) => {
                         const checked = event.target.checked;
                         setDraftSettings((prev) => ({ ...prev, debugHands: checked }));
+                      }}
+                      className="h-4 w-4 accent-orange-500"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between gap-3 rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
+                    <span className="flex flex-col">
+                      <span>{t("settings.strictTwoHandMode", "Strict Two-Hand Mode")}</span>
+                      <span className="text-xs text-zinc-400">
+                        {t("settings.strictTwoHandModeHint", "Require both hands visible before confirming signs.")}
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={draftSettings.restrictedSigns}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setDraftSettings((prev) => ({ ...prev, restrictedSigns: checked }));
                       }}
                       className="h-4 w-4 accent-orange-500"
                     />

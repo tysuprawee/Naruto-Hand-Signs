@@ -41,7 +41,10 @@ export class KNNClassifier {
         return this.predictWithConfidence(features).label;
     }
 
-    predictWithConfidence(features: number[]): { label: string; confidence: number; distance: number } {
+    predictWithConfidence(
+        features: number[],
+        options?: { idleDistanceThreshold?: number | null; featureMask?: number[] | null }
+    ): { label: string; confidence: number; distance: number } {
         if (!features || features.length === 0 || this.data.length === 0) {
             return { label: "Unknown", confidence: 0, distance: Number.POSITIVE_INFINITY };
         }
@@ -50,7 +53,7 @@ export class KNNClassifier {
         for (let i = 0; i < this.data.length; i += 1) {
             distances[i] = {
                 label: this.data[i].label,
-                dist: this.euclideanDistance(features, this.data[i].features),
+                dist: this.euclideanDistance(features, this.data[i].features, options?.featureMask ?? null),
             };
         }
         distances.sort((a, b) => a.dist - b.dist);
@@ -61,7 +64,13 @@ export class KNNClassifier {
         }
 
         const minDist = kNearest[0].dist;
-        if (minDist > this.threshold) {
+        const thresholdOverride = options?.idleDistanceThreshold;
+        const idleThreshold = thresholdOverride === null
+            ? null
+            : (Number.isFinite(Number(thresholdOverride))
+                ? Math.max(0.1, Number(thresholdOverride))
+                : this.threshold);
+        if (idleThreshold !== null && minDist > idleThreshold) {
             return { label: "Idle", confidence: 0, distance: minDist };
         }
 
@@ -85,21 +94,131 @@ export class KNNClassifier {
             }
         }
 
+        const confidenceScale = idleThreshold === null ? this.threshold : idleThreshold;
         return {
             label: bestLabel,
-            confidence: clamp01(1 - minDist / this.threshold),
+            confidence: clamp01(1 - minDist / confidenceScale),
             distance: minDist,
         };
     }
 
-    private euclideanDistance(a: number[], b: number[]): number {
-        let sum = 0;
-        const len = Math.min(a.length, b.length);
-        for (let i = 0; i < len; i += 1) {
-            const diff = a[i] - b[i];
-            sum += diff * diff;
+    predictNearestWithConfidence(
+        features: number[],
+        options?: {
+            idleDistanceThreshold?: number | null;
+            featureMask?: number[] | null;
+            trackLabels?: string[] | null;
         }
-        return Math.sqrt(sum);
+    ): { label: string; confidence: number; distance: number; trackedDistances: Record<string, number> } {
+        if (!features || features.length === 0 || this.data.length === 0) {
+            return {
+                label: "Unknown",
+                confidence: 0,
+                distance: Number.POSITIVE_INFINITY,
+                trackedDistances: {},
+            };
+        }
+
+        const trackSet = new Set<string>();
+        for (const raw of options?.trackLabels || []) {
+            const key = String(raw || "").trim().toLowerCase();
+            if (!key) continue;
+            trackSet.add(key);
+        }
+        const trackedDistances: Record<string, number> = {};
+        for (const key of trackSet) {
+            trackedDistances[key] = Number.POSITIVE_INFINITY;
+        }
+
+        let minDist = Number.POSITIVE_INFINITY;
+        let minLabel = "Unknown";
+
+        for (let i = 0; i < this.data.length; i += 1) {
+            const item = this.data[i];
+            const dist = this.euclideanDistance(features, item.features, options?.featureMask ?? null);
+            if (dist < minDist) {
+                minDist = dist;
+                minLabel = item.label;
+            }
+
+            if (trackSet.size > 0) {
+                const key = String(item.label || "").trim().toLowerCase();
+                if (trackSet.has(key) && dist < (trackedDistances[key] ?? Number.POSITIVE_INFINITY)) {
+                    trackedDistances[key] = dist;
+                }
+            }
+        }
+
+        const thresholdOverride = options?.idleDistanceThreshold;
+        const idleThreshold = thresholdOverride === null
+            ? null
+            : (Number.isFinite(Number(thresholdOverride))
+                ? Math.max(0.1, Number(thresholdOverride))
+                : this.threshold);
+
+        if (idleThreshold !== null && minDist > idleThreshold) {
+            return {
+                label: "Idle",
+                confidence: 0,
+                distance: minDist,
+                trackedDistances,
+            };
+        }
+
+        const confidenceScale = idleThreshold === null ? this.threshold : idleThreshold;
+        return {
+            label: minLabel,
+            confidence: clamp01(1 - minDist / confidenceScale),
+            distance: minDist,
+            trackedDistances,
+        };
+    }
+
+    distanceToLabel(
+        features: number[],
+        label: string,
+        options?: { featureMask?: number[] | null }
+    ): number {
+        if (!features || features.length === 0 || this.data.length === 0) {
+            return Number.POSITIVE_INFINITY;
+        }
+        const target = String(label || "").trim().toLowerCase();
+        if (!target) return Number.POSITIVE_INFINITY;
+
+        let bestDist = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < this.data.length; i += 1) {
+            if (String(this.data[i].label || "").trim().toLowerCase() !== target) continue;
+            const dist = this.euclideanDistance(features, this.data[i].features, options?.featureMask ?? null);
+            if (dist < bestDist) bestDist = dist;
+        }
+        return bestDist;
+    }
+
+    private euclideanDistance(a: number[], b: number[], featureMask: number[] | null): number {
+        const len = Math.min(a.length, b.length);
+        if (len <= 0) return Number.POSITIVE_INFINITY;
+
+        if (!featureMask || featureMask.length === 0) {
+            let sum = 0;
+            for (let i = 0; i < len; i += 1) {
+                const diff = a[i] - b[i];
+                sum += diff * diff;
+            }
+            return Math.sqrt(sum);
+        }
+
+        let sum = 0;
+        let used = 0;
+        for (const rawIndex of featureMask) {
+            const idx = Math.floor(Number(rawIndex));
+            if (!Number.isFinite(idx) || idx < 0 || idx >= len) continue;
+            const diff = a[idx] - b[idx];
+            sum += diff * diff;
+            used += 1;
+        }
+        if (used <= 0) return Number.POSITIVE_INFINITY;
+        const scale = len / used;
+        return Math.sqrt(sum * scale);
     }
 }
 

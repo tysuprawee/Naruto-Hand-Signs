@@ -25,6 +25,7 @@ import {
   type CalibrationProfile,
   type CalibrationSample,
   type VoteEntry,
+  type VoteStableState,
 } from "@/utils/detection-filters";
 
 type ArenaPhase = "loading" | "ready" | "countdown" | "active" | "casting" | "completed" | "error";
@@ -89,6 +90,12 @@ interface EffectAnchor {
   x: number;
   y: number;
   scale: number;
+}
+
+interface HandSlotState {
+  center: [number, number, number];
+  coords: number[];
+  missingFrames: number;
 }
 
 interface PhoenixBall {
@@ -198,9 +205,21 @@ const TWO_HANDS_GUIDE_DELAY_MS = 500;
 const EFFECT_DEFAULT_DURATION_MS = 5000;
 const CAMERA_STALL_TIMEOUT_MS = 1400;
 const HAND_FEATURE_LENGTH = 63;
+const HAND_SLOT_HOLD_FRAMES = 8;
+const HAND_SLOT_DECAY_PER_FRAME = 0.92;
 const GAME_MIN_CONFIDENCE = 0.2;
+const VOTE_OCCLUSION_GRACE_MS = 240;
+const VOTE_REUSE_CONF_DECAY = 0.90;
 const LOW_FPS_ASSIST_THRESHOLD = 12;
 const LOW_FPS_VOTE_TTL_MS = 1400;
+const KNN_IDLE_DIST_THRESHOLD = 1.8;
+const ONE_HAND_PASS_GATE_MIN_CONFIDENCE = 0.75;
+const ONE_HAND_ASSIST_IDLE_THRESHOLD = 3.2;
+const ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD = 2.4;
+const ONE_HAND_EXPECTED_IDLE_MARGIN = 0.18;
+const FULL_FEATURE_LENGTH = HAND_FEATURE_LENGTH * 2;
+const LEFT_HAND_FEATURE_MASK = Array.from({ length: HAND_FEATURE_LENGTH }, (_, i) => i);
+const RIGHT_HAND_FEATURE_MASK = Array.from({ length: HAND_FEATURE_LENGTH }, (_, i) => i + HAND_FEATURE_LENGTH);
 const FACE_ANCHOR_STICKY_MS = 2000;
 const DEFAULT_MOUTH_ANCHOR = { x: 0.5, y: 0.5 };
 const FIRE_MOUTH_OFFSET_X_PCT = -40.5;
@@ -515,6 +534,7 @@ function getRequiredDatasetLabels(sequence: string[]): string[] {
 
 function signsMatch(
   detectedSign: string,
+  detectedConfidence: number,
   targetSign: string,
   rawDetectedSign: string,
   rawDetectedConfidence: number,
@@ -522,14 +542,15 @@ function signsMatch(
 ): boolean {
   const target = normalizeLabel(targetSign);
   if (!target || target === "idle") return false;
+  const minConf = clamp(Number(voteMinConfidence || 0), 0, 1);
 
   const stable = normalizeLabel(detectedSign);
-  if (stable === target) return true;
+  if (stable === target && Number(detectedConfidence || 0) >= minConf) {
+    return true;
+  }
 
   const raw = normalizeLabel(rawDetectedSign);
-  if (raw !== target) return false;
-  const minConf = Math.max(0.30, Number(voteMinConfidence || 0.45) - 0.10);
-  return Number(rawDetectedConfidence || 0) >= minConf;
+  return raw === target && Number(rawDetectedConfidence || 0) >= minConf;
 }
 
 function toDisplayLabel(label: string): string {
@@ -548,43 +569,177 @@ function getHandednessLabel(result: HandsResultShape, handIndex: number): string
   return String(raw).trim().toLowerCase();
 }
 
-function buildFeatures(result: HandsResultShape): { features: number[]; numHands: number } {
+function palmCenter(landmarks: Landmark[]): [number, number, number] {
+  const idxs = [0, 5, 9, 13, 17];
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  let count = 0;
+  for (const idx of idxs) {
+    const point = landmarks[idx];
+    if (!point) continue;
+    sx += point.x;
+    sy += point.y;
+    sz += point.z;
+    count += 1;
+  }
+  if (count <= 0) return [0, 0, 0];
+  return [sx / count, sy / count, sz / count];
+}
+
+function centerDistanceSq(a: [number, number, number], b: [number, number, number]): number {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  const dz = (a[2] - b[2]) * 0.5;
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function assignDetectionsToSlots(
+  detections: Array<{ coords: number[]; center: [number, number, number]; handedness: string }>,
+  slots: [HandSlotState | null, HandSlotState | null],
+): Array<{ coords: number[]; center: [number, number, number]; handedness: string } | null> {
+  const assigned: Array<{ coords: number[]; center: [number, number, number]; handedness: string } | null> = [null, null];
+  if (detections.length <= 0) return assigned;
+
+  const prev0 = slots[0]?.center || null;
+  const prev1 = slots[1]?.center || null;
+
+  if (detections.length === 1) {
+    const det = detections[0];
+    let slotIdx = 0;
+    if (prev0 && prev1) {
+      slotIdx = centerDistanceSq(det.center, prev0) <= centerDistanceSq(det.center, prev1) ? 0 : 1;
+    } else if (prev0) {
+      slotIdx = 0;
+    } else if (prev1) {
+      slotIdx = 1;
+    } else if (det.handedness === "right") {
+      slotIdx = 1;
+    } else if (det.handedness === "left") {
+      slotIdx = 0;
+    } else {
+      slotIdx = slots[0] ? 1 : 0;
+    }
+    assigned[slotIdx] = det;
+    return assigned;
+  }
+
+  const detA = detections[0];
+  const detB = detections[1];
+  if (prev0 && prev1) {
+    const nativeCost = centerDistanceSq(detA.center, prev0) + centerDistanceSq(detB.center, prev1);
+    const swappedCost = centerDistanceSq(detA.center, prev1) + centerDistanceSq(detB.center, prev0);
+    if (nativeCost <= swappedCost) {
+      assigned[0] = detA;
+      assigned[1] = detB;
+    } else {
+      assigned[0] = detB;
+      assigned[1] = detA;
+    }
+    return assigned;
+  }
+
+  if (prev0 && !prev1) {
+    const first = centerDistanceSq(detA.center, prev0) <= centerDistanceSq(detB.center, prev0) ? detA : detB;
+    assigned[0] = first;
+    assigned[1] = first === detA ? detB : detA;
+    return assigned;
+  }
+
+  if (prev1 && !prev0) {
+    const first = centerDistanceSq(detA.center, prev1) <= centerDistanceSq(detB.center, prev1) ? detA : detB;
+    assigned[1] = first;
+    assigned[0] = first === detA ? detB : detA;
+    return assigned;
+  }
+
+  const left = detections.find((det) => det.handedness === "left");
+  const right = detections.find((det) => det.handedness === "right");
+  if (left && right) {
+    assigned[0] = left;
+    assigned[1] = right;
+    return assigned;
+  }
+
+  const sortedByX = [...detections].sort((a, b) => a.center[0] - b.center[0]);
+  assigned[0] = sortedByX[0] || null;
+  assigned[1] = sortedByX[1] || null;
+  return assigned;
+}
+
+function buildFeatures(
+  result: HandsResultShape,
+  slots: [HandSlotState | null, HandSlotState | null],
+): { features: number[]; numHands: number; imputedHands: number; effectiveHands: number } {
   const landmarks = result.landmarks ?? [];
   const numHands = landmarks.length;
   if (numHands <= 0) {
-    return { features: [], numHands: 0 };
+    for (let slotIdx = 0; slotIdx < 2; slotIdx += 1) {
+      const slot = slots[slotIdx];
+      if (!slot) continue;
+      slot.missingFrames += 1;
+      if (slot.missingFrames > HAND_SLOT_HOLD_FRAMES) {
+        slots[slotIdx] = null;
+      }
+    }
+    return { features: [], numHands: 0, imputedHands: 0, effectiveHands: 0 };
   }
 
-  let h1 = new Array(63).fill(0);
-  let h2 = new Array(63).fill(0);
-  let h1Set = false;
-  let h2Set = false;
-
+  const detections: Array<{ coords: number[]; center: [number, number, number]; handedness: string }> = [];
   for (let i = 0; i < landmarks.length; i += 1) {
-    const normalized = normalizeHand(landmarks[i] ?? []);
+    const hand = landmarks[i] ?? [];
+    if (hand.length < 21) continue;
+    const normalized = normalizeHand(hand);
+    if (normalized.length !== HAND_FEATURE_LENGTH) continue;
     const handedness = getHandednessLabel(result, i);
+    detections.push({
+      coords: normalized,
+      center: palmCenter(hand),
+      handedness,
+    });
+    if (detections.length >= 2) break;
+  }
 
-    if (handedness === "left") {
-      h1 = normalized;
-      h1Set = true;
+  const assigned = assignDetectionsToSlots(detections, slots);
+  const features: number[] = [];
+  let imputedHands = 0;
+
+  for (let slotIdx = 0; slotIdx < 2; slotIdx += 1) {
+    const detected = assigned[slotIdx];
+    if (detected) {
+      slots[slotIdx] = {
+        center: detected.center,
+        coords: detected.coords,
+        missingFrames: 0,
+      };
+      features.push(...detected.coords);
       continue;
     }
-    if (handedness === "right") {
-      h2 = normalized;
-      h2Set = true;
+
+    const slot = slots[slotIdx];
+    if (slot && slot.missingFrames < HAND_SLOT_HOLD_FRAMES) {
+      const nextMissing = slot.missingFrames + 1;
+      slot.missingFrames = nextMissing;
+      const decay = HAND_SLOT_DECAY_PER_FRAME ** nextMissing;
+      for (const value of slot.coords) {
+        features.push(value * decay);
+      }
+      imputedHands += 1;
       continue;
     }
 
-    if (!h1Set) {
-      h1 = normalized;
-      h1Set = true;
-    } else if (!h2Set) {
-      h2 = normalized;
-      h2Set = true;
+    slots[slotIdx] = null;
+    for (let i = 0; i < HAND_FEATURE_LENGTH; i += 1) {
+      features.push(0);
     }
   }
 
-  return { features: [...h1, ...h2], numHands };
+  return {
+    features,
+    numHands,
+    imputedHands,
+    effectiveHands: numHands + imputedHands,
+  };
 }
 
 function mirrorNormalizedHand(hand: number[]): number[] {
@@ -596,27 +751,40 @@ function mirrorNormalizedHand(hand: number[]): number[] {
   return out;
 }
 
-function buildOneHandAssistCandidates(result: HandsResultShape, baseFeatures: number[]): number[][] {
+type OneHandAssistCandidate = {
+  features: number[];
+  featureMask: number[] | null;
+};
+
+function buildOneHandAssistCandidates(result: HandsResultShape, baseFeatures: number[]): OneHandAssistCandidate[] {
   const landmarks = result.landmarks ?? [];
   const firstHand = landmarks[0] ?? null;
-  if (!firstHand) return [baseFeatures];
+  if (!firstHand) return [{ features: baseFeatures, featureMask: null }];
   const normalized = normalizeHand(firstHand);
-  if (normalized.length !== HAND_FEATURE_LENGTH) return [baseFeatures];
+  if (normalized.length !== HAND_FEATURE_LENGTH) return [{ features: baseFeatures, featureMask: null }];
 
   const zeros = new Array(HAND_FEATURE_LENGTH).fill(0);
   const mirrored = mirrorNormalizedHand(normalized);
-  const variants: number[][] = [
-    baseFeatures,
-    [...normalized, ...zeros],
-    [...zeros, ...normalized],
-    [...mirrored, ...zeros],
-    [...zeros, ...mirrored],
+  const variants: OneHandAssistCandidate[] = [
+    { features: baseFeatures, featureMask: null },
+    { features: [...normalized, ...zeros], featureMask: LEFT_HAND_FEATURE_MASK },
+    { features: [...zeros, ...normalized], featureMask: RIGHT_HAND_FEATURE_MASK },
+    { features: [...mirrored, ...zeros], featureMask: LEFT_HAND_FEATURE_MASK },
+    { features: [...zeros, ...mirrored], featureMask: RIGHT_HAND_FEATURE_MASK },
+    // Fallback for symmetric two-hand rows.
+    { features: [...normalized, ...normalized], featureMask: null },
+    { features: [...mirrored, ...mirrored], featureMask: null },
   ];
 
   const seen = new Set<string>();
-  const deduped: number[][] = [];
+  const deduped: OneHandAssistCandidate[] = [];
   for (const candidate of variants) {
-    const key = candidate.map((value) => Number(value || 0).toFixed(6)).join("|");
+    if (candidate.features.length !== FULL_FEATURE_LENGTH) continue;
+    const featureKey = candidate.features.map((value) => Number(value || 0).toFixed(6)).join("|");
+    const maskKey = candidate.featureMask && candidate.featureMask.length > 0
+      ? candidate.featureMask.join(",")
+      : "all";
+    const key = `${featureKey}::${maskKey}`;
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(candidate);
@@ -624,16 +792,44 @@ function buildOneHandAssistCandidates(result: HandsResultShape, baseFeatures: nu
   return deduped;
 }
 
-function predictWithOneHandAssist(knn: KNNClassifier, result: HandsResultShape, baseFeatures: number[]) {
-  const candidates = buildOneHandAssistCandidates(result, baseFeatures);
+function predictWithOneHandAssist(
+  knn: KNNClassifier,
+  result: HandsResultShape,
+  baseFeatures: number[],
+  expectedSignRaw: string,
+  lowFpsMode: boolean,
+) {
+  const candidatesAll = buildOneHandAssistCandidates(result, baseFeatures);
+  const candidates = lowFpsMode ? candidatesAll.slice(0, 3) : candidatesAll;
+  const expectedSign = normalizeLabel(expectedSignRaw);
   let best: { label: string; confidence: number; distance: number } | null = null;
+  let bestExpectedDist = Number.POSITIVE_INFINITY;
+  let bestIdleDist = Number.POSITIVE_INFINITY;
+  const trackedLabels = expectedSign && expectedSign !== "idle"
+    ? ["idle", expectedSign]
+    : ["idle"];
 
   for (const candidate of candidates) {
-    const prediction = knn.predictWithConfidence(candidate);
+    const prediction = knn.predictNearestWithConfidence(candidate.features, {
+      idleDistanceThreshold: ONE_HAND_ASSIST_IDLE_THRESHOLD,
+      featureMask: candidate.featureMask,
+      trackLabels: trackedLabels,
+    });
     const label = normalizeLabel(prediction.label || "idle");
     const confidence = Math.max(0, Number(prediction.confidence || 0));
     const distance = Number.isFinite(prediction.distance) ? Number(prediction.distance) : Number.POSITIVE_INFINITY;
     const isIdle = label === "idle" || label === "unknown";
+    const idleDist = Number(prediction.trackedDistances.idle);
+    if (idleDist < bestIdleDist) {
+      bestIdleDist = idleDist;
+    }
+
+    if (expectedSign && expectedSign !== "idle" && Number.isFinite(Number(prediction.trackedDistances[expectedSign]))) {
+      const expectedDist = Number(prediction.trackedDistances[expectedSign]);
+      if (expectedDist < bestExpectedDist) {
+        bestExpectedDist = expectedDist;
+      }
+    }
 
     if (!best) {
       best = { label, confidence, distance };
@@ -652,6 +848,24 @@ function predictWithOneHandAssist(knn: KNNClassifier, result: HandsResultShape, 
     if (bestIsIdle === isIdle && Math.abs(confidence - best.confidence) <= 1e-9 && distance < best.distance) {
       best = { label, confidence, distance };
     }
+
+  }
+
+  if (
+    expectedSign
+    && expectedSign !== "idle"
+    && best
+    && (best.label === "idle" || best.label === "unknown")
+    && Number.isFinite(bestExpectedDist)
+    && Number.isFinite(bestIdleDist)
+    && bestExpectedDist <= ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD
+    && (bestExpectedDist + ONE_HAND_EXPECTED_IDLE_MARGIN) <= bestIdleDist
+  ) {
+    return {
+      label: expectedSign,
+      confidence: clamp(1 - (bestExpectedDist / ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD), 0, 1),
+      distance: bestExpectedDist,
+    };
   }
 
   return best || { label: "idle", confidence: 0, distance: Number.POSITIVE_INFINITY };
@@ -1159,6 +1373,8 @@ export default function PlayArena({
   const detectRafRef = useRef(0);
   const lastDetectRef = useRef(0);
   const voteWindowRef = useRef<VoteEntry[]>([]);
+  const voteStableRef = useRef<VoteStableState>({ label: "idle", confidence: 0, timeMs: 0 });
+  const handSlotsRef = useRef<[HandSlotState | null, HandSlotState | null]>([null, null]);
   const latestLandmarksRef = useRef<Landmark[][]>([]);
   const loadedDatasetRowsByLabelRef = useRef<Map<string, DatasetRow[]>>(new Map());
   const datasetLoadingRef = useRef(false);
@@ -1360,7 +1576,7 @@ export default function PlayArena({
       setLoadedDatasetLabels([...loadedDatasetRowsByLabelRef.current.keys()].sort((a, b) => a.localeCompare(b)));
       const existing = [...loadedDatasetRowsByLabelRef.current.values()].flat();
       if (existing.length > 0) {
-        knnRef.current = new KNNClassifier(existing, 3, 1.8);
+        knnRef.current = new KNNClassifier(existing, 3, KNN_IDLE_DIST_THRESHOLD);
       }
       return;
     }
@@ -1412,7 +1628,7 @@ export default function PlayArena({
       if (mergedRows.length <= 0) {
         throw new Error("dataset_empty");
       }
-      knnRef.current = new KNNClassifier(mergedRows, 3, 1.8);
+      knnRef.current = new KNNClassifier(mergedRows, 3, KNN_IDLE_DIST_THRESHOLD);
       setLoadedDatasetLabels([...loadedDatasetRowsByLabelRef.current.keys()].sort((a, b) => a.localeCompare(b)));
 
       if (datasetChecksumHint) {
@@ -2293,7 +2509,7 @@ export default function PlayArena({
 
     const mergedRows = [...hydratedRows.values()].flat();
     if (mergedRows.length > 0) {
-      knnRef.current = new KNNClassifier(mergedRows, 3, 1.8);
+      knnRef.current = new KNNClassifier(mergedRows, 3, KNN_IDLE_DIST_THRESHOLD);
       setLoadedDatasetLabels([...hydratedRows.keys()].sort((a, b) => a.localeCompare(b)));
       return;
     }
@@ -2304,6 +2520,8 @@ export default function PlayArena({
 
   const resetRunState = useCallback(() => {
     voteWindowRef.current = [];
+    voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
+    handSlotsRef.current = [null, null];
     currentStepRef.current = 0;
     signsLandedRef.current = 0;
     runStartRef.current = 0;
@@ -3261,6 +3479,8 @@ export default function PlayArena({
       fpsRef.current = 0;
       setFps(0);
       voteWindowRef.current = [];
+      voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
+      handSlotsRef.current = [null, null];
       latestLandmarksRef.current = [];
       sampleCtxRef.current = null;
       sampleCanvasRef.current = null;
@@ -3442,6 +3662,8 @@ export default function PlayArena({
       if (cameraFailureRef.current !== "none") {
         latestLandmarksRef.current = [];
         voteWindowRef.current = [];
+        voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
+        handSlotsRef.current = [null, null];
         sharinganPoseRef.current = null;
         sharinganFaceLandmarksRef.current = null;
         sharinganSmoothEyesRef.current = null;
@@ -3466,6 +3688,8 @@ export default function PlayArena({
       if (!shouldTrackHands) {
         latestLandmarksRef.current = [];
         voteWindowRef.current = [];
+        voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
+        handSlotsRef.current = [null, null];
         oneHandSinceRef.current = 0;
         oneHandAssistUnlockedStepRef.current = -1;
         sharinganBlinkHoldStartedAtRef.current = 0;
@@ -3589,15 +3813,17 @@ export default function PlayArena({
           ? { x: faceMotion.anchor.x, y: faceMotion.anchor.y, scale: 1 }
           : null
       ));
-      const { features, numHands } = buildFeatures(result);
+      const { features, numHands, imputedHands } = buildFeatures(result, handSlotsRef.current);
       setDetectedHands(numHands);
       const stepIdxForAssist = currentStepRef.current;
       const expectedStepSign = stepIdxForAssist < sequence.length ? sequence[stepIdxForAssist] : "";
       const assistModeEnabled = !restrictedSigns;
       const lowFpsAssistActive = isLikelyLowPowerMobile && fpsRef.current > 0 && fpsRef.current < LOW_FPS_ASSIST_THRESHOLD;
       const assistUnlockedForStep = assistModeEnabled && oneHandAssistUnlockedStepRef.current === stepIdxForAssist;
-      const requiresTwoHandsNow = restrictedSigns || (!assistUnlockedForStep && !(lowFpsAssistActive && !isRankMode));
-      const effectiveVoteMinConfidence = GAME_MIN_CONFIDENCE;
+      const requiresTwoHandsNow = restrictedSigns;
+      const effectiveVoteMinConfidence = restrictedSigns
+        ? GAME_MIN_CONFIDENCE
+        : (numHands >= 2 ? GAME_MIN_CONFIDENCE : ONE_HAND_PASS_GATE_MIN_CONFIDENCE);
       const sharinganBlinkClosed = blinkLeftScore > SHARINGAN_BLINK_THRESHOLD && blinkRightScore > SHARINGAN_BLINK_THRESHOLD;
 
       if (phaseNow !== "active") {
@@ -3672,7 +3898,7 @@ export default function PlayArena({
         return;
       }
 
-      if (requiresTwoHandsNow && numHands === 1) {
+      if (requiresTwoHandsNow && numHands > 0 && numHands < 2) {
         if (!oneHandSinceRef.current) {
           oneHandSinceRef.current = nowMs;
         } else if ((nowMs - oneHandSinceRef.current) >= TWO_HANDS_GUIDE_DELAY_MS && !showTwoHandsGuideRef.current) {
@@ -3719,6 +3945,7 @@ export default function PlayArena({
 
       if (features.length === 0) {
         voteWindowRef.current = [];
+        voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
         setRawDetectedLabel("No hands");
         setRawDetectedConfidence(0);
         setVoteHits(0);
@@ -3726,15 +3953,19 @@ export default function PlayArena({
         setDetectedConfidence(0);
       } else {
         const prediction = assistModeEnabled && numHands < 2
-          ? predictWithOneHandAssist(knn, result, features)
+          ? predictWithOneHandAssist(knn, result, features, expectedStepSign, lowFpsAssistActive)
           : knn.predictWithConfidence(features);
         rawLabel = normalizeLabel(prediction.label || "idle");
         rawConfidence = Math.max(0, Number(prediction.confidence || 0));
+        if (imputedHands > 0) {
+          rawConfidence *= imputedHands >= 2 ? 0.72 : 0.88;
+        }
 
         if (!isCalibrationMode && requiresTwoHandsNow && numHands < 2) {
           const matchedExpectedWithOneHand = expectedStepSign
             ? signsMatch(
               rawLabel,
+              rawConfidence,
               expectedStepSign,
               rawLabel,
               rawConfidence,
@@ -3745,6 +3976,7 @@ export default function PlayArena({
             oneHandAssistUnlockedStepRef.current = stepIdxForAssist;
           }
           voteWindowRef.current = [];
+          voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
           setRawDetectedLabel("Show both hands");
           setRawDetectedConfidence(0);
           setVoteHits(0);
@@ -3754,7 +3986,7 @@ export default function PlayArena({
         }
 
         const lightingPass = !isRankMode || lightingStatusRef.current === "good";
-        const allowDetection = lightingPass && (!requiresTwoHandsNow || numHands >= 2);
+        const allowDetection = lightingPass && numHands > 0 && (!requiresTwoHandsNow || numHands >= 2);
         const voteTtlMs = lowFpsAssistActive ? LOW_FPS_VOTE_TTL_MS : VOTE_TTL_MS;
         const vote = applyTemporalVote(
           voteWindowRef.current,
@@ -3766,9 +3998,13 @@ export default function PlayArena({
           voteTtlMs,
           activeCalibrationProfile.voteRequiredHits,
           effectiveVoteMinConfidence,
+          voteStableRef.current,
+          VOTE_OCCLUSION_GRACE_MS,
+          VOTE_REUSE_CONF_DECAY,
         );
 
         voteWindowRef.current = vote.nextWindow;
+        voteStableRef.current = vote.nextStableState;
         stableLabel = vote.label;
         stableConfidence = vote.confidence;
         setRawDetectedLabel(toDisplayLabel(rawLabel));
@@ -3818,6 +4054,7 @@ export default function PlayArena({
       const expected = sequence[stepIdx];
       if (!signsMatch(
         stableLabel,
+        stableConfidence,
         expected,
         rawLabel,
         rawConfidence,
@@ -4194,7 +4431,9 @@ export default function PlayArena({
     : "top-[102px] md:top-[56px]";
   const detectedConfidencePct = Math.round(detectedConfidence * 100);
   const rawDetectedConfidencePct = Math.round(rawDetectedConfidence * 100);
-  const effectiveVoteMinConfidence = GAME_MIN_CONFIDENCE;
+  const effectiveVoteMinConfidence = restrictedSigns
+    ? GAME_MIN_CONFIDENCE
+    : (detectedHands >= 2 ? GAME_MIN_CONFIDENCE : ONE_HAND_PASS_GATE_MIN_CONFIDENCE);
   const voteMinConfidencePct = Math.round(effectiveVoteMinConfidence * 100);
   const diagCalibrationText = isCalibrationMode && phase === "active"
     ? `CALIBRATING ${calibrationProgressPct}%`
@@ -4472,7 +4711,8 @@ export default function PlayArena({
                   <div>LIGHT: {lightingStatus.toUpperCase().replace("_", " ")}</div>
                   <div>VOTE {voteHits}/{VOTE_WINDOW_SIZE} • {detectedConfidencePct}%</div>
                   <div>PASS GATE: {activeCalibrationProfile.voteRequiredHits}/{VOTE_WINDOW_SIZE} @ {voteMinConfidencePct}%</div>
-                  <div>AUTO IDLE DIST: ON (thr=1.8)</div>
+                  <div>AUTO IDLE DIST: ON (2H={KNN_IDLE_DIST_THRESHOLD.toFixed(1)} • 1H={ONE_HAND_ASSIST_IDLE_THRESHOLD.toFixed(1)})</div>
+                  <div>1H EXPECT DIST: THR={ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD.toFixed(1)} • MARGIN={ONE_HAND_EXPECTED_IDLE_MARGIN.toFixed(2)}</div>
                   <div>{diagCalibrationText}</div>
                   <div>RAW: {rawDetectedLabel} {rawDetectedConfidencePct}%</div>
                   {effectLabel === "fire" && (
