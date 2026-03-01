@@ -577,6 +577,12 @@ function toDisplayLabel(label: string): string {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
+function isDistanceForcedIdle(label: string, confidence: number, distance: number): boolean {
+  const normalized = normalizeLabel(label);
+  const isIdle = normalized === "idle" || normalized === "unknown";
+  return isIdle && Number(confidence) <= 0 && Number.isFinite(distance);
+}
+
 function getHandednessLabel(result: HandsResultShape, handIndex: number): string {
   const handedness = result.handednesses ?? result.handedness ?? [];
   const first = handedness?.[handIndex]?.[0];
@@ -906,6 +912,32 @@ function predictWithOneHandAssist(
   }
 
   return best || { label: "idle", confidence: 0, distance: Number.POSITIVE_INFINITY };
+}
+
+function swapTwoHandFeatureOrder(features: number[]): number[] {
+  if (!Array.isArray(features) || features.length !== FULL_FEATURE_LENGTH) return features;
+  return [
+    ...features.slice(HAND_FEATURE_LENGTH),
+    ...features.slice(0, HAND_FEATURE_LENGTH),
+  ];
+}
+
+function pickBetterPrediction(
+  current: { label: string; confidence: number; distance: number },
+  candidate: { label: string; confidence: number; distance: number },
+): { label: string; confidence: number; distance: number } {
+  const currentLabel = normalizeLabel(current.label || "idle");
+  const candidateLabel = normalizeLabel(candidate.label || "idle");
+  const currentIdle = currentLabel === "idle" || currentLabel === "unknown";
+  const candidateIdle = candidateLabel === "idle" || candidateLabel === "unknown";
+
+  if (currentIdle && !candidateIdle) return candidate;
+  if (!currentIdle && candidateIdle) return current;
+  if (candidate.confidence > (current.confidence + 1e-6)) return candidate;
+  if (Math.abs(candidate.confidence - current.confidence) <= 1e-6 && candidate.distance < current.distance) {
+    return candidate;
+  }
+  return current;
 }
 
 function computeEffectAnchor(landmarks: Landmark[][]): EffectAnchor | null {
@@ -4106,11 +4138,26 @@ export default function PlayArena({
         setDetectedLabel("No hands");
         setDetectedConfidence(0);
       } else {
-        const prediction = assistModeEnabled && numHands < 2
-          ? predictWithOneHandAssist(knn, result, features, expectedStepSign, lowFpsAssistActive)
-          : knn.predictWithConfidence(features);
+        const prediction = (() => {
+          if (assistModeEnabled && numHands < 2) {
+            return predictWithOneHandAssist(knn, result, features, expectedStepSign, lowFpsAssistActive);
+          }
+          let best = knn.predictWithConfidence(features);
+          if (numHands >= 2 && features.length === FULL_FEATURE_LENGTH) {
+            const swappedFeatures = swapTwoHandFeatureOrder(features);
+            const swappedPrediction = knn.predictWithConfidence(swappedFeatures);
+            best = pickBetterPrediction(best, swappedPrediction);
+          }
+          return best;
+        })();
         rawLabel = normalizeLabel(prediction.label || "idle");
         rawConfidence = Math.max(0, Number(prediction.confidence || 0));
+        const oneHandDistanceForcedIdle = (
+          assistModeEnabled
+          && numHands > 0
+          && numHands < 2
+          && isDistanceForcedIdle(rawLabel, rawConfidence, Number(prediction.distance))
+        );
         if (imputedHands > 0) {
           rawConfidence *= imputedHands >= 2 ? 0.72 : 0.88;
         }
@@ -4167,10 +4214,11 @@ export default function PlayArena({
         voteStableRef.current = vote.nextStableState;
         stableLabel = vote.label;
         stableConfidence = vote.confidence;
-        setRawDetectedLabel(toDisplayLabel(rawLabel));
+        const stableIdle = normalizeLabel(vote.label) === "idle" || normalizeLabel(vote.label) === "unknown";
+        setRawDetectedLabel(oneHandDistanceForcedIdle ? "Idle (distance)" : toDisplayLabel(rawLabel));
         setRawDetectedConfidence(rawConfidence);
         setVoteHits(vote.hits);
-        setDetectedLabel(toDisplayLabel(vote.label));
+        setDetectedLabel(oneHandDistanceForcedIdle && stableIdle ? "Idle (distance)" : toDisplayLabel(vote.label));
         setDetectedConfidence(vote.confidence);
       }
 
