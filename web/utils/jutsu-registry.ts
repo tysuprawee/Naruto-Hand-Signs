@@ -1,4 +1,4 @@
-export type JutsuEffect = "fire" | "lightning" | "clone" | "water" | "eye" | "rasengan" | "reaper";
+export type JutsuEffect = "fire" | "lightning" | "clone" | "water" | "eye" | "rasengan" | "rasenshuriken" | "reaper";
 
 export interface ComboPart {
     name: string;
@@ -71,6 +71,15 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         effect: "rasengan",
         duration: 8.0,
         minLevel: 1,
+    },
+    Rasenshuriken: {
+        sequence: ["ram", "snake", "tiger", "ram", "bird"],
+        displayText: "WIND STYLE: RASENSHURIKEN!",
+        soundPath: "/sounds/rasenshuriken.mp3",
+        videoPath: null,
+        effect: "rasenshuriken",
+        duration: 10.0,
+        minLevel: 11,
     },
     Fireball: {
         sequence: ["horse", "snake", "ram", "monkey", "boar", "horse", "tiger"],

@@ -563,6 +563,7 @@ const LEADERBOARD_MODE_LIST = Object.entries(OFFICIAL_JUTSUS)
 const JUTSU_TEXTURES: Record<string, string> = {
   "Shadow Clone": "/pics/textured_buttons/shadow_clone.jpg",
   Rasengan: "/pics/textured_buttons/rasengan.jpg",
+  Rasenshuriken: "/pics/textured_buttons/rasenshuriken.jpg",
   Fireball: "/pics/textured_buttons/fireball.jpg",
   "Phoenix Flower": "/pics/textured_buttons/phoenix_flowers.jpg",
   "Shadow Clone + Chidori Combo": "/pics/textured_buttons/shadow_clone_chidori.jpg",
@@ -577,6 +578,7 @@ const JUTSU_TEXTURES: Record<string, string> = {
 const JUTSU_INFO_SUMMARIES: Record<string, string> = {
   "Shadow Clone": "Create solid clones to overwhelm your target and set up combo pressure.",
   Rasengan: "Concentrate chakra into a compressed sphere and drive it through the opponent.",
+  Rasenshuriken: "A wind-infused evolution of Rasengan that forms a spinning chakra shuriken with extreme cutting force.",
   Fireball: "A classic Uchiha fire release technique with wide area pressure and high impact.",
   "Phoenix Flower": "Rapid fire-style projectiles that spread to force movement and openings.",
   Chidori: "Lightning chakra focused into a piercing strike with explosive speed.",
@@ -595,6 +597,7 @@ const JUTSU_EFFECT_LABELS: Record<string, string> = {
   water: "Water Style",
   eye: "Dojutsu",
   rasengan: "Chakra Sphere",
+  rasenshuriken: "Wind Chakra Sphere",
   reaper: "Sealing Art",
 };
 

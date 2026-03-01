@@ -15,6 +15,7 @@ import { KNNClassifier, normalizeHand } from "@/utils/knn";
 import { OFFICIAL_JUTSUS } from "@/utils/jutsu-registry";
 import { getXpForLevel } from "@/utils/progression";
 import FireballThreeOverlay from "@/app/play/effects/fireball-three-overlay";
+import RasenshurikenOverlay from "@/app/play/effects/rasenshuriken-overlay";
 import SharinganCrowOverlay from "@/app/play/effects/sharingan-crow-overlay";
 import WaterDragonOverlay from "@/app/play/effects/water-dragon-overlay";
 import {
@@ -216,7 +217,7 @@ const DEBUG_HANDS_MIN_FPS = 10;
 const RENDER_FRAME_INTERVAL_MS = 1000 / 30;
 const LOW_FPS_VOTE_TTL_MS = 1400;
 const KNN_IDLE_DIST_THRESHOLD = 1.8;
-const ONE_HAND_PASS_GATE_MIN_CONFIDENCE = 0.60;
+const ONE_HAND_PASS_GATE_MIN_CONFIDENCE = 0.70;
 const ONE_HAND_ASSIST_IDLE_THRESHOLD = 3.2;
 const ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD = 2.4;
 const ONE_HAND_EXPECTED_IDLE_MARGIN = 0.18;
@@ -1730,6 +1731,17 @@ export default function PlayArena({
     return "";
   }, []);
 
+  const getJutsuSfxGain = useCallback((name: string, effectName: string): number => {
+    const cfg = OFFICIAL_JUTSUS[name];
+    const direct = normalizeLabel(String(cfg?.soundPath || ""));
+    const effectNorm = normalizeLabel(effectName);
+    const nameNorm = normalizeLabel(name);
+    if (direct.includes("rasenshuriken") || nameNorm.includes("rasenshuriken") || effectNorm === "rasenshuriken") {
+      return 0.58;
+    }
+    return 1;
+  }, []);
+
   const triggerJutsuSignature = useCallback((
     name: string,
     effectName: string,
@@ -1740,9 +1752,11 @@ export default function PlayArena({
     if (!path) return;
     const effectNorm = normalizeLabel(effectName);
     const baseDelay = Math.max(0, Math.floor(options?.delayMs ?? (effectNorm === "reaper" ? 0 : 500)));
-    const volume = options?.volume ?? 1;
+    const baseVolume = options?.volume ?? 1;
+    const gain = getJutsuSfxGain(name, effectName);
+    const volume = Math.max(0, Math.min(1, baseVolume * gain));
     queueSfx(path, baseDelay, volume);
-  }, [getJutsuSfxPath, noEffects, queueSfx]);
+  }, [getJutsuSfxGain, getJutsuSfxPath, noEffects, queueSfx]);
 
   const requiredSfxPaths = useMemo(() => {
     const paths = new Set<string>();
@@ -4617,6 +4631,8 @@ export default function PlayArena({
     ? 620
     : effectLabel === "rasengan"
       ? 520
+      : effectLabel === "rasenshuriken"
+        ? 560
       : 560;
   const effectSizePx = Math.max(280, Math.min(920, Math.round(effectBaseSize * effectScale)));
 
@@ -4998,6 +5014,16 @@ export default function PlayArena({
                         className="absolute inset-0 z-[2] h-full w-full object-cover"
                       />
                       <div className="absolute inset-0 z-[3] bg-gradient-to-br from-rose-900/18 via-red-700/10 to-black/20" />
+                    </div>
+                  )}
+                  {effectLabel === "rasenshuriken" && (
+                    <div className="absolute inset-0">
+                      <div className="absolute inset-0 bg-gradient-to-t from-cyan-900/28 via-sky-500/14 to-transparent" />
+                      <RasenshurikenOverlay
+                        leftPct={effectAnchorX}
+                        topPct={effectAnchorY}
+                        sizePx={effectSizePx}
+                      />
                     </div>
                   )}
                   {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideo && (
