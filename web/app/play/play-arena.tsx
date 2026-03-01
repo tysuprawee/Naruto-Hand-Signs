@@ -91,6 +91,7 @@ interface EffectAnchor {
   x: number;
   y: number;
   scale: number;
+  angleDeg: number;
 }
 
 interface HandSlotState {
@@ -242,6 +243,19 @@ const SHARINGAN_BLOOD_FRAME_RATE = 24;
 const SHARINGAN_POSE_POS_LERP = 0.42;
 const SHARINGAN_POSE_SIZE_LERP = 0.34;
 const SHARINGAN_POSE_ANGLE_LERP = 0.28;
+const EFFECT_ANCHOR_POS_LERP = 0.4;
+const EFFECT_ANCHOR_SCALE_LERP = 0.3;
+const EFFECT_ANCHOR_ANGLE_LERP = 0.3;
+const RASENSHURIKEN_FLOAT_DIST_MIN = 0.035;
+const RASENSHURIKEN_FLOAT_DIST_MAX = 0.095;
+const RASENSHURIKEN_FLOAT_DIST_BASE = 0.06;
+const RASENSHURIKEN_FLOAT_DIST_SCALE_FACTOR = 0.018;
+const RASENSHURIKEN_FLOAT_UP_MIN = 0.05;
+const RASENSHURIKEN_FLOAT_UP_MAX = 0.1;
+const RASENSHURIKEN_FLOAT_UP_BASE = 0.068;
+const RASENSHURIKEN_FLOAT_UP_SCALE_FACTOR = 0.014;
+const RASENSHURIKEN_DEFAULT_OFFSET_X_PCT = 0;
+const RASENSHURIKEN_DEFAULT_OFFSET_Y_PCT = 14.5;
 const SHARINGAN_LEFT_EYELID_INDICES = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
 const SHARINGAN_RIGHT_EYELID_INDICES = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
 const SHARINGAN_EYE_BLEND = 0.65;
@@ -961,15 +975,27 @@ function computeEffectAnchor(landmarks: Landmark[][]): EffectAnchor | null {
   const avgX = sumX / count;
   const avgY = sumY / count;
 
+  const wrist = hand[0] || hand[9];
+  const middleTip = hand[12] || hand[9] || hand[0];
   const p5 = hand[5] || hand[0];
   const p17 = hand[17] || hand[9] || hand[0];
   const palmSpan = Math.hypot((p5?.x || 0) - (p17?.x || 0), (p5?.y || 0) - (p17?.y || 0));
   const scale = clamp(palmSpan / 0.23, 0.75, 1.8);
+  const dirX = (middleTip?.x || avgX) - (wrist?.x || avgX);
+  const dirY = (middleTip?.y || avgY) - (wrist?.y || avgY);
+  const dirLen = Math.hypot(dirX, dirY);
+  const normDirX = dirLen > 1e-4 ? (dirX / dirLen) : 0;
+  const normDirY = dirLen > 1e-4 ? (dirY / dirLen) : -1;
+  const screenDirX = -normDirX;
+  const screenDirY = normDirY;
+  const rawAngleDeg = (Math.atan2(screenDirY, screenDirX) * 180 / Math.PI) + 90;
+  const angleDeg = Number.isFinite(rawAngleDeg) ? rawAngleDeg : 0;
 
   return {
     x: clamp(1 - avgX, 0.02, 0.98),
     y: clamp(avgY, 0.06, 0.94),
     scale,
+    angleDeg,
   };
 }
 
@@ -1134,6 +1160,16 @@ function smoothSharinganVisualPose(
       widthPct: lerpValue(previous.rightBlood.widthPct, next.rightBlood.widthPct, SHARINGAN_POSE_SIZE_LERP),
       heightPct: lerpValue(previous.rightBlood.heightPct, next.rightBlood.heightPct, SHARINGAN_POSE_SIZE_LERP),
     },
+  };
+}
+
+function smoothEffectAnchor(previous: EffectAnchor | null, next: EffectAnchor): EffectAnchor {
+  if (!previous) return next;
+  return {
+    x: clamp(lerpValue(previous.x, next.x, EFFECT_ANCHOR_POS_LERP), 0.02, 0.98),
+    y: clamp(lerpValue(previous.y, next.y, EFFECT_ANCHOR_POS_LERP), 0.06, 0.94),
+    scale: clamp(lerpValue(previous.scale, next.scale, EFFECT_ANCHOR_SCALE_LERP), 0.7, 2),
+    angleDeg: lerpAngleDeg(previous.angleDeg, next.angleDeg, EFFECT_ANCHOR_ANGLE_LERP),
   };
 }
 
@@ -3987,11 +4023,14 @@ export default function PlayArena({
       setHeadYaw(faceMotion.yaw);
       setHeadPitch(faceMotion.pitch);
       const handAnchor = computeEffectAnchor(result.landmarks ?? []);
-      setEffectAnchor(handAnchor || (
+      const nextAnchor = handAnchor || (
         faceMotion.anchor
-          ? { x: faceMotion.anchor.x, y: faceMotion.anchor.y, scale: 1 }
+          ? { x: faceMotion.anchor.x, y: faceMotion.anchor.y, scale: 1, angleDeg: 0 }
           : null
-      ));
+      );
+      const smoothedAnchor = nextAnchor ? smoothEffectAnchor(effectAnchorRef.current, nextAnchor) : null;
+      effectAnchorRef.current = smoothedAnchor;
+      setEffectAnchor(smoothedAnchor);
       const { features, numHands, imputedHands } = buildFeatures(result, handSlotsRef.current);
       setDetectedHands(numHands);
       const stepIdxForAssist = currentStepRef.current;
@@ -4649,8 +4688,10 @@ export default function PlayArena({
     ? `CALIBRATING ${calibrationProgressPct}%`
     : "PRESS C TO CALIBRATE";
   const cameraStatusText = cameraFailure === "none" ? "OK" : cameraFailure.toUpperCase();
-  const effectAnchorX = Math.round((effectAnchor?.x ?? 0.5) * 1000) / 10;
-  const effectAnchorY = Math.round((effectAnchor?.y ?? 0.64) * 1000) / 10;
+  const effectAnchorNormX = effectAnchor?.x ?? 0.5;
+  const effectAnchorNormY = effectAnchor?.y ?? 0.64;
+  const effectAnchorX = Math.round(effectAnchorNormX * 1000) / 10;
+  const effectAnchorY = Math.round(effectAnchorNormY * 1000) / 10;
   const faceAnchorSampleNowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
   const stickyFaceAnchor = lastGoodFaceAnchorRef.current
     && (faceAnchorSampleNowMs - lastGoodFaceAnchorAtRef.current) <= FACE_ANCHOR_STICKY_MS
@@ -4675,6 +4716,35 @@ export default function PlayArena({
     : "none";
   const lowFpsAssistActive = isLikelyLowPowerMobile && fps > 0 && fps < LOW_FPS_ASSIST_THRESHOLD;
   const effectScale = effectAnchor?.scale ?? 1;
+  const effectFollowAngleDeg = effectAnchor?.angleDeg ?? 0;
+  const rasenshurikenManualOffsetX = clamp(RASENSHURIKEN_DEFAULT_OFFSET_X_PCT / 100, -0.3, 0.3);
+  const rasenshurikenManualOffsetY = clamp(RASENSHURIKEN_DEFAULT_OFFSET_Y_PCT / 100, -0.3, 0.3);
+  const rasenshurikenFloatDist = clamp(
+    RASENSHURIKEN_FLOAT_DIST_BASE + ((effectScale - 1) * RASENSHURIKEN_FLOAT_DIST_SCALE_FACTOR),
+    RASENSHURIKEN_FLOAT_DIST_MIN,
+    RASENSHURIKEN_FLOAT_DIST_MAX,
+  );
+  const rasenshurikenFloatUp = clamp(
+    RASENSHURIKEN_FLOAT_UP_BASE + ((effectScale - 1) * RASENSHURIKEN_FLOAT_UP_SCALE_FACTOR),
+    RASENSHURIKEN_FLOAT_UP_MIN,
+    RASENSHURIKEN_FLOAT_UP_MAX,
+  );
+  const rasenshurikenAngleRad = ((effectFollowAngleDeg - 90) * Math.PI) / 180;
+  const rasenshurikenDirX = Math.cos(rasenshurikenAngleRad);
+  const rasenshurikenAnchorNormX = clamp(
+    effectAnchorNormX + (rasenshurikenDirX * rasenshurikenFloatDist * 0.42) + rasenshurikenManualOffsetX,
+    0.02,
+    0.98,
+  );
+  const rasenshurikenAnchorNormY = clamp(
+    effectAnchorNormY
+      - rasenshurikenFloatUp
+      - rasenshurikenManualOffsetY,
+    0.06,
+    0.94,
+  );
+  const rasenshurikenAnchorX = Math.round(rasenshurikenAnchorNormX * 1000) / 10;
+  const rasenshurikenAnchorY = Math.round(rasenshurikenAnchorNormY * 1000) / 10;
   const effectBaseSize = effectLabel === "lightning"
     ? 620
     : effectLabel === "rasengan"
@@ -5068,8 +5138,8 @@ export default function PlayArena({
                     <div className="absolute inset-0">
                       <div className="absolute inset-0 bg-gradient-to-t from-cyan-900/28 via-sky-500/14 to-transparent" />
                       <RasenshurikenOverlay
-                        leftPct={effectAnchorX}
-                        topPct={effectAnchorY}
+                        leftPct={rasenshurikenAnchorX}
+                        topPct={rasenshurikenAnchorY}
                         sizePx={effectSizePx}
                       />
                     </div>

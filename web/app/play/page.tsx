@@ -3046,6 +3046,7 @@ function PlayPageInner() {
         ram_tiger_shared: DEFAULT_SETTINGS.ramTigerShared,
         easy_mode: DEFAULT_SETTINGS.easyMode,
         resolution_idx: DEFAULT_SETTINGS.resolutionIdx,
+        no_effects: DEFAULT_SETTINGS.noEffects,
         fullscreen: DEFAULT_SETTINGS.fullscreen,
       },
     });
@@ -3233,6 +3234,7 @@ function PlayPageInner() {
         restrictedSigns: cloud.restricted_signs ?? cloud.restrictedSigns,
         ramTigerShared: cloud.ram_tiger_shared ?? cloud.ramTigerShared,
         resolutionIdx: Number(cloud.resolution_idx ?? cloud.resolutionIdx),
+        noEffects: cloud.no_effects ?? cloud.noEffects,
         fullscreen: cloud.fullscreen,
       });
       setSavedSettings(cloudSettings);
@@ -3580,6 +3582,7 @@ function PlayPageInner() {
           ram_tiger_shared: next.ramTigerShared,
           easy_mode: false,
           resolution_idx: next.resolutionIdx,
+          no_effects: next.noEffects,
           fullscreen: next.fullscreen,
         },
       });
@@ -6043,6 +6046,24 @@ function PlayPageInner() {
                       onChange={(event) => {
                         const checked = event.target.checked;
                         setDraftSettings((prev) => ({ ...prev, ramTigerShared: checked }));
+                      }}
+                      className="h-4 w-4 accent-orange-500"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between gap-3 rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
+                    <span className="flex flex-col">
+                      <span>{t("settings.animations", "Animations")}</span>
+                      <span className="text-xs text-zinc-400">
+                        {t("settings.animationsHint", "Turn jutsu visual effects on or off.")}
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={!draftSettings.noEffects}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setDraftSettings((prev) => ({ ...prev, noEffects: !checked }));
                       }}
                       className="h-4 w-4 accent-orange-500"
                     />

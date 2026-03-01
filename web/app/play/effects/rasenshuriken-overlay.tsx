@@ -44,6 +44,7 @@ export default function RasenshurikenOverlay({
         top: `${topPct}%`,
         width: `${clampedSize}px`,
         height: `${clampedSize}px`,
+        transform: "translate(-50%, -50%)",
       }}
     >
       <div className="rsk-scene">
@@ -64,7 +65,6 @@ export default function RasenshurikenOverlay({
       <style jsx>{`
         .rsk-effect {
           position: absolute;
-          transform: translate(-50%, -50%);
           transform-style: preserve-3d;
           pointer-events: none;
           z-index: 5;
