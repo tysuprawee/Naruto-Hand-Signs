@@ -11,6 +11,7 @@ import {
   ArrowRight,
   ChevronLeft,
   ChevronRight,
+  Info,
   Loader2,
   LogOut,
   Maximize,
@@ -210,6 +211,7 @@ const MENU_MUTE_STORAGE_KEY = "jutsu-play-menu-mute-v1";
 const PENDING_RANK_QUEUE_PREFIX = "jutsu-play-pending-rank-submit-v1";
 const CALIBRATION_SKIP_PREFIX = "jutsu-play-calibration-skip-v1";
 const RETENTION_STORAGE_PREFIX = "jutsu-play-retention-v1";
+const DISCORD_INVITE_URL = "https://discord.gg/7xBQ22SnN2";
 const PENDING_RANK_QUEUE_MAX = 20;
 const PENDING_RANK_REPLAY_BATCH = 4;
 const DAILY_MISSION_TARGET_SECONDS = 180;
@@ -608,6 +610,7 @@ const JUTSU_TEXTURES: Record<string, string> = {
   "Water Dragon": "/pics/textured_buttons/water_dragon.jpg",
   Sharingan: "/pics/textured_buttons/sharingan.jpg",
   "Mangekyou Sharingan": "/effects/m_sharingan.jpg",
+  Amaterasu: "/effects/amaterasu.jpg",
   "Reaper Death Seal": "/pics/textured_buttons/reaper_death.jpg",
 };
 
@@ -621,6 +624,7 @@ const JUTSU_INFO_SUMMARIES: Record<string, string> = {
   "Water Dragon": "A long-form water release sequence that summons a crushing dragon torrent.",
   Sharingan: "Heightened visual perception to read movement and react ahead of time.",
   "Mangekyou Sharingan": "An evolved ocular state with advanced visual control and pressure effects.",
+  Amaterasu: "Manifest black flames that cling to the target with relentless burning pressure.",
   "Reaper Death Seal": "Forbidden sealing art with a heavy cost and extreme finishing power.",
   "Shadow Clone + Rasengan Combo": "Deploy clones first, then collapse the angle with synchronized Rasengan.",
   "Shadow Clone + Chidori Combo": "Split with clones, then chain into lightning finish from converging lanes.",
@@ -635,6 +639,7 @@ const JUTSU_EFFECT_LABELS: Record<string, string> = {
   rasengan: "Chakra Sphere",
   rasenshuriken: "Wind Chakra Sphere",
   reaper: "Sealing Art",
+  amaterasu: "Black Flames",
 };
 
 const MASTERY_ICON_BY_TIER: Record<"none" | "bronze" | "silver" | "gold", string> = {
@@ -1916,6 +1921,40 @@ function LockedPanel({
       >
         {joinLabel}
       </a>
+    </div>
+  );
+}
+
+function SpinningShuriken({
+  className = "",
+  size = 20,
+  speedSec = 1.6,
+}: {
+  className?: string;
+  size?: number;
+  speedSec?: number;
+}) {
+  const starSize = Math.max(10, Math.round(size));
+  const gap = Math.max(6, Math.round(starSize * 0.5));
+  const rowWidth = (starSize * 3) + (gap * 2);
+
+  const starStyle = {
+    background: "linear-gradient(180deg, #cbd5e1, #64748b)",
+    clipPath: "polygon(50% 0%, 63% 35%, 100% 50%, 63% 65%, 50% 100%, 37% 65%, 0% 50%, 37% 35%)",
+    boxShadow: "0 0 14px rgba(148, 163, 184, 0.6)",
+  } as const;
+
+  return (
+    <div
+      className={`pointer-events-none absolute ${className}`}
+      style={{ width: rowWidth, height: starSize }}
+      aria-hidden
+    >
+      <div className="flex h-full w-full items-center justify-center" style={{ gap }}>
+        <div className="animate-spin" style={{ ...starStyle, width: starSize, height: starSize, animationDuration: `${speedSec * 0.84}s` }} />
+        <div className="animate-spin" style={{ ...starStyle, width: starSize, height: starSize, animationDuration: `${speedSec * 0.66}s` }} />
+        <div className="animate-spin" style={{ ...starStyle, width: starSize, height: starSize, animationDuration: `${speedSec * 0.94}s` }} />
+      </div>
     </div>
   );
 }
@@ -4795,6 +4834,21 @@ function PlayPageInner() {
                         className="h-[22px] w-[22px] object-contain"
                       />
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        playUiClickSfx();
+                        setView("about");
+                      }}
+                      onMouseEnter={playUiHoverSfx}
+                      onFocus={playUiHoverSfx}
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-ninja-border bg-black/35 text-zinc-100 hover:border-ninja-accent/45 hover:bg-black/55"
+                      aria-label={t("menu.about", "About")}
+                      title={t("menu.about", "About")}
+                    >
+                      <Info className="h-[18px] w-[18px]" />
+                    </button>
                   </div>
                 </div>
 
@@ -4833,6 +4887,20 @@ function PlayPageInner() {
                     type="button"
                     onClick={() => {
                       playUiClickSfx();
+                      if (typeof window !== "undefined") {
+                        window.open(DISCORD_INVITE_URL, "_blank", "noopener,noreferrer");
+                      }
+                    }}
+                    onMouseEnter={playUiHoverSfx}
+                    onFocus={playUiHoverSfx}
+                    className="flex h-10 w-full items-center justify-center rounded-lg border border-indigo-300/40 bg-indigo-500/12 text-xs font-black tracking-[0.16em] text-indigo-200 transition hover:border-indigo-200/60 hover:bg-indigo-500/22"
+                  >
+                    {t("menu.joinDiscord", "JOIN DISCORD")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playUiClickSfx();
                       setDraftSettings(savedSettings);
                       setView("settings");
                     }}
@@ -4856,18 +4924,6 @@ function PlayPageInner() {
                   >
                     <Sparkles className="h-5 w-5" />
                     {t("menu.tutorial", "TUTORIAL")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      playUiClickSfx();
-                      setView("about");
-                    }}
-                    onMouseEnter={playUiHoverSfx}
-                    onFocus={playUiHoverSfx}
-                    className="flex h-14 w-full items-center justify-center rounded-xl border border-ninja-border bg-ninja-card text-base font-black tracking-wide text-zinc-100 transition hover:border-ninja-accent/40 hover:bg-ninja-hover"
-                  >
-                    {t("menu.about", "ABOUT")}
                   </button>
                   <button
                     type="button"
@@ -6534,6 +6590,9 @@ function PlayPageInner() {
                 className="pointer-events-none absolute inset-[2px] rounded-[18px] border"
                 style={{ borderColor: "rgba(255, 200, 80, 0.32)" }}
               />
+              <SpinningShuriken className="left-1/2 top-3 -translate-x-1/2 opacity-75" size={20} speedSec={1.55} />
+
+              <div className="relative z-10">
 
               <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 220, 80)" }}>
                 {masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null
@@ -6630,6 +6689,7 @@ function PlayPageInner() {
               >
                 {t("common.continue", "Continue")}
               </button>
+              </div>
             </div>
           </div>
         )
@@ -6649,6 +6709,7 @@ function PlayPageInner() {
               <div className="pointer-events-none absolute -left-20 -top-16 h-48 w-48 rounded-full bg-amber-300/22 blur-3xl" />
               <div className="pointer-events-none absolute -right-20 -bottom-16 h-52 w-52 rounded-full bg-cyan-300/18 blur-3xl" />
               <div className="pointer-events-none absolute inset-[2px] rounded-[24px] border border-amber-100/18" />
+              <SpinningShuriken className="left-1/2 top-3 -translate-x-1/2 opacity-75" size={20} speedSec={1.5} />
 
               <button
                 type="button"
@@ -6837,6 +6898,7 @@ function PlayPageInner() {
               <div className="pointer-events-none absolute -left-16 -top-16 h-48 w-48 rounded-full bg-orange-300/25 blur-3xl" />
               <div className="pointer-events-none absolute -right-20 -bottom-20 h-52 w-52 rounded-full bg-cyan-300/14 blur-3xl" />
               <div className="pointer-events-none absolute inset-[2px] rounded-[22px] border border-orange-100/18" />
+              <SpinningShuriken className="left-1/2 top-3 -translate-x-1/2 opacity-75" size={20} speedSec={1.45} />
 
               <div className="relative">
                 <div className="flex flex-wrap items-center justify-center gap-2">

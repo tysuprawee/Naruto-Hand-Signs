@@ -1,4 +1,4 @@
-export type JutsuEffect = "fire" | "lightning" | "clone" | "water" | "eye" | "rasengan" | "rasenshuriken" | "reaper";
+export type JutsuEffect = "fire" | "lightning" | "clone" | "water" | "eye" | "rasengan" | "rasenshuriken" | "reaper" | "amaterasu";
 
 export interface ComboPart {
     name: string;
@@ -62,6 +62,15 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         effect: "reaper",
         duration: 7.0,
         minLevel: 12,
+    },
+    Amaterasu: {
+        sequence: ["snake", "ram", "tiger", "bird"],
+        displayText: "BLACK FLAMES: AMATERASU!",
+        soundPath: "/sounds/fireball.mp3",
+        videoPath: null,
+        effect: "amaterasu",
+        duration: 7.0,
+        minLevel: 13,
     },
     "Rasengan": {
         sequence: ["ram"],

@@ -18,6 +18,7 @@ import FireballThreeOverlay from "@/app/play/effects/fireball-three-overlay";
 import RasenshurikenOverlay from "@/app/play/effects/rasenshuriken-overlay";
 import SharinganCrowOverlay from "@/app/play/effects/sharingan-crow-overlay";
 import WaterDragonOverlay from "@/app/play/effects/water-dragon-overlay";
+import FireShader from "@/app/components/fire-shader";
 import {
   applyTemporalVote,
   DEFAULT_FILTERS,
@@ -1481,7 +1482,7 @@ export default function PlayArena({
   );
   const shouldPrioritizeFaceAnchor = useMemo(
     () => !isCalibrationMode
-      && normalizeLabel(String(jutsu?.effect || "")) === "fire",
+      && ["fire", "amaterasu"].includes(normalizeLabel(String(jutsu?.effect || ""))),
     [isCalibrationMode, jutsu?.effect],
   );
   const sequence = useMemo(() => (jutsu?.sequence ?? []).map((s) => normalizeLabel(s)), [jutsu]);
@@ -4925,7 +4926,32 @@ export default function PlayArena({
         mp4: "/effects/rasengan.mp4",
       }
       : null;
+  const supportsWebmVideo = useMemo(() => {
+    if (typeof document === "undefined") return false;
+    try {
+      const videoEl = document.createElement("video");
+      const checks = [
+        'video/webm; codecs="vp9"',
+        'video/webm; codecs="vp8, vorbis"',
+        "video/webm",
+      ];
+      return checks.some((mime) => {
+        const result = videoEl.canPlayType(mime);
+        return result === "probably" || result === "maybe";
+      });
+    } catch {
+      return false;
+    }
+  }, []);
+  const powerEffectToken = effectLabel === "lightning" || effectLabel === "rasengan" ? effectLabel : "";
+  const shouldUsePowerVideo = Boolean(
+    powerEffectToken
+    && effectVideo
+    && supportsWebmVideo
+    && !isLikelyLowPowerMobile,
+  );
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
+  const isAmaterasuEffect = effectLabel === "amaterasu";
   const showMangekyouTunePanel = false;
   const detectedLabelUi = localizeArenaText(detectedLabel);
   const rawDetectedLabelUi = localizeArenaText(rawDetectedLabel);
@@ -5295,7 +5321,7 @@ export default function PlayArena({
                   <div>1H EXPECT DIST: THR={ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD.toFixed(1)} • MARGIN={ONE_HAND_EXPECTED_IDLE_MARGIN.toFixed(2)}</div>
                   <div>{diagCalibrationText}</div>
                   <div>{t("play.raw", "RAW")}: {rawDetectedLabelUi} {rawDetectedConfidencePct}%</div>
-                  {effectLabel === "fire" && (
+                  {(effectLabel === "fire" || effectLabel === "amaterasu") && (
                     <>
                       <div>MOUTH: X {fireAnchorX.toFixed(1)}% • Y {fireAnchorY.toFixed(1)}%</div>
                       <div>FIRE OFF: X {fireOffsetX.toFixed(1)}% • Y {fireOffsetY.toFixed(1)}%</div>
@@ -5509,6 +5535,33 @@ export default function PlayArena({
                       ))}
                     </div>
                   )}
+                  {isAmaterasuEffect && (
+                    <div className="absolute inset-0">
+                      <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/55 via-black/35 to-black/72" />
+                      <div
+                        className="absolute inset-0 mix-blend-multiply opacity-95"
+                        style={{
+                          WebkitMaskImage:
+                            "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.98) 20%, rgba(0,0,0,0.92) 58%, rgba(0,0,0,0.35) 78%, rgba(0,0,0,0) 100%)",
+                          maskImage:
+                            "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.98) 20%, rgba(0,0,0,0.92) 58%, rgba(0,0,0,0.35) 78%, rgba(0,0,0,0) 100%)",
+                        }}
+                      >
+                        <FireShader className="h-full w-full" height="100%" opacity={1} enableAudio={false} />
+                      </div>
+                      <div
+                        className="absolute rounded-full bg-black/80 blur-3xl"
+                        style={{
+                          width: "240px",
+                          height: "240px",
+                          left: `${fireFinalX}%`,
+                          top: `${Math.max(8, fireFinalY - 5)}%`,
+                          transform: "translate(-50%, -50%)",
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-br from-black/45 via-transparent to-zinc-950/62" />
+                    </div>
+                  )}
                   {effectLabel === "reaper" && (
                     <div className="absolute inset-0">
                       <canvas
@@ -5528,29 +5581,63 @@ export default function PlayArena({
                       />
                     </div>
                   )}
-                  {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideo && (
+                  {(effectLabel === "lightning" || effectLabel === "rasengan") && (
                     <div className="absolute inset-0">
-                      {powerEffectAnchors.map((anchor, idx) => (
-                        <video
-                          key={`effect-${effectLabel}-${comboTripleEffect}-${idx}`}
-                          autoPlay
-                          muted
-                          loop
-                          playsInline
-                          className="absolute object-contain opacity-80 mix-blend-screen"
-                          style={{
-                            width: `${effectSizePx}px`,
-                            height: `${effectSizePx}px`,
-                            left: `${anchor.xPct}%`,
-                            top: `${anchor.yPct}%`,
-                            transform: "translate(-50%, -50%)",
-                            filter: "brightness(1.15) contrast(1.3) saturate(1.2)",
-                          }}
-                        >
-                          <source src={effectVideo.webm} type="video/webm" />
-                          <source src={effectVideo.mp4} type="video/mp4" />
-                        </video>
-                      ))}
+                      {shouldUsePowerVideo && effectVideo ? (
+                        powerEffectAnchors.map((anchor, idx) => (
+                          <video
+                            key={`effect-${effectLabel}-${comboTripleEffect}-${idx}`}
+                            autoPlay
+                            muted
+                            loop
+                            playsInline
+                            className="absolute object-contain opacity-80 mix-blend-screen"
+                            style={{
+                              width: `${effectSizePx}px`,
+                              height: `${effectSizePx}px`,
+                              left: `${anchor.xPct}%`,
+                              top: `${anchor.yPct}%`,
+                              transform: "translate(-50%, -50%)",
+                              filter: "brightness(1.15) contrast(1.3) saturate(1.2)",
+                            }}
+                          >
+                            <source src={effectVideo.webm} type="video/webm" />
+                            <source src={effectVideo.mp4} type="video/mp4" />
+                          </video>
+                        ))
+                      ) : (
+                        powerEffectAnchors.map((anchor, idx) => (
+                          <div
+                            key={`effect-fallback-${effectLabel}-${comboTripleEffect}-${idx}`}
+                            className="absolute mix-blend-screen"
+                            style={{
+                              width: `${effectSizePx}px`,
+                              height: `${effectSizePx}px`,
+                              left: `${anchor.xPct}%`,
+                              top: `${anchor.yPct}%`,
+                              transform: "translate(-50%, -50%)",
+                            }}
+                          >
+                            {effectLabel === "lightning" ? (
+                              <>
+                                <div className="absolute inset-[30%] rounded-full bg-sky-100/60 blur-xl" />
+                                <div className="absolute inset-[24%] rounded-full border border-cyan-100/75 opacity-80 animate-spin" style={{ animationDuration: "1.2s" }} />
+                                <div className="absolute left-1/2 top-1/2 h-[78%] w-[4px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-b from-transparent via-sky-100 to-transparent opacity-90 animate-pulse" />
+                                <div className="absolute left-1/2 top-1/2 h-[74%] w-[4px] -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-full bg-gradient-to-b from-transparent via-cyan-200 to-transparent opacity-85 animate-pulse" />
+                                <div className="absolute left-1/2 top-1/2 h-[72%] w-[4px] -translate-x-1/2 -translate-y-1/2 -rotate-45 rounded-full bg-gradient-to-b from-transparent via-blue-100 to-transparent opacity-80 animate-pulse" />
+                              </>
+                            ) : (
+                              <>
+                                <div className="absolute inset-[26%] rounded-full bg-cyan-100/35 blur-xl" />
+                                <div className="absolute inset-[22%] rounded-full border border-cyan-100/70 opacity-80 animate-spin" style={{ animationDuration: "1.05s" }} />
+                                <div className="absolute inset-[30%] rounded-full border border-sky-300/75 opacity-75 animate-spin" style={{ animationDirection: "reverse", animationDuration: "0.75s" }} />
+                                <div className="absolute inset-[36%] rounded-full border border-blue-200/70 opacity-70 animate-spin" style={{ animationDuration: "0.62s" }} />
+                                <div className="absolute inset-[41%] rounded-full bg-white/85 blur-[2px]" />
+                              </>
+                            )}
+                          </div>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
