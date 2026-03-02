@@ -103,6 +103,15 @@ export async function POST(request: Request): Promise<Response> {
         p_user_agent: userAgent,
         p_ip: ip,
       };
+    } else if (action === "reports_list") {
+      rpcName = "admin_get_user_reports";
+      rpcPayload = {
+        p_password: password,
+        p_limit: Math.max(1, Math.min(300, Number(body.limit ?? 120) || 120)),
+        p_client_id: clientId,
+        p_user_agent: userAgent,
+        p_ip: ip,
+      };
     } else {
       return toErrorResponse(400, { ok: false, reason: "invalid_action" });
     }

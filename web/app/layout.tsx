@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import CursorGuard from "./cursor-guard";
 import AnalyticsTracker from "./analytics-tracker";
+import ReportWidget from "./components/report-widget";
 
 import { ModalProvider } from "./components/modal-provider";
 import { LanguageProvider } from "./components/language-provider";
@@ -26,6 +27,7 @@ export default function RootLayout({
             <BackgroundMusicProvider>
               <CursorGuard />
               <AnalyticsTracker />
+              <ReportWidget />
               {children}
             </BackgroundMusicProvider>
           </ModalProvider>

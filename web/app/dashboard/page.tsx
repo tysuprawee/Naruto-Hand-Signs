@@ -125,6 +125,16 @@ interface ConfigRow {
   createdAt: string;
 }
 
+interface ReportRow {
+  id: string;
+  reportText: string;
+  pagePath: string;
+  userAgent: string;
+  authUserId: string;
+  status: string;
+  createdAt: string;
+}
+
 interface ConfigFormState {
   type: "announcement" | "maintenance" | "version" | "dataset";
   message: string;
@@ -354,6 +364,21 @@ function parseConfigRows(raw: unknown): ConfigRow[] {
     }));
 }
 
+function parseReportRows(raw: unknown): ReportRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(isRecord)
+    .map((row) => ({
+      id: toText(row.id),
+      reportText: toText(row.report_text),
+      pagePath: toText(row.page_path),
+      userAgent: toText(row.user_agent),
+      authUserId: toText(row.auth_user_id),
+      status: toText(row.status) || "new",
+      createdAt: toText(row.created_at),
+    }));
+}
+
 function buildSparkline(values: number[]): string {
   if (values.length <= 0) return "";
   const width = 160;
@@ -398,6 +423,7 @@ export default function AdminDashboardPage() {
   const [password, setPassword] = useState("");
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [configRows, setConfigRows] = useState<ConfigRow[]>([]);
+  const [reportRows, setReportRows] = useState<ReportRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [configBusy, setConfigBusy] = useState(false);
   const [error, setError] = useState("");
@@ -444,6 +470,18 @@ export default function AdminDashboardPage() {
     return detail || reason || "Request failed.";
   };
 
+  const isReportsUnavailableError = (json: unknown): boolean => {
+    if (!isRecord(json)) return false;
+    const reason = toText(json.reason).toLowerCase();
+    const detail = toText(json.detail).toLowerCase();
+    if (reason === "missing_user_reports_table" || reason === "missing_admin_stats_function") {
+      return true;
+    }
+    return reason === "rpc_error"
+      && detail.includes("admin_get_user_reports")
+      && detail.includes("does not exist");
+  };
+
   const loadStats = async (): Promise<boolean> => {
     const { res, json } = await apiPost({
       action: "stats",
@@ -474,6 +512,25 @@ export default function AdminDashboardPage() {
     return true;
   };
 
+  const loadReportRows = async (): Promise<boolean> => {
+    const { res, json } = await apiPost({
+      action: "reports_list",
+      password,
+      limit: 120,
+    });
+    if (!res.ok || !isRecord(json) || !Boolean(json.ok)) {
+      if (isReportsUnavailableError(json)) {
+        setReportRows([]);
+        return true;
+      }
+      setError(handleApiError(json));
+      setReportRows([]);
+      return false;
+    }
+    setReportRows(parseReportRows(json.rows));
+    return true;
+  };
+
   const openDashboard = async (event?: FormEvent<HTMLFormElement>) => {
     if (event) event.preventDefault();
     if (!password.trim()) {
@@ -484,8 +541,8 @@ export default function AdminDashboardPage() {
     setBusy(true);
     setError("");
     try {
-      const [statsOk, configOk] = await Promise.all([loadStats(), loadConfigRows()]);
-      if (!statsOk || !configOk) return;
+      const [statsOk, configOk, reportsOk] = await Promise.all([loadStats(), loadConfigRows(), loadReportRows()]);
+      if (!statsOk || !configOk || !reportsOk) return;
     } catch (err) {
       setError(String((err as Error)?.message || err || "Request failed."));
     } finally {
@@ -498,7 +555,7 @@ export default function AdminDashboardPage() {
     setBusy(true);
     setError("");
     try {
-      await Promise.all([loadStats(), loadConfigRows()]);
+      await Promise.all([loadStats(), loadConfigRows(), loadReportRows()]);
     } finally {
       setBusy(false);
     }
@@ -592,6 +649,7 @@ export default function AdminDashboardPage() {
               onClick={() => {
                 setDashboard(null);
                 setConfigRows([]);
+                setReportRows([]);
                 setError("");
                 setRetrySeconds(0);
               }}
@@ -909,6 +967,62 @@ export default function AdminDashboardPage() {
                 </div>
               </section>
             </div>
+
+            <section className="rounded-xl border border-white/15 bg-black/25 p-4">
+              <h2 className="text-sm font-black tracking-[0.14em] text-zinc-200">User Reports</h2>
+              <p className="mt-1 text-xs text-zinc-400">Submitted from the floating report button across pages.</p>
+              <div className="mt-3 max-h-[420px] overflow-auto rounded-lg border border-white/10">
+                <table className="w-full min-w-[980px] text-xs">
+                  <thead>
+                    <tr className="border-b border-white/10 bg-black/35 text-left uppercase tracking-[0.12em] text-zinc-400">
+                      <th className="px-2 py-2">Created</th>
+                      <th className="px-2 py-2">Status</th>
+                      <th className="px-2 py-2">Report</th>
+                      <th className="px-2 py-2">Page</th>
+                      <th className="px-2 py-2">User ID</th>
+                      <th className="px-2 py-2">User Agent</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportRows.map((row) => (
+                      <tr key={`${row.id}-${row.createdAt}`} className="border-b border-white/5 align-top">
+                        <td className="whitespace-nowrap px-2 py-2 text-zinc-300">
+                          {row.createdAt ? new Date(row.createdAt).toLocaleString() : "-"}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2">
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] ${
+                            row.status === "resolved"
+                              ? "bg-emerald-500/20 text-emerald-200"
+                              : row.status === "reviewing"
+                                ? "bg-amber-500/20 text-amber-200"
+                                : row.status === "spam"
+                                  ? "bg-red-500/20 text-red-200"
+                                  : "bg-sky-500/20 text-sky-200"
+                          }`}>
+                            {row.status}
+                          </span>
+                        </td>
+                        <td className="max-w-[320px] whitespace-pre-wrap px-2 py-2 text-zinc-100">{row.reportText || "-"}</td>
+                        <td className="max-w-[150px] truncate px-2 py-2 text-zinc-300" title={row.pagePath}>
+                          {row.pagePath || "-"}
+                        </td>
+                        <td className="max-w-[200px] truncate px-2 py-2 text-zinc-400" title={row.authUserId}>
+                          {row.authUserId || "-"}
+                        </td>
+                        <td className="max-w-[260px] truncate px-2 py-2 text-zinc-500" title={row.userAgent}>
+                          {row.userAgent || "-"}
+                        </td>
+                      </tr>
+                    ))}
+                    {reportRows.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-2 py-3 text-zinc-400">No reports found.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
 
             <section className="rounded-xl border border-white/15 bg-black/25 p-4">
               <h2 className="text-sm font-black tracking-[0.14em] text-zinc-200">Security</h2>
