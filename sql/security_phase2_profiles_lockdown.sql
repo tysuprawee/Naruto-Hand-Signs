@@ -14,7 +14,11 @@ select
   p.username,
   coalesce(p.xp, 0)::bigint as xp,
   coalesce(p.level, 0)::integer as level,
-  coalesce(p.rank, 'Academy Student')::text as rank
+  coalesce(p.rank, 'Academy Student')::text as rank,
+  coalesce(
+    nullif(trim(coalesce(p.user_settings->>'display_name', '')), ''),
+    p.username
+  )::text as display_name
 from public.profiles p;
 
 grant select on public.profiles_leaderboard_public to anon, authenticated;

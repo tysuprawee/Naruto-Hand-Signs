@@ -1620,6 +1620,8 @@ export default function PlayArena({
   const headPitchRef = useRef(0);
   const pendingEffectTimersRef = useRef<number[]>([]);
   const pendingSoundTimersRef = useRef<number[]>([]);
+  const activeSfxNodesRef = useRef<Set<HTMLAudioElement>>(new Set());
+  const activeSfxCleanupRef = useRef<Map<HTMLAudioElement, () => void>>(new Map());
   const autoSubmitTriggeredRef = useRef(false);
   const submitInFlightRef = useRef(false);
   const submittedRef = useRef(false);
@@ -1738,6 +1740,25 @@ export default function PlayArena({
     return tracked;
   }, []);
 
+  const stopAllSfx = useCallback(() => {
+    for (const timer of pendingSoundTimersRef.current) {
+      window.clearTimeout(timer);
+    }
+    pendingSoundTimersRef.current = [];
+    for (const audio of [...activeSfxNodesRef.current]) {
+      try {
+        audio.pause();
+        audio.currentTime = 0;
+      } catch {
+        // Ignore browser playback state errors.
+      }
+      const cleanup = activeSfxCleanupRef.current.get(audio);
+      if (cleanup) cleanup();
+    }
+    activeSfxNodesRef.current.clear();
+    activeSfxCleanupRef.current.clear();
+  }, []);
+
   const playSfx = useCallback((src: string, volume = 1) => {
     try {
       const path = String(src || "").trim();
@@ -1748,7 +1769,19 @@ export default function PlayArena({
         : new window.Audio(path);
       audio.preload = "auto";
       audio.volume = clamp(sfxVolume * volume, 0, 1);
-      void audio.play().catch(() => { });
+      const cleanup = () => {
+        audio.removeEventListener("ended", cleanup);
+        audio.removeEventListener("error", cleanup);
+        activeSfxNodesRef.current.delete(audio);
+        activeSfxCleanupRef.current.delete(audio);
+      };
+      activeSfxNodesRef.current.add(audio);
+      activeSfxCleanupRef.current.set(audio, cleanup);
+      audio.addEventListener("ended", cleanup);
+      audio.addEventListener("error", cleanup);
+      void audio.play().catch(() => {
+        cleanup();
+      });
     } catch {
       // Ignore autoplay errors.
     }
@@ -2876,10 +2909,7 @@ export default function PlayArena({
       window.clearTimeout(timer);
     }
     pendingEffectTimersRef.current = [];
-    for (const timer of pendingSoundTimersRef.current) {
-      window.clearTimeout(timer);
-    }
-    pendingSoundTimersRef.current = [];
+    stopAllSfx();
 
     resetProofState();
 
@@ -3492,6 +3522,7 @@ export default function PlayArena({
   }, [appendProofEvent, isRankMode, startRun]);
 
   const handleBackAction = useCallback(async () => {
+    stopAllSfx();
     if (isRankMode) {
       appendProofEvent("run_exit", performance.now(), {
         phase: phaseRef.current,
@@ -3507,7 +3538,7 @@ export default function PlayArena({
       restoreCalibrationDiagnostics();
     }
     onBack();
-  }, [appendProofEvent, handleSubmitResult, isCalibrationMode, isRankMode, onBack, restoreCalibrationDiagnostics, submitted]);
+  }, [appendProofEvent, handleSubmitResult, isCalibrationMode, isRankMode, onBack, restoreCalibrationDiagnostics, stopAllSfx, submitted]);
 
   const canSwitchJutsuNow = useCallback((): boolean => {
     if (isCalibrationMode) return false;
@@ -3817,10 +3848,7 @@ export default function PlayArena({
         window.clearTimeout(timer);
       }
       pendingEffectTimersRef.current = [];
-      for (const timer of pendingSoundTimersRef.current) {
-        window.clearTimeout(timer);
-      }
-      pendingSoundTimersRef.current = [];
+      stopAllSfx();
       runFinishedRef.current = false;
       calibrationDiagRestoreRef.current = null;
       autoSubmitTriggeredRef.current = false;
@@ -3852,6 +3880,7 @@ export default function PlayArena({
     shouldPrioritizeFaceAnchor,
     markCameraFailure,
     resolutionIdx,
+    stopAllSfx,
   ]);
 
   useEffect(() => {

@@ -11,6 +11,7 @@ interface LeaderboardEntry {
     id: string;
     created_at: string;
     username: string;
+    display_name?: string;
     score_time: number;
     mode: string;
     discord_id?: string;
@@ -20,6 +21,7 @@ interface LeaderboardEntry {
 interface ProfileEntry {
     id: string;
     username: string;
+    display_name?: string;
     xp: number;
     level: number;
     rank?: string;
@@ -43,10 +45,14 @@ function normalizeIdentityUsername(raw: unknown): string {
     return (tagged ? tagged[1] : withoutAt).trim().toLowerCase();
 }
 
+function leaderboardUsernameLookupKey(raw: unknown): string {
+    return normalizeIdentityUsername(raw).trim().toLowerCase();
+}
+
 function speedIdentityKey(row: Pick<LeaderboardEntry, "discord_id" | "username">): string {
     const discordId = String(row.discord_id || "").trim();
     if (discordId) return `d:${discordId}`;
-    const username = normalizeIdentityUsername(row.username);
+    const username = leaderboardUsernameLookupKey(row.username);
     if (username) return `u:${username}`;
     return "";
 }
@@ -249,7 +255,37 @@ function LeaderboardContent() {
                 }
 
                 const bestRows = dedupeBestSpeedRows(allAttempts);
-                setEntries(bestRows.slice(from, to + 1));
+                const rows = bestRows.slice(from, to + 1);
+                const usernameKeys = Array.from(new Set(rows
+                    .map((row) => leaderboardUsernameLookupKey(row.username))
+                    .filter(Boolean)));
+                const displayNameByUsername = new Map<string, string>();
+                if (usernameKeys.length > 0) {
+                    const { data: displayRows, error: displayError } = await supabase
+                        .from("profiles_leaderboard_public")
+                        .select("username,display_name")
+                        .in("username", usernameKeys);
+                    if (!displayError && Array.isArray(displayRows)) {
+                        for (const row of displayRows as Array<Record<string, unknown>>) {
+                            const key = leaderboardUsernameLookupKey(row.username);
+                            const displayName = String(row.display_name || "").trim().slice(0, 24);
+                            if (key && displayName && !displayNameByUsername.has(key)) {
+                                displayNameByUsername.set(key, displayName);
+                            }
+                        }
+                    }
+                }
+                const rowsWithDisplayNames = rows.map((row) => {
+                    const key = leaderboardUsernameLookupKey(row.username);
+                    const displayName = key ? displayNameByUsername.get(key) || "" : "";
+                    if (!displayName) return row;
+                    return {
+                        ...row,
+                        display_name: displayName,
+                        username: displayName,
+                    };
+                });
+                setEntries(rowsWithDisplayNames);
                 setProfiles([]);
                 setTotalCount(bestRows.length);
             } else {
@@ -282,11 +318,31 @@ function LeaderboardContent() {
                 const avatarByDiscordId = new Map<string, string>();
                 const avatarByUsername = new Map<string, string>();
                 const discordIdByUsername = new Map<string, string>();
+                const displayNameByUsername = new Map<string, string>();
+
+                const profileUsernameKeys = Array.from(new Set(((profileData || []) as ProfileEntry[])
+                    .map((row) => leaderboardUsernameLookupKey(row.username))
+                    .filter(Boolean)));
+                if (profileUsernameKeys.length > 0) {
+                    const { data: displayRows, error: displayError } = await supabase
+                        .from("profiles_leaderboard_public")
+                        .select("username,display_name")
+                        .in("username", profileUsernameKeys);
+                    if (!displayError && Array.isArray(displayRows)) {
+                        for (const row of displayRows as Array<Record<string, unknown>>) {
+                            const key = leaderboardUsernameLookupKey(row.username);
+                            const displayName = String(row.display_name || "").trim().slice(0, 24);
+                            if (key && displayName && !displayNameByUsername.has(key)) {
+                                displayNameByUsername.set(key, displayName);
+                            }
+                        }
+                    }
+                }
 
                 for (const row of (avatarRows || []) as LeaderboardEntry[]) {
                     const avatar = row.avatar_url?.trim();
                     const dId = row.discord_id?.trim();
-                    const uname = row.username?.trim().toLowerCase();
+                    const uname = leaderboardUsernameLookupKey(row.username);
 
                     if (dId && uname && !discordIdByUsername.has(uname)) {
                         discordIdByUsername.set(uname, dId);
@@ -303,10 +359,17 @@ function LeaderboardContent() {
                 }
 
                 const enrichedProfiles = ((profileData || []) as ProfileEntry[]).map((p) => {
-                    if (p.avatar_url) return p;
+                    const uname = leaderboardUsernameLookupKey(p.username);
+                    const displayName = uname ? displayNameByUsername.get(uname) || "" : "";
+                    if (p.avatar_url) {
+                        return {
+                            ...p,
+                            display_name: displayName || p.display_name,
+                            username: displayName || p.username,
+                        };
+                    }
 
                     const dId = p.discord_id?.trim() || "";
-                    const uname = p.username?.trim().toLowerCase() || "";
                     const fallbackDiscordId = dId || (uname ? discordIdByUsername.get(uname) : undefined);
                     const fallbackAvatar =
                         (fallbackDiscordId ? avatarByDiscordId.get(fallbackDiscordId) : undefined) ||
@@ -314,6 +377,8 @@ function LeaderboardContent() {
 
                     return {
                         ...p,
+                        display_name: displayName || p.display_name,
+                        username: displayName || p.username,
                         discord_id: fallbackDiscordId || p.discord_id,
                         avatar_url: fallbackAvatar || p.avatar_url,
                     };

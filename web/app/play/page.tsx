@@ -187,6 +187,7 @@ interface LeaderboardSpeedRow {
   id: string;
   created_at?: string | null;
   username: string;
+  display_name?: string | null;
   score_time: number;
   mode: string;
   discord_id?: string | null;
@@ -196,6 +197,7 @@ interface LeaderboardSpeedRow {
 interface LeaderboardLevelRow {
   id: string;
   username: string;
+  display_name?: string | null;
   xp: number;
   level: number;
   rank?: string | null;
@@ -1788,10 +1790,14 @@ function formatLeaderboardModeLabel(rawMode: string): string {
     .join(" ");
 }
 
+function leaderboardUsernameLookupKey(raw: unknown): string {
+  return normalizeDiscordUsername(raw).trim().toLowerCase();
+}
+
 function getSpeedLeaderboardIdentityKey(row: Pick<LeaderboardSpeedRow, "discord_id" | "username">): string {
   const discordId = String(row.discord_id || "").trim();
   if (discordId) return `d:${discordId}`;
-  const username = normalizeDiscordUsername(row.username).toLowerCase();
+  const username = leaderboardUsernameLookupKey(row.username);
   if (username) return `u:${username}`;
   return "";
 }
@@ -2641,7 +2647,36 @@ function PlayPageInner() {
         const dedupedRows = dedupeSpeedLeaderboardRows(allAttempts);
         const total = dedupedRows.length;
         const rows = dedupedRows.slice(from, to + 1);
-        setLeaderboardRows(rows);
+        const usernameKeys = Array.from(new Set(rows
+          .map((row) => leaderboardUsernameLookupKey(row.username))
+          .filter(Boolean)));
+        const displayNameByUsername = new Map<string, string>();
+        if (usernameKeys.length > 0) {
+          const { data: displayRows, error: displayError } = await sb
+            .from("profiles_leaderboard_public")
+            .select("username,display_name")
+            .in("username", usernameKeys);
+          if (!cancelled && !displayError && Array.isArray(displayRows)) {
+            for (const row of displayRows as Array<Record<string, unknown>>) {
+              const key = leaderboardUsernameLookupKey(row.username);
+              const displayName = sanitizeDisplayName(row.display_name, "");
+              if (key && displayName && !displayNameByUsername.has(key)) {
+                displayNameByUsername.set(key, displayName);
+              }
+            }
+          }
+        }
+        const rowsWithDisplayNames = rows.map((row) => {
+          const key = leaderboardUsernameLookupKey(row.username);
+          const displayName = key ? displayNameByUsername.get(key) || "" : "";
+          if (!displayName) return row;
+          return {
+            ...row,
+            display_name: displayName,
+            username: displayName,
+          };
+        });
+        setLeaderboardRows(rowsWithDisplayNames);
         setLeaderboardLevelRows([]);
         setLeaderboardTotalCount(total);
         setLeaderboardHasNext((to + 1) < total);
@@ -2671,6 +2706,26 @@ function PlayPageInner() {
       const avatarByDiscordId = new Map<string, string>();
       const avatarByUsername = new Map<string, string>();
       const discordIdByUsername = new Map<string, string>();
+      const displayNameByUsername = new Map<string, string>();
+
+      const profileUsernameKeys = Array.from(new Set(baseProfiles
+        .map((row) => leaderboardUsernameLookupKey(row.username))
+        .filter(Boolean)));
+      if (profileUsernameKeys.length > 0) {
+        const { data: displayRows, error: displayError } = await sb
+          .from("profiles_leaderboard_public")
+          .select("username,display_name")
+          .in("username", profileUsernameKeys);
+        if (!cancelled && !displayError && Array.isArray(displayRows)) {
+          for (const row of displayRows as Array<Record<string, unknown>>) {
+            const key = leaderboardUsernameLookupKey(row.username);
+            const displayName = sanitizeDisplayName(row.display_name, "");
+            if (key && displayName && !displayNameByUsername.has(key)) {
+              displayNameByUsername.set(key, displayName);
+            }
+          }
+        }
+      }
 
       if (baseProfiles.length > 0) {
         const { data: avatarRows } = await sb
@@ -2683,7 +2738,7 @@ function PlayPageInner() {
           for (const rowRaw of avatarRows as Array<Record<string, unknown>>) {
             const avatar = String(rowRaw.avatar_url || "").trim();
             const dId = String(rowRaw.discord_id || "").trim();
-            const uname = String(rowRaw.username || "").trim().toLowerCase();
+            const uname = leaderboardUsernameLookupKey(rowRaw.username);
             if (dId && uname && !discordIdByUsername.has(uname)) {
               discordIdByUsername.set(uname, dId);
             }
@@ -2700,7 +2755,8 @@ function PlayPageInner() {
 
       if (cancelled) return;
       const rows = baseProfiles.map((profileRow) => {
-        const uname = String(profileRow.username || "").trim().toLowerCase();
+        const uname = leaderboardUsernameLookupKey(profileRow.username);
+        const displayName = uname ? displayNameByUsername.get(uname) || "" : "";
         const dId = String(profileRow.discord_id || "").trim();
         const resolvedDiscordId = dId || (uname ? discordIdByUsername.get(uname) || "" : "");
         const fallbackAvatar = (resolvedDiscordId ? avatarByDiscordId.get(resolvedDiscordId) : undefined)
@@ -2708,6 +2764,8 @@ function PlayPageInner() {
           || null;
         return {
           ...profileRow,
+          display_name: displayName || profileRow.display_name || null,
+          username: displayName || profileRow.username,
           discord_id: resolvedDiscordId || profileRow.discord_id || null,
           avatar_url: fallbackAvatar,
         };
