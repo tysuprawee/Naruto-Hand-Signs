@@ -28,6 +28,7 @@ import {
   type VoteEntry,
   type VoteStableState,
 } from "@/utils/detection-filters";
+import { useLanguage } from "@/app/components/language-provider";
 
 type ArenaPhase = "loading" | "ready" | "countdown" | "active" | "casting" | "completed" | "error";
 type PlayMode = "free" | "rank" | "calibration";
@@ -1457,6 +1458,7 @@ export default function PlayArena({
   onCalibrationComplete,
   onRequestRunToken,
 }: PlayArenaProps) {
+  const { t } = useLanguage();
   const isRankMode = mode === "rank";
   const isCalibrationMode = mode === "calibration";
   const isViewportFitSession = viewportFit && !isCalibrationMode;
@@ -1682,6 +1684,64 @@ export default function PlayArena({
   const [sfxLoadFailed, setSfxLoadFailed] = useState(0);
   const [sfxRetryNonce, setSfxRetryNonce] = useState(0);
   const [videoAspect, setVideoAspect] = useState(4 / 3);
+  const localizeArenaText = useCallback((value: string): string => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    switch (raw.toLowerCase()) {
+      case "loading arena...":
+        return t("play.loadingArena", "Loading arena...");
+      case "loading sign dataset...":
+        return t("play.loadingSignDataset", "Loading sign dataset...");
+      case "loading hand tracker...":
+        return t("play.loadingHandTracker", "Loading hand tracker...");
+      case "starting camera...":
+        return t("play.startingCamera", "Starting camera...");
+      case "idle":
+        return t("play.labelIdle", "Idle");
+      case "unknown":
+        return t("play.labelUnknown", "Unknown");
+      case "no hands":
+        return t("play.labelNoHands", "No hands");
+      case "face not found":
+        return t("play.labelFaceNotFound", "Face not found");
+      case "center your face":
+        return t("play.labelCenterYourFace", "Center your face");
+      case "open eyes":
+        return t("play.labelOpenEyes", "Open eyes");
+      case "close both eyes":
+        return t("play.labelCloseBothEyes", "Close both eyes");
+      case "eyes closed":
+        return t("play.labelEyesClosed", "Eyes closed");
+      case "show both hands":
+        return t("play.labelShowBothHands", "Show both hands");
+      case "bring hands closer":
+        return t("play.labelBringHandsCloser", "Bring hands closer");
+      case "idle (distance)":
+        return t("play.labelIdleDistance", "Idle (distance)");
+      case "run submitted":
+        return t("play.runSubmitted", "Run submitted");
+      case "xp applied":
+        return t("play.xpApplied", "XP applied");
+      case "calibration synced":
+        return t("play.calibrationSynced", "Calibration synced");
+      case "calibration sync failed":
+        return t("play.calibrationSyncFailed", "Calibration sync failed");
+      case "profile is now active for detection filtering.":
+        return t("play.calibrationProfileActive", "Profile is now active for detection filtering.");
+      case "retry calibration or check connectivity.":
+        return t("play.calibrationRetryHint", "Retry calibration or check connectivity.");
+      case "share canceled.":
+        return t("play.shareCanceled", "Share canceled.");
+      case "result shared.":
+        return t("play.resultShared", "Result shared.");
+      case "result copied. paste it to challenge friends.":
+        return t("play.resultCopied", "Result copied. Paste it to challenge friends.");
+      case "share unavailable on this browser.":
+        return t("play.shareUnavailable", "Share unavailable on this browser.");
+      default:
+        return raw;
+    }
+  }, [t]);
   const mangekyouTuneOffsetXPctRef = useRef(MANGEKYOU_TUNE_DEFAULT_OFFSET_X_PCT);
   const mangekyouTuneOffsetYPctRef = useRef(MANGEKYOU_TUNE_DEFAULT_OFFSET_Y_PCT);
   const mangekyouTuneRotateDegRef = useRef(MANGEKYOU_TUNE_DEFAULT_ROTATE_DEG);
@@ -4867,6 +4927,13 @@ export default function PlayArena({
       : null;
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
   const showMangekyouTunePanel = false;
+  const detectedLabelUi = localizeArenaText(detectedLabel);
+  const rawDetectedLabelUi = localizeArenaText(rawDetectedLabel);
+  const loadingMessageUi = localizeArenaText(loadingMessage);
+  const errorMessageUi = localizeArenaText(errorMessage);
+  const submitStatusUi = localizeArenaText(submitStatus);
+  const submitDetailUi = localizeArenaText(submitDetail);
+  const shareStatusUi = localizeArenaText(shareStatus);
   const showSpeedHud = isRankMode && phase !== "loading" && phase !== "error";
   const showSignChip = phase === "active"
     && !isCalibrationMode
@@ -5201,7 +5268,7 @@ export default function PlayArena({
               {showSignChip && (
                 <div className={`absolute right-2 z-30 rounded-[8px] border border-emerald-300/55 bg-black/75 px-2 py-1 md:right-[18px] md:px-3 md:py-1.5 ${signChipTopClass}`}>
                   <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200 md:text-[11px]">
-                    SIGN: {detectedLabel.toUpperCase()}
+                    {t("play.sign", "SIGN")}: {detectedLabelUi.toUpperCase()}
                   </p>
                 </div>
               )}
@@ -5227,7 +5294,7 @@ export default function PlayArena({
                   <div>AUTO IDLE DIST: ON (2H={KNN_IDLE_DIST_THRESHOLD.toFixed(1)} • 1H={ONE_HAND_ASSIST_IDLE_THRESHOLD.toFixed(1)})</div>
                   <div>1H EXPECT DIST: THR={ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD.toFixed(1)} • MARGIN={ONE_HAND_EXPECTED_IDLE_MARGIN.toFixed(2)}</div>
                   <div>{diagCalibrationText}</div>
-                  <div>RAW: {rawDetectedLabel} {rawDetectedConfidencePct}%</div>
+                  <div>{t("play.raw", "RAW")}: {rawDetectedLabelUi} {rawDetectedConfidencePct}%</div>
                   {effectLabel === "fire" && (
                     <>
                       <div>MOUTH: X {fireAnchorX.toFixed(1)}% • Y {fireAnchorY.toFixed(1)}%</div>
@@ -5517,7 +5584,7 @@ export default function PlayArena({
                     <Camera className="h-8 w-8 text-red-300" />
                   )}
                   <p className={`px-4 text-center text-sm ${phase === "error" ? "text-red-200" : "text-zinc-200"}`}>
-                    {phase === "error" ? errorMessage : loadingMessage}
+                    {phase === "error" ? errorMessageUi : loadingMessageUi}
                   </p>
                 </div>
               )}
@@ -5631,8 +5698,8 @@ export default function PlayArena({
                         )}
                       </>
                     )}
-                    {!!submitStatus && <p className="mt-3 text-sm font-bold text-emerald-200">{submitStatus}</p>}
-                    {!!submitDetail && <p className="mt-1 text-xs text-zinc-200">{submitDetail}</p>}
+                    {!!submitStatus && <p className="mt-3 text-sm font-bold text-emerald-200">{submitStatusUi}</p>}
+                    {!!submitDetail && <p className="mt-1 text-xs text-zinc-200">{submitDetailUi}</p>}
                     {!!rankInfo && <p className="mt-1 text-xs font-bold text-amber-200">{rankInfo}</p>}
                     {isRankMode && (
                       <button
@@ -5645,7 +5712,7 @@ export default function PlayArena({
                       </button>
                     )}
                     {isRankMode && !!shareStatus && (
-                      <p className="mt-2 text-[11px] text-cyan-100">{shareStatus}</p>
+                      <p className="mt-2 text-[11px] text-cyan-100">{shareStatusUi}</p>
                     )}
                     {isRankMode && (
                       <div className="mt-6 grid grid-cols-2 gap-3">

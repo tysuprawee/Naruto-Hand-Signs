@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "media.discordapp.net" },
       { protocol: "https", hostname: "images-ext-1.discordapp.net" },
       { protocol: "https", hostname: "images-ext-2.discordapp.net" },
+      { protocol: "https", hostname: "googleusercontent.com" },
+      { protocol: "https", hostname: "**.googleusercontent.com" },
     ],
   },
   async redirects() {

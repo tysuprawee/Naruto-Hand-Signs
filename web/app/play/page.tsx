@@ -323,6 +323,11 @@ const QUEST_DYNAMIC_TEMPLATES: Record<QuestId, Array<{ title: string; subtitle: 
     { title: "Chakra Control Warmup: Confirm {target} correct signs", subtitle: "Inspired by {jutsu}. Accuracy over speed." },
     { title: "Practice Circuit: Register {target} valid signs", subtitle: "Any mode contributes to this mission." },
     { title: "Ninja Fundamentals: Land {target} successful signs", subtitle: "Stack clean inputs and keep the combo flowing." },
+    { title: "Scroll Accuracy Test: Confirm {target} true signs", subtitle: "Theme focus: {jutsu}. Maintain form from start to finish." },
+    { title: "Seal Chain Session: Land {target} verified signs", subtitle: "Consistency matters more than peak speed here." },
+    { title: "Dojo Control Loop: Hit {target} valid sign detections", subtitle: "Smooth transitions keep your progress steady." },
+    { title: "Shinobi Precision Route: Register {target} correct signs", subtitle: "Track rhythm and keep landmark confidence stable." },
+    { title: "Foundation Drill: Complete {target} clean sign confirmations", subtitle: "Reliable execution converts directly to reward XP." },
   ],
   d_jutsus: [
     { title: "Mission Rotation: Complete {target} jutsu runs", subtitle: "Theme focus: {jutsu}. Free or rank runs both count." },
@@ -330,6 +335,11 @@ const QUEST_DYNAMIC_TEMPLATES: Record<QuestId, Array<{ title: string; subtitle: 
     { title: "Dojo Session: Clear {target} jutsu attempts", subtitle: "Any unlocked jutsu can be used for progress." },
     { title: "Shinobi Reps: Complete {target} run completions", subtitle: "Steady clears build daily streak momentum." },
     { title: "Combat Routine: Finish {target} jutsu cycles", subtitle: "Use this to farm XP and unlocks efficiently." },
+    { title: "Mission Chain: Secure {target} completed jutsu runs", subtitle: "Theme focus: {jutsu}. Rotate moves to stay fresh." },
+    { title: "Arena Duty: Finish {target} full run clears", subtitle: "Fast retries help keep your tempo high." },
+    { title: "Execution Block: Land {target} complete jutsu casts", subtitle: "Each finish contributes to your daily contract." },
+    { title: "Training Volume: Close out {target} successful runs", subtitle: "Work through your unlocked catalog for stable gains." },
+    { title: "Dojo Throughput: Complete {target} run endings", subtitle: "Clean transitions after each result screen save time." },
   ],
   d_xp: [
     { title: "Growth Target: Earn {target} XP today", subtitle: "Theme focus: {jutsu}. Quest and run rewards both apply." },
@@ -337,6 +347,11 @@ const QUEST_DYNAMIC_TEMPLATES: Record<QuestId, Array<{ title: string; subtitle: 
     { title: "Training Grind: Collect {target} XP", subtitle: "Clear quests and jutsu runs to hit the mark fast." },
     { title: "Academy Advancement: Gain {target} XP", subtitle: "Every completed run contributes toward this quota." },
     { title: "Power Build: Accumulate {target} XP today", subtitle: "Stack mission claims and regular run rewards." },
+    { title: "XP Contract: Reach {target} XP before reset", subtitle: "Theme focus: {jutsu}. Sustain run quality for better payouts." },
+    { title: "Promotion Route: Gather {target} XP today", subtitle: "Use streak boosts to multiply efficient clears." },
+    { title: "Shinobi Income Plan: Bank {target} XP", subtitle: "Quest claims and rank clears combine for faster growth." },
+    { title: "Daily Power Curve: Secure {target} XP", subtitle: "Keep uptime high and avoid long idle gaps." },
+    { title: "Progress Ledger: Record {target} XP earned", subtitle: "Strong session pacing keeps this objective easy." },
   ],
   w_jutsus: [
     { title: "Weekly Output: Complete {target} jutsu runs", subtitle: "Theme focus: {jutsu}. Build volume across the full week." },
@@ -344,6 +359,11 @@ const QUEST_DYNAMIC_TEMPLATES: Record<QuestId, Array<{ title: string; subtitle: 
     { title: "Shinobi Marathon: Clear {target} jutsu cycles", subtitle: "Any unlocked move set can contribute." },
     { title: "Dojo Grind Week: Complete {target} total runs", subtitle: "Keep free and rank sessions rotating." },
     { title: "Weekly Trial Path: Reach {target} jutsu completions", subtitle: "Reliable clears fuel weekly streak progress." },
+    { title: "Seven-Day Throughput: Land {target} run completions", subtitle: "Theme focus: {jutsu}. Spread reps to avoid weekend crunch." },
+    { title: "Ops Schedule: Finish {target} jutsu clears this week", subtitle: "Daily check-ins make this target smoother." },
+    { title: "Volume Assignment: Complete {target} full jutsu runs", subtitle: "Use both free and rank sessions for coverage." },
+    { title: "Shinobi Endurance Block: Register {target} completed runs", subtitle: "Steady cadence beats one-day spikes." },
+    { title: "Weekly Mission Ledger: Secure {target} run finishes", subtitle: "Reliable clears keep streak and XP bonus healthy." },
   ],
   w_challenges: [
     { title: "Rank Track: Finish {target} rank mode runs", subtitle: "Theme focus: {jutsu}. Push secure submissions all week." },
@@ -351,6 +371,11 @@ const QUEST_DYNAMIC_TEMPLATES: Record<QuestId, Array<{ title: string; subtitle: 
     { title: "Leaderboard Prep: Finish {target} rank attempts", subtitle: "Use rank mode reps to sharpen timings." },
     { title: "Exam Week: Land {target} successful rank runs", subtitle: "Consistent completions keep weekly streak alive." },
     { title: "Challenge Quota: Complete {target} rank mode sessions", subtitle: "Secure run tokens and consistent execution matter." },
+    { title: "Rank Ladder Volume: Close {target} verified rank runs", subtitle: "Theme focus: {jutsu}. Submission integrity is required." },
+    { title: "Competition Contract: Complete {target} ranked finishes", subtitle: "Practice consistency to reduce failed submits." },
+    { title: "Leaderboard Duty: Hit {target} rank completions", subtitle: "Strong run starts and stable signs are key." },
+    { title: "Shinobi Exam Rotation: Secure {target} rank clears", subtitle: "Treat each run like a timed trial path." },
+    { title: "Arena Pressure Week: Finish {target} competitive runs", subtitle: "Reliable completion pace wins this objective." },
   ],
   w_xp: [
     { title: "Weekly Growth Plan: Earn {target} XP", subtitle: "Theme focus: {jutsu}. Quests and runs stack together." },
@@ -358,6 +383,11 @@ const QUEST_DYNAMIC_TEMPLATES: Record<QuestId, Array<{ title: string; subtitle: 
     { title: "Progression Surge: Collect {target} XP", subtitle: "Keep quest claims on cooldown and chain run clears." },
     { title: "Rank Advancement Week: Gain {target} XP", subtitle: "Use streak boosts to scale your XP gain." },
     { title: "Shinobi XP Contract: Reach {target} XP", subtitle: "Sustain momentum through daily play windows." },
+    { title: "Weekly Promotion Goal: Accumulate {target} XP", subtitle: "Theme focus: {jutsu}. Stack daily rewards for steady progress." },
+    { title: "Progression Budget: Bank {target} XP this week", subtitle: "Balanced session frequency keeps gains predictable." },
+    { title: "XP Throughput Week: Secure {target} total XP", subtitle: "Avoid idle days to protect your pace." },
+    { title: "Long-Form Growth Drill: Earn {target} XP", subtitle: "Streak boosts and clean runs compound quickly." },
+    { title: "Shinobi Advancement Ledger: Record {target} XP", subtitle: "Quest claims plus run completions close this fast." },
   ],
 };
 
@@ -2599,7 +2629,7 @@ function PlayPageInner() {
       setLeaderboardLevelRows([]);
       setLeaderboardTotalCount(0);
       setLeaderboardHasNext(false);
-      setLeaderboardError("Leaderboard unavailable: Supabase is not configured.");
+      setLeaderboardError(t("leaderboard.unavailable", "Leaderboard unavailable: Supabase is not configured."));
       return;
     }
 
@@ -2631,7 +2661,7 @@ function PlayPageInner() {
             setLeaderboardLevelRows([]);
             setLeaderboardTotalCount(0);
             setLeaderboardHasNext(false);
-            setLeaderboardError(String(error.message || "Leaderboard query failed."));
+            setLeaderboardError(String(error.message || t("leaderboard.queryFailed", "Leaderboard query failed.")));
             setLeaderboardLoading(false);
             return;
           }
@@ -2697,7 +2727,7 @@ function PlayPageInner() {
         setLeaderboardLevelRows([]);
         setLeaderboardTotalCount(0);
         setLeaderboardHasNext(false);
-        setLeaderboardError(String(profileError.message || "Level leaderboard query failed."));
+        setLeaderboardError(String(profileError.message || t("leaderboard.levelQueryFailed", "Level leaderboard query failed.")));
         setLeaderboardLoading(false);
         return;
       }
@@ -2785,7 +2815,7 @@ function PlayPageInner() {
     return () => {
       cancelled = true;
     };
-  }, [leaderboardBoard, leaderboardMode, leaderboardPage, view]);
+  }, [leaderboardBoard, leaderboardMode, leaderboardPage, t, view]);
 
   useEffect(() => {
     if (leaderboardLoading) return;
@@ -2883,11 +2913,11 @@ function PlayPageInner() {
       }
       setSettingsPreviewError("");
     } catch (err) {
-      setSettingsPreviewError(String((err as Error)?.message || "Unable to scan camera devices."));
+      setSettingsPreviewError(String((err as Error)?.message || t("settings.scanFailed", "Unable to scan camera devices.")));
     } finally {
       setCameraScanBusy(false);
     }
-  }, []);
+  }, [t]);
 
   const buildCameraConstraints = useCallback((cameraIdx: number, resolutionIdx: number): MediaTrackConstraints => {
     const selected = cameraOptions[Math.max(0, Math.floor(cameraIdx))];
@@ -2918,9 +2948,9 @@ function PlayPageInner() {
       }
     } catch (err) {
       stopSettingsPreview();
-      setSettingsPreviewError(String((err as Error)?.message || "Unable to start camera preview."));
+      setSettingsPreviewError(String((err as Error)?.message || t("settings.previewFailed", "Unable to start camera preview.")));
     }
-  }, [buildCameraConstraints, draftSettings.cameraIdx, draftSettings.resolutionIdx, stopSettingsPreview]);
+  }, [buildCameraConstraints, draftSettings.cameraIdx, draftSettings.resolutionIdx, stopSettingsPreview, t]);
 
   const startCalibrationGatePreview = useCallback(async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return;
@@ -2962,12 +2992,12 @@ function PlayPageInner() {
       if (startSeq !== calibrationGatePreviewStartSeqRef.current) return;
       stopCalibrationGatePreview();
       if (isTransientVideoPlayError(err)) {
-        setCalibrationGateError("Camera feed is restarting. Press SCAN once.");
+        setCalibrationGateError(t("calibration.cameraRestarting", "Camera feed is restarting. Press SCAN once."));
         return;
       }
-      setCalibrationGateError(String((err as Error)?.message || "Camera unavailable. Check device and retry."));
+      setCalibrationGateError(String((err as Error)?.message || t("calibration.cameraUnavailableFallback", "Camera unavailable. Check device and retry.")));
     }
-  }, [buildCameraConstraints, calibrationGateCameraIdx, calibrationGateResolutionIdx, stopCalibrationGatePreview]);
+  }, [buildCameraConstraints, calibrationGateCameraIdx, calibrationGateResolutionIdx, stopCalibrationGatePreview, t]);
 
   const pollRuntimeConfig = useCallback(async () => {
     if (!supabase) return;
@@ -2990,7 +3020,7 @@ function PlayPageInner() {
       if (maintenanceRows.length > 0) {
         const latest = maintenanceRows[0] as Record<string, unknown>;
         const message = parseMaybeMessageList(latest.message)[0]
-          || "Jutsu Academy is under maintenance. Please try again later.";
+          || t("maintenance.title", "Jutsu Academy is under maintenance. Please try again later.");
         const url = String(latest.url || "https://discord.gg/7xBQ22SnN2");
         setMaintenanceGate({ message, url });
       } else {
@@ -3002,7 +3032,7 @@ function PlayPageInner() {
         const latest = versionRows[0] as Record<string, unknown>;
         const remoteVersion = String(latest.version || "").trim();
         if (remoteVersion && remoteVersion !== WEB_APP_VERSION) {
-          const message = parseMaybeMessageList(latest.message)[0] || "A mandatory update is required.";
+          const message = parseMaybeMessageList(latest.message)[0] || t("update.title", "A mandatory update is required.");
           const url = String(latest.url || "https://discord.gg/7xBQ22SnN2");
           setUpdateGate({ message, url, remoteVersion });
         } else {
@@ -3062,7 +3092,7 @@ function PlayPageInner() {
     } catch {
       // Fallback mode: keep gameplay available even if app_config polling fails.
     }
-  }, [authReady, session]);
+  }, [authReady, session, t]);
 
   const syncServerTimeOffset = useCallback(async () => {
     if (typeof window === "undefined") return;
@@ -3226,10 +3256,10 @@ function PlayPageInner() {
         if (String(bootstrapRes.reason || "") === "identity_mismatch") {
           const fallbackOk = await tryBootstrapWithFallbackUsername();
           if (!fallbackOk && (!silent || String(bootstrapRes.reason || "") === "identity_mismatch")) {
-            setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
+            setStateError(toRpcError(t("play.bootstrapProfileFailed", "Unable to bootstrap profile"), bootstrapRes));
           }
         } else if (!silent || String(bootstrapRes.reason || "") === "identity_mismatch") {
-          setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
+          setStateError(toRpcError(t("play.bootstrapProfileFailed", "Unable to bootstrap profile"), bootstrapRes));
         }
       } else {
         setBoundUsername(effectiveIdentity.username);
@@ -3244,7 +3274,7 @@ function PlayPageInner() {
     if (!Boolean(bindRes.ok) && String(bindRes.reason || "") === "identity_mismatch") {
       setStateReady(true);
       if (!silent) setStateBusy(false);
-      setStateError(toRpcError("Account link rejected", bindRes));
+      setStateError(toRpcError(t("play.accountLinkRejected", "Account link rejected"), bindRes));
       return;
     }
 
@@ -3267,10 +3297,10 @@ function PlayPageInner() {
             p_discord_id: effectiveIdentity.discordId,
           });
         } else if (!silent) {
-          setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
+          setStateError(toRpcError(t("play.bootstrapProfileFailed", "Unable to bootstrap profile"), bootstrapRes));
         }
       } else if (!silent) {
-        setStateError(toRpcError("Unable to bootstrap profile", bootstrapRes));
+        setStateError(toRpcError(t("play.bootstrapProfileFailed", "Unable to bootstrap profile"), bootstrapRes));
       }
     }
 
@@ -3296,7 +3326,7 @@ function PlayPageInner() {
         setStateError("");
       }
     } else if (!silent || String(stateRes.reason || "") === "identity_mismatch") {
-      setStateError(toRpcError("Failed to fetch authoritative state", stateRes));
+      setStateError(toRpcError(t("play.fetchAuthoritativeStateFailed", "Failed to fetch authoritative state"), stateRes));
     }
 
     if (directProfileRes?.ok && isRecord(directProfileRes.profile)) {
@@ -3369,7 +3399,7 @@ function PlayPageInner() {
     if (!silent) {
       setStateBusy(false);
     }
-  }, [applyCompetitivePayload, bootstrapAuthoritativeProfile, callBoundRpc, fetchProfileMetaDirect, findExistingUsernameByDiscordId]);
+  }, [applyCompetitivePayload, bootstrapAuthoritativeProfile, callBoundRpc, fetchProfileMetaDirect, findExistingUsernameByDiscordId, t]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -3712,7 +3742,7 @@ function PlayPageInner() {
         },
       });
       if (!Boolean(res.ok)) {
-        setStateError(toRpcError("Settings sync failed", res));
+        setStateError(toRpcError(t("play.settingsSyncFailed", "Settings sync failed"), res));
       }
     }
 
@@ -3810,7 +3840,7 @@ function PlayPageInner() {
     if (identity) {
       const res = await persistProfileMeta(nextMastery);
       if (!Boolean(res.ok)) {
-        setStateError(toRpcError("Mastery sync failed", res));
+        setStateError(toRpcError(t("play.masterySyncFailed", "Mastery sync failed"), res));
       }
     }
 
@@ -4376,7 +4406,7 @@ function PlayPageInner() {
     if (!identity) return;
     const res = await persistProfileMeta(mastery, nextMeta);
     if (!Boolean(res.ok)) {
-      setStateError(toRpcError("Tutorial sync failed", res));
+      setStateError(toRpcError(t("play.tutorialSyncFailed", "Tutorial sync failed"), res));
     }
   }, [identity, mastery, persistProfileMeta, tutorialMeta.tutorialSeenAt]);
 
@@ -4446,6 +4476,10 @@ function PlayPageInner() {
   const getQuestDisplayTitle = useCallback((def: QuestDefinition): string => {
     if (def.localizeTitle === false) return def.title;
     return t(`quest.def.${def.id}.title`, def.title);
+  }, [t]);
+  const getQuestDisplaySubtitle = useCallback((def: QuestDefinition): string => {
+    if (!def.subtitle) return "";
+    return t(`quest.def.${def.id}.subtitle`, def.subtitle);
   }, [t]);
   const localizedAboutSections = useMemo(() => (
     ABOUT_SECTIONS.map((section, sectionIdx) => ({
@@ -5352,7 +5386,9 @@ function PlayPageInner() {
                 <div className="relative z-10 space-y-5">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
-                      <p className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-300/85">Mission Control</p>
+                      <p className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-300/85">
+                        {t("quest.missionControl", "Mission Control")}
+                      </p>
                       <h2 className="mt-1 text-3xl font-black tracking-tight text-white md:text-4xl">
                         {t("quest.boardTitle", "QUEST BOARD")}
                       </h2>
@@ -5360,11 +5396,13 @@ function PlayPageInner() {
                         {t("quest.boardSubtitle", "Server-authoritative quest state and claim rewards (same guarded RPC path as pygame).")}
                       </p>
                       <p className="mt-2 text-xs uppercase tracking-[0.16em] text-amber-200/85">
-                        Rotating directives refresh each daily and weekly UTC reset.
+                        {t("quest.rotatingDirectivesReset", "Rotating directives refresh each daily and weekly UTC reset.")}
                       </p>
                     </div>
                     <div className="rounded-2xl border border-zinc-600/70 bg-black/35 px-4 py-3 text-xs text-zinc-200 shadow-[0_12px_24px_rgba(0,0,0,0.35)]">
-                      <p className="mb-1 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">Reset Tracker</p>
+                      <p className="mb-1 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">
+                        {t("quest.resetTracker", "Reset Tracker")}
+                      </p>
                       <div className="grid gap-1.5">
                         <div className="flex items-center justify-between gap-3">
                           <span className="text-zinc-400">{t("quest.dailyResetUtc", "Daily reset (UTC)")}</span>
@@ -5392,7 +5430,7 @@ function PlayPageInner() {
                           {t("quest.activeStreakBoost", "Active Streak Boost")}
                         </p>
                         <p className="mt-1 text-xs text-amber-100/90">
-                          Boost applies to every completed jutsu run.
+                          {t("quest.streakBoostApplies", "Boost applies to every completed jutsu run.")}
                         </p>
                       </div>
                       <p className="text-2xl font-black tracking-tight text-white md:text-3xl">
@@ -5415,7 +5453,7 @@ function PlayPageInner() {
                         {questVarietyHighlight ? getQuestDisplayTitle(questVarietyHighlight) : t("quest.none", "No directive available")}
                       </p>
                       {questVarietyHighlight?.subtitle && (
-                        <p className="mt-1 text-[11px] text-cyan-100/90">{questVarietyHighlight.subtitle}</p>
+                        <p className="mt-1 text-[11px] text-cyan-100/90">{getQuestDisplaySubtitle(questVarietyHighlight)}</p>
                       )}
                       <p className="mt-2 text-[11px] text-cyan-100/70">
                         {t("quest.rotationHint", "Directive rotates each UTC reset to keep quests fresh.")}
@@ -5437,13 +5475,15 @@ function PlayPageInner() {
                       <p className="mt-2 text-xs text-emerald-100/90">
                         {effectiveRetentionState.dailyMissionClaimed
                           ? (dailyMissionActiveRewardPending
-                            ? `Reward pending: +${DAILY_MISSION_REWARD_XP} XP on next successful run`
-                            : `Completed today (+${DAILY_MISSION_REWARD_XP} XP)`)
-                          : `${formatDurationMmSs(dailyMissionRemainingSeconds)} remaining to unlock +${DAILY_MISSION_REWARD_XP} XP`}
+                            ? `${t("quest.dailyMissionRewardPending", "Reward pending")}: +${DAILY_MISSION_REWARD_XP} XP ${t("quest.dailyMissionNextSuccessfulRun", "on next successful run")}`
+                            : `${t("quest.dailyMissionCompletedToday", "Completed today")} (+${DAILY_MISSION_REWARD_XP} XP)`)
+                          : `${formatDurationMmSs(dailyMissionRemainingSeconds)} ${t("quest.dailyMissionRemainingToUnlock", "remaining to unlock")} +${DAILY_MISSION_REWARD_XP} XP`}
                       </p>
                       {comebackBoostActive && (
                         <p className="mt-2 text-[11px] font-semibold text-amber-200">
-                          {`Comeback boost active: +${COMEBACK_BONUS_PCT}% XP for ${comebackBoostRunsRemaining} run${comebackBoostRunsRemaining === 1 ? "" : "s"}`}
+                          {`${t("quest.comebackBoostActive", "Comeback boost active")}: +${COMEBACK_BONUS_PCT}% XP ${t("quest.comebackBoostFor", "for")} ${comebackBoostRunsRemaining} ${comebackBoostRunsRemaining === 1
+                            ? t("quest.runSingular", "run")
+                            : t("quest.runPlural", "runs")}`}
                         </p>
                       )}
                     </div>
@@ -5534,12 +5574,12 @@ function PlayPageInner() {
                                     <p className="text-sm font-semibold leading-snug text-white">{questTitle}</p>
                                     {ready && !entry.claimed && (
                                       <span className="rounded-full border border-amber-300/65 bg-amber-400/15 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.15em] text-amber-200">
-                                        Ready
+                                        {t("quest.ready", "Ready")}
                                       </span>
                                     )}
                                   </div>
                                   {!!def.subtitle && (
-                                    <p className="mt-1 text-[11px] text-zinc-300/80">{def.subtitle}</p>
+                                    <p className="mt-1 text-[11px] text-zinc-300/80">{getQuestDisplaySubtitle(def)}</p>
                                   )}
                                 </div>
                                 <span className="text-xs font-bold tabular-nums text-zinc-300">{Math.min(entry.progress, def.target)}/{def.target}</span>
@@ -5606,12 +5646,12 @@ function PlayPageInner() {
                                     <p className="text-sm font-semibold leading-snug text-white">{questTitle}</p>
                                     {ready && !entry.claimed && (
                                       <span className="rounded-full border border-amber-300/65 bg-amber-400/15 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.15em] text-amber-200">
-                                        Ready
+                                        {t("quest.ready", "Ready")}
                                       </span>
                                     )}
                                   </div>
                                   {!!def.subtitle && (
-                                    <p className="mt-1 text-[11px] text-zinc-300/80">{def.subtitle}</p>
+                                    <p className="mt-1 text-[11px] text-zinc-300/80">{getQuestDisplaySubtitle(def)}</p>
                                   )}
                                 </div>
                                 <span className="text-xs font-bold tabular-nums text-zinc-300">{Math.min(entry.progress, def.target)}/{def.target}</span>
@@ -6802,7 +6842,7 @@ function PlayPageInner() {
                 <div className="flex flex-wrap items-center justify-center gap-2">
                   <span className="inline-flex items-center gap-1 rounded-full border border-amber-300/55 bg-amber-400/14 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-amber-100">
                     <Sparkles className="h-3.5 w-3.5" />
-                    Quest Complete
+                    {t("quest.questComplete", "Quest Complete")}
                   </span>
                   {alertRewardXp > 0 && (
                     <span className="rounded-full border border-emerald-300/50 bg-emerald-500/12 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-100">
