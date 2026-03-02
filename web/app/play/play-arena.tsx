@@ -263,6 +263,12 @@ const SHARINGAN_EYE_SHADOW = 0.4;
 const SHARINGAN_EYE_LIGHT = 0.95;
 const SHARINGAN_EYE_GLOW = 0.6;
 const SHARINGAN_EYE_REFLECT = 0.35;
+const MANGEKYOU_TUNE_DEFAULT_OFFSET_X_PCT = 0;
+const MANGEKYOU_TUNE_DEFAULT_OFFSET_Y_PCT = -16.7;
+const MANGEKYOU_TUNE_DEFAULT_ROTATE_DEG = 180;
+const MANGEKYOU_TUNE_DEFAULT_CURVE_PCT = 12.4;
+const MANGEKYOU_TUNE_OFFSET_X_SPAN_SCALE = 2.2;
+const MANGEKYOU_TUNE_OFFSET_Y_SPAN_SCALE = 2.8;
 
 const SHADOW_CLONE_OFFSET_RATIO = 0.3;
 const SHADOW_CLONE_SCALE = 1.0;
@@ -284,9 +290,10 @@ const REAPER_BG_BASE_SCALE = 1.03;
 const REAPER_BG_ZOOM_AMP = 0.08;
 const REAPER_BG_ZOOM_HZ = 0.22;
 const REAPER_BG_FLOAT_X_AMP = 14;
-const REAPER_BG_FLOAT_Y_AMP = 20;
+const REAPER_BG_FLOAT_Y_AMP = 12;
 const REAPER_BG_FLOAT_HZ = 0.16;
-const REAPER_BG_Y_OFFSET = -30;
+// Keep resolution/scaling untouched; shift visual center lower so Reaper sits on the player.
+const REAPER_BG_Y_OFFSET = 260;
 const REAPER_BG_KEEP_RATIO = 0.4;
 const REAPER_BG_DARKEN_ALPHA = 0.42;
 const REAPER_PERSON_BRIGHTNESS = 0.82;
@@ -1631,6 +1638,10 @@ export default function PlayArena({
   const [faceAnchor, setFaceAnchor] = useState<{ x: number; y: number } | null>(null);
   const [headYaw, setHeadYaw] = useState(0);
   const [headPitch, setHeadPitch] = useState(0);
+  const [mangekyouTuneOffsetXPct, setMangekyouTuneOffsetXPct] = useState(MANGEKYOU_TUNE_DEFAULT_OFFSET_X_PCT);
+  const [mangekyouTuneOffsetYPct, setMangekyouTuneOffsetYPct] = useState(MANGEKYOU_TUNE_DEFAULT_OFFSET_Y_PCT);
+  const [mangekyouTuneRotateDeg, setMangekyouTuneRotateDeg] = useState(MANGEKYOU_TUNE_DEFAULT_ROTATE_DEG);
+  const [mangekyouTuneBendPct, setMangekyouTuneBendPct] = useState(MANGEKYOU_TUNE_DEFAULT_CURVE_PCT);
   const [phoenixFireballs, setPhoenixFireballs] = useState<PhoenixBall[]>([]);
   const [comboTripleEffect, setComboTripleEffect] = useState<"none" | "chidori" | "rasengan">("none");
   const [xpPopupText, setXpPopupText] = useState("");
@@ -1642,6 +1653,10 @@ export default function PlayArena({
   const [sfxLoadFailed, setSfxLoadFailed] = useState(0);
   const [sfxRetryNonce, setSfxRetryNonce] = useState(0);
   const [videoAspect, setVideoAspect] = useState(4 / 3);
+  const mangekyouTuneOffsetXPctRef = useRef(MANGEKYOU_TUNE_DEFAULT_OFFSET_X_PCT);
+  const mangekyouTuneOffsetYPctRef = useRef(MANGEKYOU_TUNE_DEFAULT_OFFSET_Y_PCT);
+  const mangekyouTuneRotateDegRef = useRef(MANGEKYOU_TUNE_DEFAULT_ROTATE_DEG);
+  const mangekyouTuneBendPctRef = useRef(MANGEKYOU_TUNE_DEFAULT_CURVE_PCT);
 
   const preloadSfx = useCallback((src: string): Promise<boolean> => {
     const path = String(src || "").trim();
@@ -2034,12 +2049,23 @@ export default function PlayArena({
               1,
               REAPER_BG_BASE_SCALE + (Math.sin(nowSec * Math.PI * 2 * REAPER_BG_ZOOM_HZ) * REAPER_BG_ZOOM_AMP),
             );
-            const bgW = overlayCanvas.width * zoom;
-            const bgH = overlayCanvas.height * zoom;
+            // Preserve source aspect ratio (cover) so Reaper art is never stretched.
+            const canvasW = overlayCanvas.width;
+            const canvasH = overlayCanvas.height;
+            const imageAspect = bgImage.naturalWidth / Math.max(1, bgImage.naturalHeight);
+            const canvasAspect = canvasW / Math.max(1, canvasH);
+            const baseBgW = imageAspect > canvasAspect
+              ? (canvasH * imageAspect)
+              : canvasW;
+            const baseBgH = imageAspect > canvasAspect
+              ? canvasH
+              : (canvasW / Math.max(0.0001, imageAspect));
+            const bgW = baseBgW * zoom;
+            const bgH = baseBgH * zoom;
             const driftX = Math.sin(nowSec * Math.PI * 2 * REAPER_BG_FLOAT_HZ) * REAPER_BG_FLOAT_X_AMP;
             const driftY = (Math.cos(nowSec * Math.PI * 2 * REAPER_BG_FLOAT_HZ) * REAPER_BG_FLOAT_Y_AMP) + REAPER_BG_Y_OFFSET;
-            const bgX = ((overlayCanvas.width - bgW) * 0.5) + driftX;
-            const bgY = ((overlayCanvas.height - bgH) * 0.5) + driftY;
+            const bgX = ((canvasW - bgW) * 0.5) + driftX;
+            const bgY = ((canvasH - bgH) * 0.5) + driftY;
             overlayCtx.drawImage(bgImage, bgX, bgY, bgW, bgH);
           } else {
             const gradient = overlayCtx.createLinearGradient(0, 0, 0, overlayCanvas.height);
@@ -2183,11 +2209,77 @@ export default function PlayArena({
                 x: rightSocketCenterNorm.x * canvasW,
                 y: rightSocketCenterNorm.y * canvasH,
               };
+              const socketSpanPx = Math.hypot(
+                rightSocketCenterPx.x - leftSocketCenterPx.x,
+                rightSocketCenterPx.y - leftSocketCenterPx.y,
+              );
+              const tuneShiftBasePx = Math.max(1, socketSpanPx);
 
               const faceAngle = Math.atan2(
                 rightSocketCenterPx.y - leftSocketCenterPx.y,
                 rightSocketCenterPx.x - leftSocketCenterPx.x,
               );
+              const mangekyouTuneActive = String(sharinganEyeTexturePathRef.current || "").includes("mangekyou");
+              const tuneShiftLocalXPx = mangekyouTuneActive
+                ? ((mangekyouTuneOffsetXPctRef.current / 100) * tuneShiftBasePx * MANGEKYOU_TUNE_OFFSET_X_SPAN_SCALE)
+                : 0;
+              const tuneShiftLocalYPx = mangekyouTuneActive
+                ? ((mangekyouTuneOffsetYPctRef.current / 100) * tuneShiftBasePx * MANGEKYOU_TUNE_OFFSET_Y_SPAN_SCALE)
+                : 0;
+              const bloodTuneRotateRad = mangekyouTuneActive
+                ? ((mangekyouTuneRotateDegRef.current * Math.PI) / 180)
+                : 0;
+              const bloodTuneCurveU = mangekyouTuneActive
+                ? clamp(mangekyouTuneBendPctRef.current / 100, 0, 1)
+                : 0;
+              const bloodAngle = faceAngle + bloodTuneRotateRad;
+              const tuneShiftCos = Math.cos(bloodAngle);
+              const tuneShiftSin = Math.sin(bloodAngle);
+              // Keep tuning offsets face-relative so they stay attached while the head rotates.
+              const tuneShiftXPx = (tuneShiftLocalXPx * tuneShiftCos) - (tuneShiftLocalYPx * tuneShiftSin);
+              const tuneShiftYPx = (tuneShiftLocalXPx * tuneShiftSin) + (tuneShiftLocalYPx * tuneShiftCos);
+              const drawCurvedImage = (
+                image: HTMLImageElement,
+                dstX: number,
+                dstY: number,
+                dstW: number,
+                dstH: number,
+                curve: number,
+              ) => {
+                const curveNorm = clamp(curve, 0, 1);
+                if (curveNorm <= 0.001 || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+                  foregroundCtx.drawImage(image, dstX, dstY, dstW, dstH);
+                  return;
+                }
+                const stripCount = isLikelyLowPowerMobile
+                  ? 10
+                  : Math.max(14, Math.min(24, Math.round(14 + (curveNorm * 10))));
+                const srcW = image.naturalWidth;
+                const srcH = image.naturalHeight;
+                const amplitudePx = curveNorm * dstH * 0.34;
+                for (let strip = 0; strip < stripCount; strip += 1) {
+                  const t0 = strip / stripCount;
+                  const t1 = (strip + 1) / stripCount;
+                  const tMid = (t0 + t1) * 0.5;
+                  const xNorm = (tMid * 2) - 1;
+                  const yOffset = amplitudePx * (1 - (xNorm * xNorm));
+                  const srcX = t0 * srcW;
+                  const srcSliceW = Math.max(1, (t1 - t0) * srcW);
+                  const dstStripX = dstX + (t0 * dstW);
+                  const dstSliceW = Math.max(1, (t1 - t0) * dstW + 0.8);
+                  foregroundCtx.drawImage(
+                    image,
+                    srcX,
+                    0,
+                    srcSliceW,
+                    srcH,
+                    dstStripX,
+                    dstY + yOffset,
+                    dstSliceW,
+                    dstH,
+                  );
+                }
+              };
 
               const eyeTexturePath = sharinganEyeTexturePathRef.current || "/sharingan.png";
               const eyeTextureImage = getCachedImage(sharinganAssetImageCacheRef.current, eyeTexturePath);
@@ -2280,37 +2372,40 @@ export default function PlayArena({
               const bloodTextureImage = getCachedImage(sharinganAssetImageCacheRef.current, bloodTexturePath);
               const bloodReady = bloodTextureImage.complete && bloodTextureImage.naturalWidth > 0;
 
-              if (bloodReady) {
+              if (bloodReady && mangekyouTuneActive) {
+                const leftBloodDropOffsetPx = Math.max(smoothEyeState.left.s * 0.62, 3);
+                const rightBloodDropOffsetPx = Math.max(smoothEyeState.right.s * 0.62, 3);
                 const leftBloodCenter = {
-                  x: leftSocketCenterPx.x,
+                  x: leftSocketCenterPx.x + tuneShiftXPx,
                   y: clamp(
-                    leftSocketCenterNorm.y + ((smoothEyeState.left.s / canvasW) * 0.48),
-                    0.04,
-                    0.98,
-                  ) * canvasH,
+                    leftSocketCenterPx.y + leftBloodDropOffsetPx + tuneShiftYPx,
+                    canvasH * 0.04,
+                    canvasH * 0.98,
+                  ),
                 };
                 const rightBloodCenter = {
-                  x: rightSocketCenterPx.x,
+                  x: rightSocketCenterPx.x + tuneShiftXPx,
                   y: clamp(
-                    rightSocketCenterNorm.y + ((smoothEyeState.right.s / canvasW) * 0.48),
-                    0.04,
-                    0.98,
-                  ) * canvasH,
+                    rightSocketCenterPx.y + rightBloodDropOffsetPx + tuneShiftYPx,
+                    canvasH * 0.04,
+                    canvasH * 0.98,
+                  ),
                 };
                 const drawBlood = (center: { x: number; y: number }, eyeSize: number) => {
-                  const width = Math.max(18, eyeSize * 2.5);
-                  const height = Math.max(36, eyeSize * 7.0);
+                  const width = Math.max(10, eyeSize * 2.5);
+                  const height = Math.max(20, eyeSize * 7.0);
                   foregroundCtx.save();
                   foregroundCtx.translate(center.x, center.y);
-                  foregroundCtx.rotate(faceAngle);
+                  foregroundCtx.rotate(bloodAngle);
                   foregroundCtx.globalAlpha = 0.95;
                   foregroundCtx.filter = "saturate(1.35) contrast(1.15)";
-                  foregroundCtx.drawImage(
+                  drawCurvedImage(
                     bloodTextureImage,
                     -width * 0.5,
                     -height * 0.05,
                     width,
                     height,
+                    bloodTuneCurveU,
                   );
                   foregroundCtx.filter = "none";
                   foregroundCtx.restore();
@@ -4680,6 +4775,7 @@ export default function PlayArena({
       }
       : null;
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
+  const showMangekyouTunePanel = false;
   const showSpeedHud = isRankMode && phase !== "loading" && phase !== "error";
   const showSignChip = phase === "active"
     && !isCalibrationMode
@@ -4771,6 +4867,22 @@ export default function PlayArena({
   useEffect(() => {
     sharinganBloodFrameRef.current = sharinganBloodFrame;
   }, [sharinganBloodFrame]);
+
+  useEffect(() => {
+    mangekyouTuneOffsetXPctRef.current = mangekyouTuneOffsetXPct;
+  }, [mangekyouTuneOffsetXPct]);
+
+  useEffect(() => {
+    mangekyouTuneOffsetYPctRef.current = mangekyouTuneOffsetYPct;
+  }, [mangekyouTuneOffsetYPct]);
+
+  useEffect(() => {
+    mangekyouTuneRotateDegRef.current = mangekyouTuneRotateDeg;
+  }, [mangekyouTuneRotateDeg]);
+
+  useEffect(() => {
+    mangekyouTuneBendPctRef.current = mangekyouTuneBendPct;
+  }, [mangekyouTuneBendPct]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -5024,6 +5136,92 @@ export default function PlayArena({
                   <div>STATE: {phaseLabel}</div>
                   <div className="break-words">
                     LOADED SIGNS: {loadedDatasetLabels.length > 0 ? loadedDatasetLabels.join(", ") : "(none)"}
+                  </div>
+                </div>
+              )}
+
+              {showMangekyouTunePanel && (
+                <div className="pointer-events-auto absolute bottom-2 left-2 z-40 w-[300px] rounded-xl border border-rose-300/35 bg-black/72 px-3 py-3 backdrop-blur">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-rose-200">Mangekyou Tune</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMangekyouTuneOffsetXPct(MANGEKYOU_TUNE_DEFAULT_OFFSET_X_PCT);
+                        setMangekyouTuneOffsetYPct(MANGEKYOU_TUNE_DEFAULT_OFFSET_Y_PCT);
+                        setMangekyouTuneRotateDeg(MANGEKYOU_TUNE_DEFAULT_ROTATE_DEG);
+                        setMangekyouTuneBendPct(MANGEKYOU_TUNE_DEFAULT_CURVE_PCT);
+                      }}
+                      className="rounded border border-rose-300/35 bg-rose-500/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-rose-100 hover:bg-rose-500/20"
+                    >
+                      Reset
+                    </button>
+                  </div>
+
+                  <div className="space-y-2.5 text-[11px] text-zinc-100">
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <span>X Offset</span>
+                        <span className="font-mono">{mangekyouTuneOffsetXPct.toFixed(1)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-20}
+                        max={20}
+                        step={0.1}
+                        value={mangekyouTuneOffsetXPct}
+                        onChange={(event) => setMangekyouTuneOffsetXPct(Number(event.target.value))}
+                        className="w-full accent-rose-400"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <span>Y Offset</span>
+                        <span className="font-mono">{mangekyouTuneOffsetYPct.toFixed(1)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-20}
+                        max={20}
+                        step={0.1}
+                        value={mangekyouTuneOffsetYPct}
+                        onChange={(event) => setMangekyouTuneOffsetYPct(Number(event.target.value))}
+                        className="w-full accent-rose-400"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <span>Rotate</span>
+                        <span className="font-mono">{mangekyouTuneRotateDeg.toFixed(1)}deg</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-180}
+                        max={180}
+                        step={0.1}
+                        value={mangekyouTuneRotateDeg}
+                        onChange={(event) => setMangekyouTuneRotateDeg(Number(event.target.value))}
+                        className="w-full accent-rose-400"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <span>Curve (_ to U)</span>
+                        <span className="font-mono">{mangekyouTuneBendPct.toFixed(1)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={0.1}
+                        value={mangekyouTuneBendPct}
+                        onChange={(event) => setMangekyouTuneBendPct(Number(event.target.value))}
+                        className="w-full accent-rose-400"
+                      />
+                    </div>
                   </div>
                 </div>
               )}

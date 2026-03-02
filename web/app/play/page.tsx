@@ -1902,7 +1902,6 @@ function PlayPageInner() {
   const [selectedJutsu, setSelectedJutsu] = useState<string>(Object.keys(OFFICIAL_JUTSUS)[0] || "");
   const [tutorialStep, setTutorialStep] = useState(0);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [questNotice, setQuestNotice] = useState("");
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const [serverOffsetMs, setServerOffsetMs] = useState(0);
   const [serverClockSynced, setServerClockSynced] = useState(false);
@@ -3347,7 +3346,6 @@ function PlayPageInner() {
         setIdentityLinked(false);
         setCalibrationGateSkipped(false);
         setStateError("");
-        setQuestNotice("");
         clearQueuedRunPanels();
         setLevelUpPanel(null);
         setMasteryPanel(null);
@@ -3372,7 +3370,6 @@ function PlayPageInner() {
         clearQueuedRunPanels();
         setLevelUpPanel(null);
         setMasteryPanel(null);
-        setQuestNotice("");
       }
     });
 
@@ -3861,9 +3858,6 @@ function PlayPageInner() {
         }
         : null;
 
-      if (unlocks.length > 0 && nextProgression.level <= previousLevel) {
-        setQuestNotice(`${t("run.unlockedPrefix", "Unlocked")}: ${unlocks.join(", ")}`);
-      }
 
       return {
         ok: true,
@@ -4158,11 +4152,6 @@ function PlayPageInner() {
 
       writePendingRankQueue([...remaining, ...replayLater]);
 
-      if (recovered > 0) {
-        setQuestNotice(
-          `${t("run.recoveredPendingPrefix", "Recovered")} ${recovered} ${t("run.pendingRankSubmit", "pending rank submit")}${recovered === 1 ? "" : t("run.pluralSuffix", "s")}.`,
-        );
-      }
     } finally {
       pendingRankReplayBusyRef.current = false;
     }
@@ -4274,13 +4263,6 @@ function PlayPageInner() {
     if (isRankRun && !runRes.ok && runRes.reason) {
       detailParts.push(`XP sync skipped: ${runRes.reason}`);
     }
-    if (missionUnlockedThisRun) {
-      if (runRes.ok) {
-        setQuestNotice(`Daily 3-minute mission complete (+${DAILY_MISSION_REWARD_XP} XP).`);
-      } else {
-        setQuestNotice("Daily 3-minute mission complete. Reward will apply on your next successful run.");
-      }
-    }
 
     return {
       ok: isRankRun ? true : runRes.ok,
@@ -4378,7 +4360,6 @@ function PlayPageInner() {
         }
         const rewardXp = Math.max(0, Math.floor(Number(res.reward_xp) || def.reward));
         const title = String(res.title || getQuestDisplayTitle(def));
-        setQuestNotice(`${t("quest.questClaimedPrefix", "Quest claimed")}: ${title} (+${rewardXp} XP).`);
         openAlertModal(
           t("quest.rewardTitle", "Quest Reward"),
           `${title}\n${t("quest.rewardClaimed", "Reward claimed")}: +${rewardXp} XP`,
@@ -4617,12 +4598,6 @@ function PlayPageInner() {
 
         {session && (
           <div className={isViewportLockedView ? "flex h-full min-h-0 flex-col" : ""}>
-            {!!questNotice && (
-              <div className="mx-auto mb-4 w-full max-w-5xl rounded-xl border border-emerald-400/35 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">
-                {questNotice}
-              </div>
-            )}
-
             {!!visibleStateError && (
               <div className="mx-auto mb-4 w-full max-w-5xl rounded-xl border border-red-400/35 bg-red-500/10 px-4 py-2 text-sm text-red-200">
                 {visibleStateError}
