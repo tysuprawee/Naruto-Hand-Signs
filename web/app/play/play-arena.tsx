@@ -1451,6 +1451,11 @@ export default function PlayArena({
     [isCalibrationMode, jutsu?.effect],
   );
   const sequence = useMemo(() => (jutsu?.sequence ?? []).map((s) => normalizeLabel(s)), [jutsu]);
+  // DB secure-submit rules can require at least one sign event; eye-only modes have no hand-sign sequence.
+  const rankProofExpectedSigns = useMemo(
+    () => (isRankMode && isSharinganChargedMode ? 1 : sequence.length),
+    [isRankMode, isSharinganChargedMode, sequence.length],
+  );
   const sequenceKey = useMemo(() => sequence.join("|"), [sequence]);
   const datasetVersionToken = useMemo(() => buildDatasetVersionToken(datasetVersion), [datasetVersion]);
   const datasetChecksumHint = useMemo(
@@ -2628,7 +2633,7 @@ export default function PlayArena({
 
     appendProofEvent("run_start", nowMs, {
       mode: String(jutsuName || "").toUpperCase(),
-      expected_signs: sequence.length,
+      expected_signs: rankProofExpectedSigns,
     });
 
     if (!onRequestRunToken) return;
@@ -2647,7 +2652,7 @@ export default function PlayArena({
       proofTokenSourceRef.current = "none";
       proofTokenReasonRef.current = String((err as Error)?.message || "token_request_failed");
     }
-  }, [appendProofEvent, isRankMode, jutsuName, onRequestRunToken, resetProofState, sequence.length]);
+  }, [appendProofEvent, isRankMode, jutsuName, onRequestRunToken, rankProofExpectedSigns, resetProofState]);
 
   useEffect(() => {
     if (!datasetChecksumHint) return;
@@ -2970,8 +2975,8 @@ export default function PlayArena({
       const payload: PlayArenaResult = {
         mode: runMode,
         jutsuName,
-        signsLanded: Math.max(signsLandedRef.current, sequence.length),
-        expectedSigns: sequence.length,
+        signsLanded: Math.max(signsLandedRef.current, rankProofExpectedSigns),
+        expectedSigns: rankProofExpectedSigns,
         elapsedSeconds: Math.max(0, elapsedRef.current / 1000),
         effectDurationMs: Math.max(0, Math.floor(castEffectDurationRef.current || 0)),
       };
@@ -3044,9 +3049,9 @@ export default function PlayArena({
     isRankMode,
     jutsuName,
     onComplete,
+    rankProofExpectedSigns,
     resolutionIdx,
     restrictedSigns,
-    sequence.length,
   ]);
 
   const handleShareResult = useCallback(async () => {
@@ -4112,6 +4117,11 @@ export default function PlayArena({
         setCurrentStep(sequence.length);
         setSignsLanded(sequence.length);
         if (isRankMode) {
+          appendProofEvent("sign_ok", nowMs, {
+            step: 1,
+            sign: "eye",
+            conf: Number(holdRatio.toFixed(3)),
+          });
           appendProofEvent("sharingan_blink_trigger", nowMs, {
             left: Number(blinkLeftScore.toFixed(3)),
             right: Number(blinkRightScore.toFixed(3)),

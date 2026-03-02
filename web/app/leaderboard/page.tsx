@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, Suspense } from "react";
 import { supabase } from "@/utils/supabase";
+import { OFFICIAL_JUTSUS } from "@/utils/jutsu-registry";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Trophy, Clock, Zap, Crown, ChevronDown } from "lucide-react";
@@ -29,6 +30,10 @@ interface ProfileEntry {
 interface ModeRow {
     mode: string;
 }
+
+const ALL_MODE_OPTIONS = Object.entries(OFFICIAL_JUTSUS)
+    .sort((a, b) => a[1].minLevel - b[1].minLevel || a[0].localeCompare(b[0]))
+    .map(([name]) => name.toUpperCase());
 
 function normalizeIdentityUsername(raw: unknown): string {
     const value = String(raw || "").trim();
@@ -98,8 +103,11 @@ function LeaderboardContent() {
     const [totalCount, setTotalCount] = useState(0);
     const [loading, setLoading] = useState(true);
 
-    const [mode, setMode] = useState(initialModeParam);
-    const [modeOptions, setModeOptions] = useState<string[]>([]);
+    const [mode, setMode] = useState(() => {
+        if (initialModeParam && ALL_MODE_OPTIONS.includes(initialModeParam)) return initialModeParam;
+        return ALL_MODE_OPTIONS[0] || "";
+    });
+    const [modeOptions, setModeOptions] = useState<string[]>(ALL_MODE_OPTIONS);
     const [view, setView] = useState<"speed" | "level">(initialViewParam);
     const [page, setPage] = useState(initialPageParam);
 
@@ -108,7 +116,15 @@ function LeaderboardContent() {
 
     useEffect(() => {
         async function fetchModes() {
-            if (!supabase) return;
+            if (!supabase) {
+                setModeOptions(ALL_MODE_OPTIONS);
+                setMode((current) => {
+                    if (current && ALL_MODE_OPTIONS.includes(current)) return current;
+                    if (initialModeParam && ALL_MODE_OPTIONS.includes(initialModeParam)) return initialModeParam;
+                    return ALL_MODE_OPTIONS[0] || "";
+                });
+                return;
+            }
 
             const { data, error } = await supabase
                 .from("leaderboard")
@@ -118,16 +134,24 @@ function LeaderboardContent() {
 
             if (error) {
                 console.error("Error fetching jutsu modes:", error);
+                setModeOptions(ALL_MODE_OPTIONS);
+                setMode((current) => {
+                    if (current && ALL_MODE_OPTIONS.includes(current)) return current;
+                    if (initialModeParam && ALL_MODE_OPTIONS.includes(initialModeParam)) return initialModeParam;
+                    return ALL_MODE_OPTIONS[0] || "";
+                });
                 return;
             }
 
-            const uniqueModes = Array.from(
+            const dbModes = Array.from(
                 new Set(
                     ((data || []) as ModeRow[])
                         .map((row) => String(row.mode || "").trim().toUpperCase())
                         .filter(Boolean)
                 )
-            ).sort();
+            );
+            const extraModes = dbModes.filter((value) => !ALL_MODE_OPTIONS.includes(value)).sort();
+            const uniqueModes = [...ALL_MODE_OPTIONS, ...extraModes];
 
             setModeOptions(uniqueModes);
             setMode((current) => {

@@ -146,6 +146,8 @@ interface MenuSettingsState {
   resolutionIdx: number;
   noEffects: boolean;
   fullscreen: boolean;
+  displayName: string;
+  defaultName: string;
 }
 
 interface TutorialMetaState {
@@ -288,6 +290,8 @@ const DEFAULT_SETTINGS: MenuSettingsState = {
   resolutionIdx: 0,
   noEffects: false,
   fullscreen: false,
+  displayName: "",
+  defaultName: "",
 };
 
 const RESOLUTION_OPTIONS: Array<{ width: number; height: number; label: string }> = [
@@ -716,6 +720,14 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
+function sanitizeDisplayName(value: unknown, fallback: string): string {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return fallback;
+  return text.slice(0, 24);
+}
+
 type MenuSettingsInput = Partial<Record<keyof MenuSettingsState, unknown>>;
 
 function sanitizeSettings(raw: MenuSettingsInput | null | undefined): MenuSettingsState {
@@ -730,6 +742,8 @@ function sanitizeSettings(raw: MenuSettingsInput | null | undefined): MenuSettin
     resolutionIdx: clampInt(raw?.resolutionIdx, 0, 2, DEFAULT_SETTINGS.resolutionIdx),
     noEffects: parseBoolean(raw?.noEffects, DEFAULT_SETTINGS.noEffects),
     fullscreen: parseBoolean(raw?.fullscreen, DEFAULT_SETTINGS.fullscreen),
+    displayName: sanitizeDisplayName(raw?.displayName, DEFAULT_SETTINGS.displayName),
+    defaultName: sanitizeDisplayName(raw?.defaultName, DEFAULT_SETTINGS.defaultName),
   };
 }
 
@@ -1478,7 +1492,8 @@ function sanitizeQueuedRankResult(raw: unknown): PlayArenaResult | null {
   const jutsuName = String(raw.jutsuName || "").trim();
   if (!jutsuName) return null;
 
-  const expectedSigns = Math.max(1, Math.floor(Number(raw.expectedSigns) || 0));
+  // Eye-based jutsu (e.g. Sharingan / Mangekyou Sharingan) intentionally use zero hand signs.
+  const expectedSigns = Math.max(0, Math.floor(Number(raw.expectedSigns) || 0));
   const signsLanded = Math.max(0, Math.floor(Number(raw.signsLanded) || 0));
   const elapsedSeconds = Number(raw.elapsedSeconds);
   if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return null;
@@ -1985,7 +2000,11 @@ function PlayPageInner() {
       discordId: sessionIdentity.discordId,
     };
   }, [boundUsername, sessionIdentity]);
-  const username = useMemo(() => getDiscordDisplayName(session, sessionIdentity), [session, sessionIdentity]);
+  const oauthDisplayName = useMemo(() => getDiscordDisplayName(session, sessionIdentity), [session, sessionIdentity]);
+  const playerName = useMemo(
+    () => sanitizeDisplayName(savedSettings.displayName, "") || oauthDisplayName || "Shinobi",
+    [oauthDisplayName, savedSettings.displayName],
+  );
   const avatarUrl = useMemo(() => getDiscordAvatar(session), [session]);
   const visibleStateError = stateError || (
     session && !sessionIdentity
@@ -2007,6 +2026,16 @@ function PlayPageInner() {
     if (identity?.username) return identity.username.toLowerCase();
     return "guest";
   }, [identity?.discordId, identity?.username]);
+
+  useEffect(() => {
+    const canonicalDefault = sanitizeDisplayName(
+      sessionIdentity?.username || identity?.username || oauthDisplayName,
+      "",
+    );
+    if (!canonicalDefault) return;
+    setSavedSettings((prev) => (prev.defaultName ? prev : { ...prev, defaultName: canonicalDefault }));
+    setDraftSettings((prev) => (prev.defaultName ? prev : { ...prev, defaultName: canonicalDefault }));
+  }, [identity?.username, oauthDisplayName, sessionIdentity?.username]);
   const dailyQuestDefs = useMemo(
     () => buildDynamicDailyQuestDefs(questState.daily.period, questIdentitySeed),
     [questIdentitySeed, questState.daily.period],
@@ -3048,6 +3077,8 @@ function PlayPageInner() {
         resolution_idx: DEFAULT_SETTINGS.resolutionIdx,
         no_effects: DEFAULT_SETTINGS.noEffects,
         fullscreen: DEFAULT_SETTINGS.fullscreen,
+        display_name: DEFAULT_SETTINGS.displayName,
+        default_name: targetIdentity.username,
       },
     });
     if (Boolean(settingsRes.ok)) {
@@ -3226,7 +3257,8 @@ function PlayPageInner() {
 
     if (Boolean(settingsRes.ok) && isRecord(settingsRes.settings)) {
       const cloud = settingsRes.settings as Record<string, unknown>;
-      const cloudSettings = sanitizeSettings({
+      const shouldBackfillDefaultName = !sanitizeDisplayName(cloud.default_name ?? cloud.defaultName, "");
+      let cloudSettings = sanitizeSettings({
         musicVol: Number(cloud.music_vol ?? cloud.musicVol),
         sfxVol: Number(cloud.sfx_vol ?? cloud.sfxVol),
         cameraIdx: Number(cloud.camera_idx ?? cloud.cameraIdx),
@@ -3236,11 +3268,39 @@ function PlayPageInner() {
         resolutionIdx: Number(cloud.resolution_idx ?? cloud.resolutionIdx),
         noEffects: cloud.no_effects ?? cloud.noEffects,
         fullscreen: cloud.fullscreen,
+        displayName: cloud.display_name ?? cloud.displayName,
+        defaultName: cloud.default_name ?? cloud.defaultName,
       });
+      if (!cloudSettings.defaultName) {
+        cloudSettings = {
+          ...cloudSettings,
+          defaultName: sanitizeDisplayName(effectiveIdentity.username, ""),
+        };
+      }
       setSavedSettings(cloudSettings);
       setDraftSettings(cloudSettings);
       if (typeof window !== "undefined") {
         window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(cloudSettings));
+      }
+      if (shouldBackfillDefaultName && effectiveIdentity?.username) {
+        void callBoundRpc("upsert_profile_settings_bound_auth", "upsert_profile_settings_bound", {
+          p_username: effectiveIdentity.username,
+          p_discord_id: effectiveIdentity.discordId,
+          p_user_settings: {
+            music_vol: cloudSettings.musicVol,
+            sfx_vol: cloudSettings.sfxVol,
+            camera_idx: cloudSettings.cameraIdx,
+            debug_hands: cloudSettings.debugHands,
+            restricted_signs: cloudSettings.restrictedSigns,
+            ram_tiger_shared: cloudSettings.ramTigerShared,
+            easy_mode: false,
+            resolution_idx: cloudSettings.resolutionIdx,
+            no_effects: cloudSettings.noEffects,
+            fullscreen: cloudSettings.fullscreen,
+            display_name: cloudSettings.displayName,
+            default_name: cloudSettings.defaultName,
+          },
+        });
       }
     }
 
@@ -3563,7 +3623,15 @@ function PlayPageInner() {
   };
 
   const handleSaveSettings = async () => {
-    const next = sanitizeSettings(draftSettings);
+    const fallbackDefaultName = sanitizeDisplayName(
+      identity?.username || sessionIdentity?.username || oauthDisplayName,
+      "",
+    );
+    const next = sanitizeSettings({
+      ...draftSettings,
+      defaultName: sanitizeDisplayName(draftSettings.defaultName, fallbackDefaultName) || fallbackDefaultName,
+      displayName: sanitizeDisplayName(draftSettings.displayName, ""),
+    });
     if (typeof window !== "undefined") {
       window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
       toggleFullscreen(next.fullscreen);
@@ -3584,6 +3652,8 @@ function PlayPageInner() {
           resolution_idx: next.resolutionIdx,
           no_effects: next.noEffects,
           fullscreen: next.fullscreen,
+          display_name: next.displayName,
+          default_name: next.defaultName,
         },
       });
       if (!Boolean(res.ok)) {
@@ -4576,7 +4646,7 @@ function PlayPageInner() {
                           {avatarUrl ? (
                             <Image
                               src={avatarUrl}
-                              alt={username}
+                              alt={playerName}
                               width={38}
                               height={38}
                               unoptimized
@@ -4584,12 +4654,12 @@ function PlayPageInner() {
                             />
                           ) : (
                             <div className="flex h-full w-full items-center justify-center bg-ninja-card text-base font-black text-zinc-100">
-                              {username.slice(0, 1).toUpperCase()}
+                              {playerName.slice(0, 1).toUpperCase()}
                             </div>
                           )}
                         </div>
                         <div className="min-w-0 flex-1 leading-tight">
-                          <p className="truncate text-sm font-black text-white">{username}</p>
+                          <p className="truncate text-sm font-black text-white">{playerName}</p>
                           <p className="truncate text-[10px] font-bold uppercase tracking-wider text-ninja-accent">
                             {progression.rank}
                           </p>
@@ -5892,6 +5962,40 @@ function PlayPageInner() {
                 <p className="mt-1 text-sm text-ninja-dim">{t("settings.subtitle", "Menu settings mirror the pygame controls.")}</p>
 
                 <div className="mt-6 space-y-6">
+                  <div className="rounded-lg border border-ninja-border bg-ninja-bg/30 p-4">
+                    <div className="mb-2 flex items-center justify-between text-sm text-zinc-100">
+                      <span>{t("settings.displayName", "Display Name")}</span>
+                      <span className="font-mono text-ninja-accent">{draftSettings.displayName.length}/24</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={draftSettings.displayName}
+                      maxLength={24}
+                      onChange={(event) => {
+                        setDraftSettings((prev) => ({
+                          ...prev,
+                          displayName: sanitizeDisplayName(event.target.value, ""),
+                        }));
+                      }}
+                      placeholder={draftSettings.defaultName || oauthDisplayName || "Shinobi"}
+                      className="w-full rounded-md border border-ninja-border bg-black/30 px-3 py-2 text-sm text-white placeholder:text-zinc-500"
+                    />
+                    <div className="mt-2 flex items-center justify-between text-xs text-zinc-400">
+                      <span>
+                        {t("settings.defaultName", "Default Name")}: {draftSettings.defaultName || oauthDisplayName || "Shinobi"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraftSettings((prev) => ({ ...prev, displayName: "" }));
+                        }}
+                        className="rounded border border-ninja-border bg-black/30 px-2 py-1 text-[10px] font-bold tracking-wide text-zinc-300 hover:text-white"
+                      >
+                        {t("settings.useDefaultName", "USE DEFAULT")}
+                      </button>
+                    </div>
+                  </div>
+
                   <div>
                     <div className="mb-2 flex items-center justify-between text-sm text-zinc-100">
                       <span>{t("settings.musicVolume", "Music Volume")}</span>
