@@ -270,7 +270,7 @@ const MANGEKYOU_TUNE_DEFAULT_CURVE_PCT = 12.4;
 const MANGEKYOU_TUNE_OFFSET_X_SPAN_SCALE = 2.2;
 const MANGEKYOU_TUNE_OFFSET_Y_SPAN_SCALE = 2.8;
 
-const SHADOW_CLONE_OFFSET_RATIO = 0.3;
+const SHADOW_CLONE_OFFSET_RATIO = 0.28;
 const SHADOW_CLONE_SCALE = 1.0;
 const SHADOW_CLONE_OPACITY = 0.92;
 const SHADOW_CLONE_ENTER_DURATION_MS = 650;
@@ -1180,6 +1180,31 @@ function smoothEffectAnchor(previous: EffectAnchor | null, next: EffectAnchor): 
   };
 }
 
+function mapCoverAnchorToStage(
+  rawXNorm: number,
+  rawYNorm: number,
+  sourceAspect: number,
+  stageAspect = 4 / 3,
+): { xNorm: number; yNorm: number } {
+  const srcAspect = Math.max(0.1, Number(sourceAspect || (4 / 3)));
+  const dstAspect = Math.max(0.1, Number(stageAspect || (4 / 3)));
+  let mappedX = rawXNorm;
+  let mappedY = rawYNorm;
+  if (srcAspect > dstAspect) {
+    const renderedW = srcAspect / dstAspect;
+    const cropX = (renderedW - 1) * 0.5;
+    mappedX = (rawXNorm * renderedW) - cropX;
+  } else if (srcAspect < dstAspect) {
+    const renderedH = dstAspect / srcAspect;
+    const cropY = (renderedH - 1) * 0.5;
+    mappedY = (rawYNorm * renderedH) - cropY;
+  }
+  return {
+    xNorm: clamp(mappedX, -0.3, 1.3),
+    yNorm: clamp(mappedY, -0.3, 1.3),
+  };
+}
+
 function getCachedImage(cache: Map<string, HTMLImageElement>, src: string): HTMLImageElement {
   const existing = cache.get(src);
   if (existing) return existing;
@@ -1513,6 +1538,7 @@ export default function PlayArena({
   const shadowCloneStartAtRef = useRef(0);
   const shadowCloneBlinkSettlePendingRef = useRef(false);
   const shadowCloneBlinkPhasePrevRef = useRef<number | null>(null);
+  const shadowCloneCurrentOffsetRatioRef = useRef(0);
   const showJutsuEffectRef = useRef(false);
   const activeEffectRef = useRef("");
   const renderRafRef = useRef(0);
@@ -1567,6 +1593,7 @@ export default function PlayArena({
   const castResultTimerRef = useRef<number | null>(null);
   const calibrationReturnTimerRef = useRef<number | null>(null);
   const shareStatusTimerRef = useRef<number | null>(null);
+  const comboCheckpointInputGateUntilRef = useRef(0);
   const phoenixRafRef = useRef(0);
   const phoenixLastAtRef = useRef(0);
   const cameraFpsWindowStartRef = useRef(0);
@@ -1815,7 +1842,10 @@ export default function PlayArena({
     const cfg = OFFICIAL_JUTSUS[name];
     const direct = String(cfg?.soundPath || "").trim();
     if (direct) return direct;
-    if (normalizeLabel(effectName) === "clone") return "/sounds/each.mp3";
+    const effectToken = normalizeLabel(effectName);
+    if (effectToken === "clone") return "/sounds/each.mp3";
+    if (effectToken === "lightning") return "/sounds/chidori.mp3";
+    if (effectToken === "rasengan") return "/sounds/rasengan.mp3";
     return "";
   }, []);
 
@@ -1924,6 +1954,7 @@ export default function PlayArena({
       shadowCloneLastSendAtRef.current = 0;
       shadowCloneSegmentationBusyRef.current = false;
     }
+    shadowCloneCurrentOffsetRatioRef.current = 0;
   }, []);
 
   const clearSharinganForegroundOverlay = useCallback(() => {
@@ -2498,6 +2529,9 @@ export default function PlayArena({
     const entranceT = Math.min(1, elapsedSinceTrigger / cloneEnterDurationMs);
     const entranceEaseOut = 1 - Math.pow(1 - entranceT, 3);
     const animatedOffset = sideOffsetPx * entranceEaseOut;
+    shadowCloneCurrentOffsetRatioRef.current = overlayCanvas.width > 0
+      ? clamp(animatedOffset / overlayCanvas.width, 0, 1)
+      : 0;
 
     let smokeFrame: HTMLImageElement | null = null;
     const smokeFrames = shadowCloneSmokeFramesRef.current;
@@ -2793,6 +2827,7 @@ export default function PlayArena({
     calibrationFinalizeBusyRef.current = false;
     lastCountdownLoggedRef.current = null;
     runFinishedRef.current = false;
+    comboCheckpointInputGateUntilRef.current = 0;
     comboCloneHoldRef.current = false;
     comboChidoriTripleRef.current = false;
     comboRasenganTripleRef.current = false;
@@ -2957,6 +2992,17 @@ export default function PlayArena({
     }
 
     const finalEffect = String(jutsu?.effect || "").toLowerCase();
+    const finalEffectToken = normalizeLabel(finalEffect);
+    let finalCastName = jutsuName;
+    if (Array.isArray(jutsu?.comboParts) && jutsu.comboParts.length > 0) {
+      const finalComboPart = jutsu.comboParts.find((part) => (
+        Number(part?.atStep || 0) === sequence.length
+        && normalizeLabel(String(part?.effect || "")) === finalEffectToken
+      ));
+      if (finalComboPart?.name) {
+        finalCastName = String(finalComboPart.name);
+      }
+    }
     if (finalEffect === "lightning" && comboChidoriTripleRef.current) {
       setComboTripleEffect("chidori");
     } else if (finalEffect === "rasengan" && comboRasenganTripleRef.current) {
@@ -2967,8 +3013,8 @@ export default function PlayArena({
 
     const effectDurationMs = Math.max(650, Math.round((Number(jutsu?.duration) || 5.0) * 1000));
     castEffectDurationRef.current = effectDurationMs;
-    triggerJutsuSignature(jutsuName, finalEffect, { volume: 1 });
-    if (normalizeLabel(finalEffect) === "clone") {
+    triggerJutsuSignature(finalCastName, finalEffect, { volume: 1 });
+    if (finalEffectToken === "clone") {
       const cloneSpawnDelayMs = Math.min(
         CLONE_SPAWN_DELAY_MS,
         Math.max(0, effectDurationMs - 650),
@@ -3003,12 +3049,14 @@ export default function PlayArena({
     appendProofEvent,
     isCalibrationMode,
     isRankMode,
+    jutsu?.comboParts,
     jutsu?.duration,
     jutsu?.effect,
     jutsuName,
     playSfx,
     resetRunState,
     queueEffect,
+    sequence.length,
     triggerJutsuEffect,
     triggerJutsuSignature,
   ]);
@@ -4400,6 +4448,7 @@ export default function PlayArena({
       if (isCalibrationMode) return;
       if (stableLabel === "idle" || stableLabel === "unknown") return;
       if ((nowMs - lastAcceptedAtRef.current) < SIGN_ACCEPT_COOLDOWN_MS) return;
+      if (nowMs < comboCheckpointInputGateUntilRef.current) return;
 
       const stepIdx = currentStepRef.current;
       if (stepIdx >= sequence.length) return;
@@ -4464,8 +4513,20 @@ export default function PlayArena({
             const shouldDeferPartCastToFinish = isFinalStep && partEffectToken === finalEffectToken;
             if (!shouldDeferPartCastToFinish) {
               triggerJutsuSignature(partName, partEffectName, { volume: 0.95 });
+              const checkpointLockMs = partEffectToken === "clone"
+                ? (CLONE_SPAWN_DELAY_MS + SHADOW_CLONE_ENTER_DURATION_MS)
+                : COMBO_PART_EFFECT_DURATION_MS;
+              comboCheckpointInputGateUntilRef.current = Math.max(
+                comboCheckpointInputGateUntilRef.current,
+                nowMs + Math.max(0, checkpointLockMs),
+              );
               if (partEffectToken === "clone") {
-                triggerJutsuEffect(partEffectName, COMBO_CLONE_HOLD_DURATION_MS);
+                const cloneSpawnDelayMs = Math.min(
+                  CLONE_SPAWN_DELAY_MS,
+                  Math.max(0, COMBO_CLONE_HOLD_DURATION_MS - 650),
+                );
+                const cloneVisibleDurationMs = Math.max(650, COMBO_CLONE_HOLD_DURATION_MS - cloneSpawnDelayMs);
+                queueEffect(partEffectName, cloneSpawnDelayMs, cloneVisibleDurationMs);
               } else {
                 triggerJutsuEffect(partEffectName, COMBO_PART_EFFECT_DURATION_MS);
               }
@@ -4507,6 +4568,7 @@ export default function PlayArena({
     sharinganChargeLabel,
     isSharinganChargedMode,
     isLikelyLowPowerMobile,
+    queueEffect,
     triggerJutsuSignature,
     triggerJutsuEffect,
   ]);
@@ -4796,8 +4858,6 @@ export default function PlayArena({
   const cameraStatusText = cameraFailure === "none" ? "OK" : cameraFailure.toUpperCase();
   const effectAnchorNormX = effectAnchor?.x ?? 0.5;
   const effectAnchorNormY = effectAnchor?.y ?? 0.64;
-  const effectAnchorX = Math.round(effectAnchorNormX * 1000) / 10;
-  const effectAnchorY = Math.round(effectAnchorNormY * 1000) / 10;
   const faceAnchorSampleNowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
   const stickyFaceAnchor = lastGoodFaceAnchorRef.current
     && (faceAnchorSampleNowMs - lastGoodFaceAnchorAtRef.current) <= FACE_ANCHOR_STICKY_MS
@@ -4953,7 +5013,27 @@ export default function PlayArena({
     if (Math.abs(strip.scrollLeft - clampedLeft) < 2) return;
     strip.scrollTo({ left: clampedLeft, behavior: "smooth" });
   }, [iconProgressStep, isCalibrationMode, isViewportFitSession, sequence.length, sequenceKey]);
-  const tripleOffsets = comboTripleEffect !== "none" ? [-24, 24] : [0];
+  const comboCloneOffsetNorm = Math.max(
+    0,
+    (shadowCloneCurrentOffsetRatioRef.current > 0
+      ? shadowCloneCurrentOffsetRatioRef.current
+      : SHADOW_CLONE_OFFSET_RATIO),
+  );
+  const powerEffectAnchors = useMemo(() => {
+    const rawAnchorXs = comboTripleEffect !== "none"
+      ? [effectAnchorNormX - comboCloneOffsetNorm, effectAnchorNormX, effectAnchorNormX + comboCloneOffsetNorm]
+      : [effectAnchorNormX];
+    return rawAnchorXs.map((rawXNorm) => {
+      const mapped = mapCoverAnchorToStage(rawXNorm, effectAnchorNormY, videoAspect, 4 / 3);
+      return {
+        xPct: Math.round(mapped.xNorm * 1000) / 10,
+        yPct: Math.round(mapped.yNorm * 1000) / 10,
+      };
+    });
+  }, [comboCloneOffsetNorm, comboTripleEffect, effectAnchorNormX, effectAnchorNormY, videoAspect]);
+  const comboClonePersistRender = showJutsuEffect
+    && comboCloneHoldRef.current
+    && (effectLabel === "lightning" || effectLabel === "rasengan");
   const arenaStageMaxWidthClass = isViewportFitSession ? "max-w-[1040px]" : "max-w-[900px] lg:max-w-[680px] xl:max-w-[720px]";
   const topControlChips = (
     <>
@@ -5270,7 +5350,7 @@ export default function PlayArena({
                       />
                     </div>
                   )}
-                  {effectLabel === "clone" && (
+                  {(effectLabel === "clone" || comboClonePersistRender) && (
                     <canvas
                       ref={shadowCloneCanvasRef}
                       className="absolute inset-0 h-full w-full object-cover"
@@ -5354,9 +5434,9 @@ export default function PlayArena({
                   )}
                   {(effectLabel === "lightning" || effectLabel === "rasengan") && effectVideo && (
                     <div className="absolute inset-0">
-                      {tripleOffsets.map((offsetPct, idx) => (
+                      {powerEffectAnchors.map((anchor, idx) => (
                         <video
-                          key={`effect-${effectLabel}-${idx}-${offsetPct}`}
+                          key={`effect-${effectLabel}-${comboTripleEffect}-${idx}`}
                           autoPlay
                           muted
                           loop
@@ -5365,8 +5445,8 @@ export default function PlayArena({
                           style={{
                             width: `${effectSizePx}px`,
                             height: `${effectSizePx}px`,
-                            left: `calc(${effectAnchorX}% + ${offsetPct}%)`,
-                            top: `${effectAnchorY}%`,
+                            left: `${anchor.xPct}%`,
+                            top: `${anchor.yPct}%`,
                             transform: "translate(-50%, -50%)",
                             filter: "brightness(1.15) contrast(1.3) saturate(1.2)",
                           }}
