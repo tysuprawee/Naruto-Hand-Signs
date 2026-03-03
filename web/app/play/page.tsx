@@ -298,6 +298,105 @@ const DEFAULT_SETTINGS: MenuSettingsState = {
   defaultName: "",
 };
 
+const UI_SFX_REQUIRED_PATHS = [
+  "/sounds/hover.mp3",
+  "/sounds/click.mp3",
+  "/sounds/each.mp3",
+  "/sounds/reward.mp3",
+  "/sounds/level.mp3",
+] as const;
+const UI_SFX_REQUIRED_PATH_SET = new Set<string>(UI_SFX_REQUIRED_PATHS);
+const UI_SFX_AUDIO_CACHE = new Map<string, HTMLAudioElement>();
+const UI_SFX_PRELOAD_PROMISES = new Map<string, Promise<boolean>>();
+const UI_SFX_PERSISTED_READY_KEY = "jutsu-play-ui-sfx-ready-v1";
+const UI_SFX_PERSISTED_READY_PATHS = new Set<string>();
+let UI_SFX_PERSISTED_READY_HYDRATED = false;
+const UI_SFX_PRELOAD_TIMEOUT_MS = 12000;
+
+function hydratePersistedUiSfxReadyPaths(): void {
+  if (UI_SFX_PERSISTED_READY_HYDRATED || typeof window === "undefined") return;
+  UI_SFX_PERSISTED_READY_HYDRATED = true;
+  try {
+    const raw = window.localStorage.getItem(UI_SFX_PERSISTED_READY_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    for (const value of parsed) {
+      const path = String(value || "").trim();
+      if (!path) continue;
+      UI_SFX_PERSISTED_READY_PATHS.add(path);
+    }
+  } catch {
+    // Ignore malformed storage.
+  }
+}
+
+function persistUiSfxReadyPath(path: string): void {
+  if (typeof window === "undefined") return;
+  const normalized = String(path || "").trim();
+  if (!normalized) return;
+  hydratePersistedUiSfxReadyPaths();
+  if (UI_SFX_PERSISTED_READY_PATHS.has(normalized)) return;
+  UI_SFX_PERSISTED_READY_PATHS.add(normalized);
+  try {
+    const trimmed = [...UI_SFX_PERSISTED_READY_PATHS].slice(-80);
+    window.localStorage.setItem(UI_SFX_PERSISTED_READY_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+function preloadUiSfx(path: string): Promise<boolean> {
+  if (typeof window === "undefined") return Promise.resolve(false);
+  const normalized = String(path || "").trim();
+  if (!normalized) return Promise.resolve(false);
+  if (UI_SFX_AUDIO_CACHE.has(normalized)) return Promise.resolve(true);
+
+  const existing = UI_SFX_PRELOAD_PROMISES.get(normalized);
+  if (existing) return existing;
+
+  const promise = new Promise<boolean>((resolve) => {
+    let settled = false;
+    try {
+      const audio = new window.Audio();
+      audio.preload = "auto";
+      audio.src = normalized;
+
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        audio.removeEventListener("canplaythrough", onReady);
+        audio.removeEventListener("loadeddata", onReady);
+        audio.removeEventListener("canplay", onReady);
+        audio.removeEventListener("error", onError);
+        if (ok) {
+          UI_SFX_AUDIO_CACHE.set(normalized, audio);
+          persistUiSfxReadyPath(normalized);
+        }
+        resolve(ok);
+      };
+
+      const onReady = () => finish(true);
+      const onError = () => finish(false);
+      const timer = window.setTimeout(() => finish(false), UI_SFX_PRELOAD_TIMEOUT_MS);
+      audio.addEventListener("canplaythrough", onReady);
+      audio.addEventListener("loadeddata", onReady);
+      audio.addEventListener("canplay", onReady);
+      audio.addEventListener("error", onError);
+      audio.load();
+    } catch {
+      resolve(false);
+    }
+  });
+
+  const tracked = promise.finally(() => {
+    UI_SFX_PRELOAD_PROMISES.delete(normalized);
+  });
+  UI_SFX_PRELOAD_PROMISES.set(normalized, tracked);
+  return tracked;
+}
+
 const RESOLUTION_OPTIONS: Array<{ width: number; height: number; label: string }> = [
   { width: 640, height: 480, label: "640x480" },
   { width: 1280, height: 720, label: "1280x720" },
@@ -2046,6 +2145,11 @@ function PlayPageInner() {
   const [levelUpPanel, setLevelUpPanel] = useState<LevelUpPanelState | null>(null);
   const [masteryPanel, setMasteryPanel] = useState<MasteryPanelState | null>(null);
   const [masteryBarDisplayPct, setMasteryBarDisplayPct] = useState(0);
+  const [uiSfxReady, setUiSfxReady] = useState(false);
+  const [uiSfxLoadCompleted, setUiSfxLoadCompleted] = useState(0);
+  const [uiSfxLoadTotal, setUiSfxLoadTotal] = useState(0);
+  const [uiSfxLoadFailed, setUiSfxLoadFailed] = useState(0);
+  const [uiSfxRetryNonce, setUiSfxRetryNonce] = useState(0);
   const lastUiHoverAtRef = useRef(0);
   const rewardModalSfxStateRef = useRef<{ mastery: boolean; level: boolean }>({ mastery: false, level: false });
   const [leaderboardModeIdx, setLeaderboardModeIdx] = useState(() => {
@@ -2333,16 +2437,97 @@ function PlayPageInner() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!session || typeof window === "undefined") {
+      setUiSfxReady(false);
+      setUiSfxLoadTotal(0);
+      setUiSfxLoadCompleted(0);
+      setUiSfxLoadFailed(0);
+      return;
+    }
+
+    let cancelled = false;
+    const requiredPaths = [...new Set(UI_SFX_REQUIRED_PATHS.map((path) => String(path || "").trim()).filter(Boolean))];
+    hydratePersistedUiSfxReadyPaths();
+    setUiSfxLoadTotal(requiredPaths.length);
+    setUiSfxLoadCompleted(0);
+    setUiSfxLoadFailed(0);
+
+    if (requiredPaths.length <= 0) {
+      setUiSfxReady(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    let completed = 0;
+    let failed = 0;
+    const pending: string[] = [];
+    for (const path of requiredPaths) {
+      if (UI_SFX_AUDIO_CACHE.has(path)) {
+        completed += 1;
+        continue;
+      }
+      if (UI_SFX_PERSISTED_READY_PATHS.has(path)) {
+        try {
+          const audio = new window.Audio(path);
+          audio.preload = "auto";
+          audio.load();
+          UI_SFX_AUDIO_CACHE.set(path, audio);
+          completed += 1;
+          continue;
+        } catch {
+          // Fall through to explicit preload path.
+        }
+      }
+      pending.push(path);
+    }
+
+    setUiSfxLoadCompleted(completed);
+    setUiSfxLoadFailed(failed);
+    if (completed >= requiredPaths.length) {
+      setUiSfxReady(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setUiSfxReady(false);
+    void (async () => {
+      await Promise.all(pending.map(async (path) => {
+        const ok = await preloadUiSfx(path);
+        if (cancelled) return;
+        completed += 1;
+        if (!ok) failed += 1;
+        setUiSfxLoadCompleted(completed);
+        setUiSfxLoadFailed(failed);
+      }));
+      if (cancelled) return;
+      setUiSfxReady(completed >= requiredPaths.length);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session, uiSfxRetryNonce]);
+
   const playUiSfx = useCallback((src: string, scale = 1) => {
     if (typeof window === "undefined") return;
+    const path = String(src || "").trim();
+    if (!path) return;
+    if (!uiSfxReady && UI_SFX_REQUIRED_PATH_SET.has(path)) return;
     try {
-      const audio = new Audio(src);
+      const cached = UI_SFX_AUDIO_CACHE.get(path);
+      const audio = cached
+        ? (cached.cloneNode(true) as HTMLAudioElement)
+        : new Audio(path);
+      audio.preload = "auto";
       audio.volume = Math.max(0, Math.min(1, savedSettings.sfxVol * scale));
       void audio.play().catch(() => { });
     } catch {
       // Ignore autoplay errors.
     }
-  }, [savedSettings.sfxVol]);
+  }, [savedSettings.sfxVol, uiSfxReady]);
 
   const playUiHoverSfx = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -4612,6 +4797,9 @@ function PlayPageInner() {
     ? announcements[Math.max(0, Math.min(announcementIndex, announcements.length - 1))]
     : null;
   const currentCameraOption = cameraOptions.find((camera) => camera.idx === draftSettings.cameraIdx) || null;
+  const uiSfxLoadPct = uiSfxLoadTotal > 0
+    ? Math.round((Math.max(0, Math.min(uiSfxLoadTotal, uiSfxLoadCompleted)) / uiSfxLoadTotal) * 100)
+    : 100;
   const isInGameSessionView = view === "free_session" || view === "rank_session";
   const isMenuViewportView = view === "menu";
   const isViewportLockedView = isInGameSessionView || isMenuViewportView;
@@ -4864,6 +5052,37 @@ function PlayPageInner() {
                   </div>
                   <p className="mt-4 text-sm font-bold tracking-[0.2em] text-ninja-accent">{t("menu.trainMasterRankUp", "TRAIN • MASTER • RANK UP")}</p>
                 </div>
+
+                {!uiSfxReady && uiSfxLoadTotal > 0 && (
+                  <div className="mx-auto mt-5 w-full max-w-[360px] rounded-xl border border-cyan-300/35 bg-black/40 p-3">
+                    <p className="text-center text-[11px] font-black uppercase tracking-[0.16em] text-cyan-100">
+                      {t("menu.preparingUiSounds", "PREPARING UI SOUNDS")}
+                    </p>
+                    <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full border border-cyan-300/30 bg-zinc-900">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500 transition-all duration-200"
+                        style={{ width: `${Math.max(0, Math.min(100, uiSfxLoadPct))}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-center text-[11px] font-bold tracking-wider text-cyan-100">
+                      {uiSfxLoadCompleted}/{Math.max(1, uiSfxLoadTotal)} • {uiSfxLoadPct}%
+                    </p>
+                    {uiSfxLoadFailed > 0 && (
+                      <div className="mt-2 flex flex-col items-center gap-2">
+                        <p className="text-center text-[11px] text-amber-200">
+                          {uiSfxLoadFailed} UI sound file(s) failed to load.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setUiSfxRetryNonce((prev) => prev + 1)}
+                          className="inline-flex h-8 items-center justify-center rounded-lg border border-cyan-300/45 bg-cyan-500/18 px-3 text-[10px] font-black uppercase tracking-[0.12em] text-cyan-100 hover:bg-cyan-500/28"
+                        >
+                          {t("menu.retrySoundLoad", "Retry Sound Load")}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="mx-auto mt-8 w-full max-w-[360px] space-y-3">
                   <button

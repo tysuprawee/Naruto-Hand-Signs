@@ -70,7 +70,7 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         videoPath: null,
         effect: "amaterasu",
         duration: 7.0,
-        minLevel: 13,
+        minLevel: 20,
     },
     "Rasengan": {
         sequence: ["ram"],

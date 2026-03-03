@@ -490,9 +490,207 @@ const DATASET_LABEL_ROWS_CACHE = new Map<string, DatasetRow[]>();
 const DATASET_FULL_ROWS_CACHE = new Map<string, DatasetRow[]>();
 const SFX_AUDIO_CACHE = new Map<string, HTMLAudioElement>();
 const SFX_PRELOAD_PROMISES = new Map<string, Promise<boolean>>();
+const EFFECT_IMAGE_PRELOAD_CACHE = new Map<string, HTMLImageElement>();
+const EFFECT_VIDEO_PRELOAD_CACHE = new Map<string, HTMLVideoElement>();
+const EFFECT_PRELOAD_PROMISES = new Map<string, Promise<boolean>>();
+const EFFECT_MEDIA_PRELOAD_TABLE: Record<string, { images?: string[]; videos?: string[] }> = {
+  lightning: {
+    videos: ["/effects/chidori-alpha.webm", "/effects/chidori.mp4"],
+  },
+  rasengan: {
+    videos: ["/effects/rasengan-alpha.webm", "/effects/rasengan.mp4"],
+  },
+  eye: {
+    images: ["/effects/m_sharingan.jpg", "/sharingan.png", "/mangekyou_eyes.png"],
+  },
+  amaterasu: {
+    images: ["/effects/amaterasu.jpg"],
+  },
+  reaper: {
+    images: [REAPER_BG_IMAGE_PATH],
+  },
+};
 const SFX_PERSISTED_READY_KEY = "jutsu-play-sfx-ready-v1";
 const SFX_PERSISTED_READY_PATHS = new Set<string>();
 let SFX_PERSISTED_READY_HYDRATED = false;
+const EFFECT_PERSISTED_READY_KEY = "jutsu-play-effect-ready-v1";
+const EFFECT_PERSISTED_READY_PATHS = new Set<string>();
+let EFFECT_PERSISTED_READY_HYDRATED = false;
+const EFFECT_PRELOAD_TIMEOUT_MS = 12000;
+let EFFECT_WEBM_SUPPORT_CACHE: boolean | null = null;
+
+function supportsWebmEffectVideo(): boolean {
+  if (typeof document === "undefined") return false;
+  if (EFFECT_WEBM_SUPPORT_CACHE !== null) return EFFECT_WEBM_SUPPORT_CACHE;
+  try {
+    const videoEl = document.createElement("video");
+    const checks = [
+      'video/webm; codecs="vp9"',
+      'video/webm; codecs="vp8, vorbis"',
+      "video/webm",
+    ];
+    EFFECT_WEBM_SUPPORT_CACHE = checks.some((mime) => {
+      const result = videoEl.canPlayType(mime);
+      return result === "probably" || result === "maybe";
+    });
+  } catch {
+    EFFECT_WEBM_SUPPORT_CACHE = false;
+  }
+  return EFFECT_WEBM_SUPPORT_CACHE;
+}
+
+function hydratePersistedEffectReadyPaths(): void {
+  if (EFFECT_PERSISTED_READY_HYDRATED || typeof window === "undefined") return;
+  EFFECT_PERSISTED_READY_HYDRATED = true;
+  try {
+    const raw = window.localStorage.getItem(EFFECT_PERSISTED_READY_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    for (const value of parsed) {
+      const path = String(value || "").trim();
+      if (!path) continue;
+      EFFECT_PERSISTED_READY_PATHS.add(path);
+    }
+  } catch {
+    // Ignore malformed storage.
+  }
+}
+
+function persistEffectReadyPath(path: string): void {
+  if (typeof window === "undefined") return;
+  const normalized = String(path || "").trim();
+  if (!normalized) return;
+  hydratePersistedEffectReadyPaths();
+  if (EFFECT_PERSISTED_READY_PATHS.has(normalized)) return;
+  EFFECT_PERSISTED_READY_PATHS.add(normalized);
+  try {
+    const trimmed = [...EFFECT_PERSISTED_READY_PATHS].slice(-160);
+    window.localStorage.setItem(EFFECT_PERSISTED_READY_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+function preloadEffectImage(path: string): Promise<boolean> {
+  if (typeof window === "undefined") return Promise.resolve(false);
+  const normalized = String(path || "").trim();
+  if (!normalized) return Promise.resolve(false);
+  hydratePersistedEffectReadyPaths();
+  if (EFFECT_IMAGE_PRELOAD_CACHE.has(normalized) || EFFECT_PERSISTED_READY_PATHS.has(normalized)) {
+    if (!EFFECT_IMAGE_PRELOAD_CACHE.has(normalized)) {
+      try {
+        const image = new window.Image();
+        image.decoding = "async";
+        image.src = normalized;
+        EFFECT_IMAGE_PRELOAD_CACHE.set(normalized, image);
+      } catch {
+        // Ignore cache refresh errors.
+      }
+    }
+    return Promise.resolve(true);
+  }
+
+  const key = `img:${normalized}`;
+  const existing = EFFECT_PRELOAD_PROMISES.get(key);
+  if (existing) return existing;
+
+  const promise = new Promise<boolean>((resolve) => {
+    let settled = false;
+    const image = new window.Image();
+    image.decoding = "async";
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      image.removeEventListener("load", onLoad);
+      image.removeEventListener("error", onError);
+      if (ok) {
+        EFFECT_IMAGE_PRELOAD_CACHE.set(normalized, image);
+        persistEffectReadyPath(normalized);
+      }
+      resolve(ok);
+    };
+    const onLoad = () => finish(true);
+    const onError = () => finish(false);
+    const timer = window.setTimeout(() => finish(false), EFFECT_PRELOAD_TIMEOUT_MS);
+    image.addEventListener("load", onLoad);
+    image.addEventListener("error", onError);
+    image.src = normalized;
+  });
+
+  const tracked = promise.finally(() => {
+    EFFECT_PRELOAD_PROMISES.delete(key);
+  });
+  EFFECT_PRELOAD_PROMISES.set(key, tracked);
+  return tracked;
+}
+
+function preloadEffectVideo(path: string): Promise<boolean> {
+  if (typeof document === "undefined") return Promise.resolve(false);
+  const normalized = String(path || "").trim();
+  if (!normalized) return Promise.resolve(false);
+  hydratePersistedEffectReadyPaths();
+  if (EFFECT_VIDEO_PRELOAD_CACHE.has(normalized) || EFFECT_PERSISTED_READY_PATHS.has(normalized)) {
+    if (!EFFECT_VIDEO_PRELOAD_CACHE.has(normalized)) {
+      try {
+        const video = document.createElement("video");
+        video.preload = "auto";
+        video.muted = true;
+        video.playsInline = true;
+        video.src = normalized;
+        video.load();
+        EFFECT_VIDEO_PRELOAD_CACHE.set(normalized, video);
+      } catch {
+        // Ignore cache refresh errors.
+      }
+    }
+    return Promise.resolve(true);
+  }
+
+  const key = `vid:${normalized}`;
+  const existing = EFFECT_PRELOAD_PROMISES.get(key);
+  if (existing) return existing;
+
+  const promise = new Promise<boolean>((resolve) => {
+    let settled = false;
+    const video = document.createElement("video");
+    video.preload = "auto";
+    video.muted = true;
+    video.playsInline = true;
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      video.removeEventListener("loadeddata", onReady);
+      video.removeEventListener("canplay", onReady);
+      video.removeEventListener("canplaythrough", onReady);
+      video.removeEventListener("error", onError);
+      if (ok) {
+        EFFECT_VIDEO_PRELOAD_CACHE.set(normalized, video);
+        persistEffectReadyPath(normalized);
+      }
+      resolve(ok);
+    };
+    const onReady = () => finish(true);
+    const onError = () => finish(false);
+    const timer = window.setTimeout(() => finish(false), EFFECT_PRELOAD_TIMEOUT_MS);
+    video.addEventListener("loadeddata", onReady);
+    video.addEventListener("canplay", onReady);
+    video.addEventListener("canplaythrough", onReady);
+    video.addEventListener("error", onError);
+    video.src = normalized;
+    video.load();
+  });
+
+  const tracked = promise.finally(() => {
+    EFFECT_PRELOAD_PROMISES.delete(key);
+  });
+  EFFECT_PRELOAD_PROMISES.set(key, tracked);
+  return tracked;
+}
 
 function hydratePersistedSfxReadyPaths(): void {
   if (SFX_PERSISTED_READY_HYDRATED || typeof window === "undefined") return;
@@ -1743,6 +1941,9 @@ export default function PlayArena({
   const [sfxLoadTotal, setSfxLoadTotal] = useState(0);
   const [sfxLoadFailed, setSfxLoadFailed] = useState(0);
   const [sfxRetryNonce, setSfxRetryNonce] = useState(0);
+  const [effectLoadCompleted, setEffectLoadCompleted] = useState(0);
+  const [effectLoadTotal, setEffectLoadTotal] = useState(0);
+  const [effectLoadFailed, setEffectLoadFailed] = useState(0);
   const [videoAspect, setVideoAspect] = useState(4 / 3);
   const detectedLabelStateRef = useRef(detectedLabel);
   const detectedConfidenceStateRef = useRef(detectedConfidence);
@@ -1851,6 +2052,8 @@ export default function PlayArena({
         return t("play.loadingArena", "Loading arena...");
       case "loading sign dataset...":
         return t("play.loadingSignDataset", "Loading sign dataset...");
+      case "warming jutsu effects...":
+        return t("play.warmingJutsuEffects", "Warming jutsu effects...");
       case "loading hand tracker...":
         return t("play.loadingHandTracker", "Loading hand tracker...");
       case "starting camera...":
@@ -2145,6 +2348,19 @@ export default function PlayArena({
     }
     return [...paths];
   }, [getJutsuSfxPath, jutsu?.comboParts, jutsu?.effect, jutsuName]);
+
+  const prewarmEffectTokens = useMemo(() => {
+    const tokens = new Set<string>();
+    const mainEffect = normalizeLabel(String(jutsu?.effect || ""));
+    if (mainEffect) tokens.add(mainEffect);
+    if (Array.isArray(jutsu?.comboParts)) {
+      for (const part of jutsu.comboParts) {
+        const partEffect = normalizeLabel(String(part?.effect || ""));
+        if (partEffect) tokens.add(partEffect);
+      }
+    }
+    return [...tokens];
+  }, [jutsu?.comboParts, jutsu?.effect]);
 
   const pushComboCue = useCallback((message: string) => {
     setComboCue(message);
@@ -2960,6 +3176,100 @@ export default function PlayArena({
     }, Math.max(0, Math.floor(delayMs)));
     pendingEffectTimersRef.current.push(timer);
   }, [triggerJutsuEffect]);
+
+  const warmupEffectsForRunStart = useCallback(async (isCancelled?: () => boolean) => {
+    const playableMode = mode === "free" || mode === "rank";
+    if (!playableMode || noEffects) {
+      if (!isCancelled?.()) {
+        setEffectLoadTotal(0);
+        setEffectLoadCompleted(0);
+        setEffectLoadFailed(0);
+      }
+      return;
+    }
+
+    const supportsWebm = supportsWebmEffectVideo();
+    const imagePaths = new Set<string>();
+    const videoPaths = new Set<string>();
+    for (const token of prewarmEffectTokens) {
+      const assets = EFFECT_MEDIA_PRELOAD_TABLE[token];
+      if (!assets) continue;
+      for (const imagePath of assets.images || []) {
+        const normalized = String(imagePath || "").trim();
+        if (normalized) imagePaths.add(normalized);
+      }
+      if (!isLikelyLowPowerMobile) {
+        const variants = [...new Set((assets.videos || []).map((value) => String(value || "").trim()).filter(Boolean))];
+        if (variants.length > 0) {
+          const preferred = supportsWebm
+            ? (variants.find((value) => value.endsWith(".webm")) || variants[0])
+            : (variants.find((value) => value.endsWith(".mp4")) || variants[0]);
+          if (preferred) videoPaths.add(preferred);
+        }
+      }
+    }
+
+    const needsSegmentation = prewarmEffectTokens.some((token) => token === "clone" || token === "eye" || token === "reaper");
+    const shouldWarmCloneSmoke = prewarmEffectTokens.includes("clone");
+    const tasks: Array<() => Promise<boolean>> = [];
+
+    for (const path of imagePaths) {
+      tasks.push(() => preloadEffectImage(path));
+    }
+    for (const path of videoPaths) {
+      tasks.push(() => preloadEffectVideo(path));
+    }
+    if (shouldWarmCloneSmoke) {
+      tasks.push(async () => {
+        ensureShadowCloneSmokeFrames();
+        return true;
+      });
+    }
+    if (prewarmEffectTokens.includes("reaper")) {
+      tasks.push(async () => {
+        ensureReaperBackgroundImage();
+        return true;
+      });
+    }
+    if (needsSegmentation) {
+      tasks.push(async () => {
+        const seg = await ensureSelfieSegmentation();
+        return seg !== null;
+      });
+    }
+
+    const total = tasks.length;
+    if (!isCancelled?.()) {
+      setEffectLoadTotal(total);
+      setEffectLoadCompleted(0);
+      setEffectLoadFailed(0);
+    }
+    if (total <= 0) return;
+
+    let completed = 0;
+    let failed = 0;
+    await Promise.all(tasks.map(async (task) => {
+      let ok = false;
+      try {
+        ok = await task();
+      } catch {
+        ok = false;
+      }
+      if (isCancelled?.()) return;
+      completed += 1;
+      if (!ok) failed += 1;
+      setEffectLoadCompleted(completed);
+      setEffectLoadFailed(failed);
+    }));
+  }, [
+    ensureReaperBackgroundImage,
+    ensureSelfieSegmentation,
+    ensureShadowCloneSmokeFrames,
+    isLikelyLowPowerMobile,
+    mode,
+    noEffects,
+    prewarmEffectTokens,
+  ]);
 
   const resetProofState = useCallback(() => {
     proofEventsRef.current = [];
@@ -3876,6 +4186,16 @@ export default function PlayArena({
         await ensureDatasetRowsForSequenceRef.current(sequenceRef.current);
         if (cancelled) return;
 
+        if ((mode === "free" || mode === "rank") && !noEffects) {
+          setLoadingMessage("Warming jutsu effects...");
+          await warmupEffectsForRunStart(() => cancelled);
+          if (cancelled) return;
+        } else {
+          setEffectLoadTotal(0);
+          setEffectLoadCompleted(0);
+          setEffectLoadFailed(0);
+        }
+
         setLoadingMessage("Loading hand tracker...");
         const vision = await import("@mediapipe/tasks-vision");
         const { FilesetResolver, HandLandmarker, FaceLandmarker } = vision as unknown as {
@@ -4126,10 +4446,13 @@ export default function PlayArena({
     clearSharinganForegroundOverlay,
     isLikelyLowPowerMobile,
     isSharinganChargedMode,
+    mode,
     shouldPrioritizeFaceAnchor,
     markCameraFailure,
+    noEffects,
     resolutionIdx,
     stopAllSfx,
+    warmupEffectsForRunStart,
   ]);
 
   useEffect(() => {
@@ -5072,6 +5395,9 @@ export default function PlayArena({
   const sfxLoadPct = sfxLoadTotal > 0
     ? Math.round((Math.max(0, Math.min(sfxLoadTotal, sfxLoadCompleted)) / sfxLoadTotal) * 100)
     : 100;
+  const effectLoadPct = effectLoadTotal > 0
+    ? Math.round((Math.max(0, Math.min(effectLoadTotal, effectLoadCompleted)) / effectLoadTotal) * 100)
+    : 100;
 
   const phaseLabel = phase === "active"
     ? "RUNNING"
@@ -5529,6 +5855,7 @@ export default function PlayArena({
                   <div>DB SYNC: {datasetSyncLabel}</div>
                   <div>DB LOADED: {loadedDatasetLabels.length}</div>
                   <div>SFX: {sfxLoadCompleted}/{Math.max(1, sfxLoadTotal)} • {sfxLoadPct}%</div>
+                  <div>FX: {effectLoadTotal > 0 ? `${effectLoadCompleted}/${effectLoadTotal} • ${effectLoadPct}%` : "N/A"}</div>
                   <div>MP BACKEND: {detectorBackend}</div>
                   <div>MP ERR: {detectorErrorShort.toUpperCase()}</div>
                   <div>CAM: {cameraStatusText}</div>
@@ -5895,6 +6222,24 @@ export default function PlayArena({
                   <p className={`px-4 text-center text-sm ${phase === "error" ? "text-red-200" : "text-zinc-200"}`}>
                     {phase === "error" ? errorMessageUi : loadingMessageUi}
                   </p>
+                  {phase === "loading" && effectLoadTotal > 0 && (
+                    <div className="w-full max-w-sm px-6">
+                      <div className="h-2.5 w-full overflow-hidden rounded-full border border-cyan-300/35 bg-zinc-900">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500 transition-all duration-200"
+                          style={{ width: `${Math.max(0, Math.min(100, effectLoadPct))}%` }}
+                        />
+                      </div>
+                      <p className="mt-2 text-center text-[11px] font-bold tracking-wider text-cyan-100">
+                        EFFECT WARMUP {Math.max(0, effectLoadCompleted)} / {Math.max(1, effectLoadTotal)} • {effectLoadPct}%
+                      </p>
+                      {effectLoadFailed > 0 && (
+                        <p className="mt-1 text-center text-[11px] text-amber-200">
+                          {effectLoadFailed} effect asset(s) failed to preload.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
