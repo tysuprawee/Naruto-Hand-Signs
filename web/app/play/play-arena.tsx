@@ -224,6 +224,9 @@ const ONE_HAND_PASS_GATE_MIN_CONFIDENCE = 0.70;
 const ONE_HAND_ASSIST_IDLE_THRESHOLD = 3.2;
 const ONE_HAND_EXPECTED_SIGN_DIST_THRESHOLD = 2.4;
 const ONE_HAND_EXPECTED_IDLE_MARGIN = 0.18;
+const ONE_HAND_ASSIST_MAX_CANDIDATES = 5;
+const ONE_HAND_ASSIST_MAX_CANDIDATES_LOW_FPS = 2;
+const TWO_HAND_SWAP_PASS_SKIP_CONFIDENCE = 0.94;
 const FULL_FEATURE_LENGTH = HAND_FEATURE_LENGTH * 2;
 const TWO_HAND_EXEC_DISTANCE_MAX = 0.2;
 const LEFT_HAND_FEATURE_MASK = Array.from({ length: HAND_FEATURE_LENGTH }, (_, i) => i);
@@ -921,7 +924,8 @@ function predictWithOneHandAssist(
   lowFpsMode: boolean,
 ) {
   const candidatesAll = buildOneHandAssistCandidates(result, baseFeatures);
-  const candidates = lowFpsMode ? candidatesAll.slice(0, 3) : candidatesAll;
+  const maxCandidates = lowFpsMode ? ONE_HAND_ASSIST_MAX_CANDIDATES_LOW_FPS : ONE_HAND_ASSIST_MAX_CANDIDATES;
+  const candidates = candidatesAll.slice(0, Math.max(1, maxCandidates));
   const expectedSign = normalizeLabel(expectedSignRaw);
   let best: { label: string; confidence: number; distance: number } | null = null;
   let bestExpectedDist = Number.POSITIVE_INFINITY;
@@ -4623,9 +4627,17 @@ export default function PlayArena({
           }
           let best = knn.predictWithConfidence(features);
           if (numHands >= 2 && features.length === FULL_FEATURE_LENGTH) {
-            const swappedFeatures = swapTwoHandFeatureOrder(features);
-            const swappedPrediction = knn.predictWithConfidence(swappedFeatures);
-            best = pickBetterPrediction(best, swappedPrediction);
+            const bestLabel = normalizeLabel(best.label || "idle");
+            const shouldCheckSwapped = (
+              bestLabel === "idle"
+              || bestLabel === "unknown"
+              || Number(best.confidence || 0) < TWO_HAND_SWAP_PASS_SKIP_CONFIDENCE
+            );
+            if (shouldCheckSwapped) {
+              const swappedFeatures = swapTwoHandFeatureOrder(features);
+              const swappedPrediction = knn.predictWithConfidence(swappedFeatures);
+              best = pickBetterPrediction(best, swappedPrediction);
+            }
           }
           return best;
         })();

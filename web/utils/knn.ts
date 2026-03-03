@@ -15,7 +15,7 @@ function clamp01(value: number): number {
 }
 
 export class KNNClassifier {
-    private data: { features: number[]; label: string }[];
+    private data: { features: number[]; label: string; normalizedLabel: string }[];
     private k: number;
     private threshold: number;
 
@@ -27,13 +27,14 @@ export class KNNClassifier {
         for (const row of rawData || []) {
             const label = String(row?.label ?? "").trim();
             if (!label) continue;
+            const normalizedLabel = label.toLowerCase();
 
             const features = FEATURE_KEYS.map((key) => {
                 const n = Number(row[key]);
                 return Number.isFinite(n) ? n : 0;
             });
 
-            this.data.push({ label, features });
+            this.data.push({ label, normalizedLabel, features });
         }
     }
 
@@ -49,21 +50,39 @@ export class KNNClassifier {
             return { label: "Unknown", confidence: 0, distance: Number.POSITIVE_INFINITY };
         }
 
-        const distances = new Array(this.data.length);
+        const effectiveK = Math.min(this.k, this.data.length);
+        const kNearest = new Array<{ label: string; dist: number }>(effectiveK);
+        let kNearestCount = 0;
+        let minDist = Number.POSITIVE_INFINITY;
         for (let i = 0; i < this.data.length; i += 1) {
-            distances[i] = {
-                label: this.data[i].label,
-                dist: this.euclideanDistance(features, this.data[i].features, options?.featureMask ?? null),
-            };
+            const dist = this.euclideanDistance(features, this.data[i].features, options?.featureMask ?? null);
+            if (dist < minDist) {
+                minDist = dist;
+            }
+            if (kNearestCount < effectiveK) {
+                // Insert and keep the partial array sorted ascending by distance.
+                let insertIdx = kNearestCount;
+                while (insertIdx > 0 && dist < kNearest[insertIdx - 1].dist) {
+                    kNearest[insertIdx] = kNearest[insertIdx - 1];
+                    insertIdx -= 1;
+                }
+                kNearest[insertIdx] = { label: this.data[i].label, dist };
+                kNearestCount += 1;
+                continue;
+            }
+            if (dist >= kNearest[effectiveK - 1].dist) continue;
+            // Replace current farthest and reinsert.
+            let insertIdx = effectiveK - 1;
+            while (insertIdx > 0 && dist < kNearest[insertIdx - 1].dist) {
+                kNearest[insertIdx] = kNearest[insertIdx - 1];
+                insertIdx -= 1;
+            }
+            kNearest[insertIdx] = { label: this.data[i].label, dist };
         }
-        distances.sort((a, b) => a.dist - b.dist);
-
-        const kNearest = distances.slice(0, this.k);
-        if (kNearest.length === 0) {
+        if (kNearestCount <= 0 || !Number.isFinite(minDist)) {
             return { label: "Unknown", confidence: 0, distance: Number.POSITIVE_INFINITY };
         }
 
-        const minDist = kNearest[0].dist;
         const thresholdOverride = options?.idleDistanceThreshold;
         const idleThreshold = thresholdOverride === null
             ? null
@@ -75,7 +94,8 @@ export class KNNClassifier {
         }
 
         const counts = new Map<string, { hits: number; distSum: number }>();
-        for (const item of kNearest) {
+        for (let i = 0; i < kNearestCount; i += 1) {
+            const item = kNearest[i];
             const current = counts.get(item.label) || { hits: 0, distSum: 0 };
             current.hits += 1;
             current.distSum += item.dist;
@@ -142,7 +162,7 @@ export class KNNClassifier {
             }
 
             if (trackSet.size > 0) {
-                const key = String(item.label || "").trim().toLowerCase();
+                const key = item.normalizedLabel;
                 if (trackSet.has(key) && dist < (trackedDistances[key] ?? Number.POSITIVE_INFINITY)) {
                     trackedDistances[key] = dist;
                 }
@@ -187,7 +207,7 @@ export class KNNClassifier {
 
         let bestDist = Number.POSITIVE_INFINITY;
         for (let i = 0; i < this.data.length; i += 1) {
-            if (String(this.data[i].label || "").trim().toLowerCase() !== target) continue;
+            if (this.data[i].normalizedLabel !== target) continue;
             const dist = this.euclideanDistance(features, this.data[i].features, options?.featureMask ?? null);
             if (dist < bestDist) bestDist = dist;
         }
