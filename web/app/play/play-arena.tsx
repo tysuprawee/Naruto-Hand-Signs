@@ -217,7 +217,7 @@ const VOTE_OCCLUSION_GRACE_MS = 240;
 const VOTE_REUSE_CONF_DECAY = 0.90;
 const LOW_FPS_ASSIST_THRESHOLD = 12;
 const DEBUG_HANDS_MIN_FPS = 10;
-const RENDER_FRAME_INTERVAL_MS = 1000 / 30;
+const LOW_POWER_RENDER_FRAME_INTERVAL_MS = 1000 / 30;
 const LOW_FPS_VOTE_TTL_MS = 1400;
 const KNN_IDLE_DIST_THRESHOLD = 1.8;
 const ONE_HAND_PASS_GATE_MIN_CONFIDENCE = 0.70;
@@ -306,6 +306,14 @@ const REAPER_FADE_OUT_MS = 900;
 const CALIBRATION_DURATION_S = 12;
 const CALIBRATION_MIN_SAMPLES = 100;
 const CALIBRATION_MAX_SAMPLES = 1200;
+const UI_CONFIDENCE_EPSILON = 0.01;
+const UI_HEAD_POSE_EPSILON = 0.01;
+const UI_ANCHOR_POSITION_EPSILON = 0.002;
+const UI_EFFECT_SCALE_EPSILON = 0.006;
+const UI_EFFECT_ANGLE_EPSILON = 0.45;
+const UI_SHARINGAN_POS_EPSILON = 0.002;
+const UI_SHARINGAN_SIZE_EPSILON = 0.2;
+const UI_SHARINGAN_ANGLE_EPSILON = 0.35;
 
 const RESOLUTION_OPTIONS: Array<{ width: number; height: number }> = [
   { width: 640, height: 480 },
@@ -389,6 +397,53 @@ async function withSuppressedMediapipeConsoleAsync<T>(run: () => Promise<T>): Pr
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function isCloseNumber(a: number, b: number, epsilon = 0): boolean {
+  return Math.abs(a - b) <= epsilon;
+}
+
+function isClosePoint(
+  a: { x: number; y: number } | null,
+  b: { x: number; y: number } | null,
+  epsilon = 0,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return isCloseNumber(a.x, b.x, epsilon) && isCloseNumber(a.y, b.y, epsilon);
+}
+
+function isCloseEffectAnchor(a: EffectAnchor | null, b: EffectAnchor | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    isCloseNumber(a.x, b.x, UI_ANCHOR_POSITION_EPSILON)
+    && isCloseNumber(a.y, b.y, UI_ANCHOR_POSITION_EPSILON)
+    && isCloseNumber(a.scale, b.scale, UI_EFFECT_SCALE_EPSILON)
+    && isCloseNumber(a.angleDeg, b.angleDeg, UI_EFFECT_ANGLE_EPSILON)
+  );
+}
+
+function isCloseSharinganPose(a: SharinganVisualPose | null, b: SharinganVisualPose | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    isCloseNumber(a.angleDeg, b.angleDeg, UI_SHARINGAN_ANGLE_EPSILON)
+    && isCloseNumber(a.leftEye.x, b.leftEye.x, UI_SHARINGAN_POS_EPSILON)
+    && isCloseNumber(a.leftEye.y, b.leftEye.y, UI_SHARINGAN_POS_EPSILON)
+    && isCloseNumber(a.leftEye.sizePct, b.leftEye.sizePct, UI_SHARINGAN_SIZE_EPSILON)
+    && isCloseNumber(a.rightEye.x, b.rightEye.x, UI_SHARINGAN_POS_EPSILON)
+    && isCloseNumber(a.rightEye.y, b.rightEye.y, UI_SHARINGAN_POS_EPSILON)
+    && isCloseNumber(a.rightEye.sizePct, b.rightEye.sizePct, UI_SHARINGAN_SIZE_EPSILON)
+    && isCloseNumber(a.leftBlood.x, b.leftBlood.x, UI_SHARINGAN_POS_EPSILON)
+    && isCloseNumber(a.leftBlood.y, b.leftBlood.y, UI_SHARINGAN_POS_EPSILON)
+    && isCloseNumber(a.leftBlood.widthPct, b.leftBlood.widthPct, UI_SHARINGAN_SIZE_EPSILON)
+    && isCloseNumber(a.leftBlood.heightPct, b.leftBlood.heightPct, UI_SHARINGAN_SIZE_EPSILON)
+    && isCloseNumber(a.rightBlood.x, b.rightBlood.x, UI_SHARINGAN_POS_EPSILON)
+    && isCloseNumber(a.rightBlood.y, b.rightBlood.y, UI_SHARINGAN_POS_EPSILON)
+    && isCloseNumber(a.rightBlood.widthPct, b.rightBlood.widthPct, UI_SHARINGAN_SIZE_EPSILON)
+    && isCloseNumber(a.rightBlood.heightPct, b.rightBlood.heightPct, UI_SHARINGAN_SIZE_EPSILON)
+  );
 }
 
 function didPassPhase(prevPhase: number | null, currentPhase: number, targetPhase: number): boolean {
@@ -1685,6 +1740,105 @@ export default function PlayArena({
   const [sfxLoadFailed, setSfxLoadFailed] = useState(0);
   const [sfxRetryNonce, setSfxRetryNonce] = useState(0);
   const [videoAspect, setVideoAspect] = useState(4 / 3);
+  const detectedLabelStateRef = useRef(detectedLabel);
+  const detectedConfidenceStateRef = useRef(detectedConfidence);
+  const rawDetectedLabelStateRef = useRef(rawDetectedLabel);
+  const rawDetectedConfidenceStateRef = useRef(rawDetectedConfidence);
+  const voteHitsStateRef = useRef(voteHits);
+  const detectedHandsStateRef = useRef(detectedHands);
+  const lightingStatusStateRef = useRef(lightingStatus);
+  const sharinganBlinkHoldMsStateRef = useRef(sharinganBlinkHoldMs);
+  const sharinganVisualPoseStateRef = useRef<SharinganVisualPose | null>(sharinganVisualPose);
+  const effectAnchorStateRef = useRef<EffectAnchor | null>(effectAnchor);
+  const faceAnchorStateRef = useRef<{ x: number; y: number } | null>(faceAnchor);
+  const headYawStateRef = useRef(headYaw);
+  const headPitchStateRef = useRef(headPitch);
+
+  const setDetectedLabelIfChanged = useCallback((next: string) => {
+    if (detectedLabelStateRef.current === next) return;
+    detectedLabelStateRef.current = next;
+    setDetectedLabel(next);
+  }, []);
+
+  const setDetectedConfidenceIfChanged = useCallback((next: number) => {
+    const safe = Number.isFinite(next) ? next : 0;
+    if (isCloseNumber(detectedConfidenceStateRef.current, safe, UI_CONFIDENCE_EPSILON)) return;
+    detectedConfidenceStateRef.current = safe;
+    setDetectedConfidence(safe);
+  }, []);
+
+  const setRawDetectedLabelIfChanged = useCallback((next: string) => {
+    if (rawDetectedLabelStateRef.current === next) return;
+    rawDetectedLabelStateRef.current = next;
+    setRawDetectedLabel(next);
+  }, []);
+
+  const setRawDetectedConfidenceIfChanged = useCallback((next: number) => {
+    const safe = Number.isFinite(next) ? next : 0;
+    if (isCloseNumber(rawDetectedConfidenceStateRef.current, safe, UI_CONFIDENCE_EPSILON)) return;
+    rawDetectedConfidenceStateRef.current = safe;
+    setRawDetectedConfidence(safe);
+  }, []);
+
+  const setVoteHitsIfChanged = useCallback((next: number) => {
+    const safe = Math.max(0, Math.floor(Number(next) || 0));
+    if (voteHitsStateRef.current === safe) return;
+    voteHitsStateRef.current = safe;
+    setVoteHits(safe);
+  }, []);
+
+  const setDetectedHandsIfChanged = useCallback((next: number) => {
+    const safe = Math.max(0, Math.floor(Number(next) || 0));
+    if (detectedHandsStateRef.current === safe) return;
+    detectedHandsStateRef.current = safe;
+    setDetectedHands(safe);
+  }, []);
+
+  const setLightingStatusIfChanged = useCallback((next: "good" | "low_light" | "overexposed" | "low_contrast") => {
+    if (lightingStatusStateRef.current === next) return;
+    lightingStatusStateRef.current = next;
+    setLightingStatus(next);
+  }, []);
+
+  const setSharinganBlinkHoldMsIfChanged = useCallback((next: number) => {
+    const safe = Math.max(0, Number(next) || 0);
+    if (isCloseNumber(sharinganBlinkHoldMsStateRef.current, safe, 1)) return;
+    sharinganBlinkHoldMsStateRef.current = safe;
+    setSharinganBlinkHoldMs(safe);
+  }, []);
+
+  const setSharinganVisualPoseIfChanged = useCallback((next: SharinganVisualPose | null) => {
+    if (isCloseSharinganPose(sharinganVisualPoseStateRef.current, next)) return;
+    sharinganVisualPoseStateRef.current = next;
+    setSharinganVisualPose(next);
+  }, []);
+
+  const setEffectAnchorIfChanged = useCallback((next: EffectAnchor | null) => {
+    if (isCloseEffectAnchor(effectAnchorStateRef.current, next)) return;
+    effectAnchorStateRef.current = next;
+    setEffectAnchor(next);
+  }, []);
+
+  const setFaceAnchorIfChanged = useCallback((next: { x: number; y: number } | null) => {
+    if (isClosePoint(faceAnchorStateRef.current, next, UI_ANCHOR_POSITION_EPSILON)) return;
+    faceAnchorStateRef.current = next;
+    setFaceAnchor(next);
+  }, []);
+
+  const setHeadYawIfChanged = useCallback((next: number) => {
+    const safe = Number.isFinite(next) ? next : 0;
+    if (isCloseNumber(headYawStateRef.current, safe, UI_HEAD_POSE_EPSILON)) return;
+    headYawStateRef.current = safe;
+    setHeadYaw(safe);
+  }, []);
+
+  const setHeadPitchIfChanged = useCallback((next: number) => {
+    const safe = Number.isFinite(next) ? next : 0;
+    if (isCloseNumber(headPitchStateRef.current, safe, UI_HEAD_POSE_EPSILON)) return;
+    headPitchStateRef.current = safe;
+    setHeadPitch(safe);
+  }, []);
+
   const localizeArenaText = useCallback((value: string): string => {
     const raw = String(value || "").trim();
     if (!raw) return "";
@@ -3395,6 +3549,36 @@ export default function PlayArena({
   }, [headYaw, headPitch]);
 
   useEffect(() => {
+    detectedLabelStateRef.current = detectedLabel;
+    detectedConfidenceStateRef.current = detectedConfidence;
+    rawDetectedLabelStateRef.current = rawDetectedLabel;
+    rawDetectedConfidenceStateRef.current = rawDetectedConfidence;
+    voteHitsStateRef.current = voteHits;
+    detectedHandsStateRef.current = detectedHands;
+    lightingStatusStateRef.current = lightingStatus;
+    sharinganBlinkHoldMsStateRef.current = sharinganBlinkHoldMs;
+    sharinganVisualPoseStateRef.current = sharinganVisualPose;
+    effectAnchorStateRef.current = effectAnchor;
+    faceAnchorStateRef.current = faceAnchor;
+    headYawStateRef.current = headYaw;
+    headPitchStateRef.current = headPitch;
+  }, [
+    detectedConfidence,
+    detectedHands,
+    detectedLabel,
+    effectAnchor,
+    faceAnchor,
+    headPitch,
+    headYaw,
+    lightingStatus,
+    rawDetectedConfidence,
+    rawDetectedLabel,
+    sharinganBlinkHoldMs,
+    sharinganVisualPose,
+    voteHits,
+  ]);
+
+  useEffect(() => {
     let cancelled = false;
     const uniquePaths = [...new Set(requiredSfxPaths
       .map((path) => String(path || "").trim())
@@ -4015,8 +4199,10 @@ export default function PlayArena({
       if (!video || !canvas) return;
 
       const nowMs = performance.now();
-      if ((nowMs - lastRenderDrawAtRef.current) < RENDER_FRAME_INTERVAL_MS) return;
-      lastRenderDrawAtRef.current = nowMs;
+      if (isLikelyLowPowerMobile) {
+        if ((nowMs - lastRenderDrawAtRef.current) < LOW_POWER_RENDER_FRAME_INTERVAL_MS) return;
+        lastRenderDrawAtRef.current = nowMs;
+      }
       const stream = streamRef.current;
       const track = stream?.getVideoTracks?.()[0] ?? null;
       if (!stream || !track || track.readyState === "ended") {
@@ -4095,7 +4281,7 @@ export default function PlayArena({
 
     renderRafRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(renderRafRef.current);
-  }, [clearCameraFailure, debugHands, markCameraFailure]);
+  }, [clearCameraFailure, debugHands, isLikelyLowPowerMobile, markCameraFailure]);
 
   useEffect(() => {
     const detect = (nowMs: number) => {
@@ -4115,19 +4301,23 @@ export default function PlayArena({
         sharinganPoseRef.current = null;
         sharinganFaceLandmarksRef.current = null;
         sharinganSmoothEyesRef.current = null;
-        setSharinganVisualPose(null);
-        setDetectedHands(0);
-        setRawDetectedLabel("No hands");
-        setRawDetectedConfidence(0);
-        setVoteHits(0);
-        setDetectedLabel("No hands");
-        setDetectedConfidence(0);
-        setEffectAnchor(null);
-        setFaceAnchor(null);
+        setSharinganVisualPoseIfChanged(null);
+        setDetectedHandsIfChanged(0);
+        setRawDetectedLabelIfChanged("No hands");
+        setRawDetectedConfidenceIfChanged(0);
+        setVoteHitsIfChanged(0);
+        setDetectedLabelIfChanged("No hands");
+        setDetectedConfidenceIfChanged(0);
+        effectAnchorRef.current = null;
+        setEffectAnchorIfChanged(null);
+        faceAnchorRef.current = null;
+        setFaceAnchorIfChanged(null);
         lastGoodFaceAnchorRef.current = null;
         lastGoodFaceAnchorAtRef.current = 0;
-        setHeadYaw(0);
-        setHeadPitch(0);
+        headYawRef.current = 0;
+        headPitchRef.current = 0;
+        setHeadYawIfChanged(0);
+        setHeadPitchIfChanged(0);
         return;
       }
 
@@ -4149,21 +4339,25 @@ export default function PlayArena({
           sharinganPoseRef.current = null;
           sharinganFaceLandmarksRef.current = null;
           sharinganSmoothEyesRef.current = null;
-          setSharinganVisualPose(null);
-          setSharinganBlinkHoldMs(0);
+          setSharinganVisualPoseIfChanged(null);
+          setSharinganBlinkHoldMsIfChanged(0);
         }
-        setDetectedHands(0);
-        setRawDetectedLabel("Idle");
-        setRawDetectedConfidence(0);
-        setVoteHits(0);
-        setDetectedLabel("Idle");
-        setDetectedConfidence(0);
-        setEffectAnchor(null);
-        setFaceAnchor(null);
+        setDetectedHandsIfChanged(0);
+        setRawDetectedLabelIfChanged("Idle");
+        setRawDetectedConfidenceIfChanged(0);
+        setVoteHitsIfChanged(0);
+        setDetectedLabelIfChanged("Idle");
+        setDetectedConfidenceIfChanged(0);
+        effectAnchorRef.current = null;
+        setEffectAnchorIfChanged(null);
+        faceAnchorRef.current = null;
+        setFaceAnchorIfChanged(null);
         lastGoodFaceAnchorRef.current = null;
         lastGoodFaceAnchorAtRef.current = 0;
-        setHeadYaw(0);
-        setHeadPitch(0);
+        headYawRef.current = 0;
+        headPitchRef.current = 0;
+        setHeadYawIfChanged(0);
+        setHeadPitchIfChanged(0);
         return;
       }
 
@@ -4214,19 +4408,19 @@ export default function PlayArena({
               if (rawPose) {
                 const smoothedPose = smoothSharinganVisualPose(sharinganPoseRef.current, rawPose);
                 sharinganPoseRef.current = smoothedPose;
-                setSharinganVisualPose(smoothedPose);
+                setSharinganVisualPoseIfChanged(smoothedPose);
               } else {
                 sharinganPoseRef.current = null;
                 sharinganFaceLandmarksRef.current = null;
                 sharinganSmoothEyesRef.current = null;
-                setSharinganVisualPose(null);
+                setSharinganVisualPoseIfChanged(null);
               }
             }
           } else if (isSharinganChargedMode) {
             sharinganPoseRef.current = null;
             sharinganFaceLandmarksRef.current = null;
             sharinganSmoothEyesRef.current = null;
-            setSharinganVisualPose(null);
+            setSharinganVisualPoseIfChanged(null);
           }
           if (isSharinganChargedMode && phaseNow === "active") {
             blinkLeftScore = getFaceBlendshapeScore(faceResult, "eyeBlinkLeft");
@@ -4237,7 +4431,7 @@ export default function PlayArena({
             sharinganPoseRef.current = null;
             sharinganFaceLandmarksRef.current = null;
             sharinganSmoothEyesRef.current = null;
-            setSharinganVisualPose(null);
+            setSharinganVisualPoseIfChanged(null);
           }
           const message = String((err as Error)?.message || err || "face_detect_failed");
           setDetectorError((prev) => {
@@ -4251,15 +4445,18 @@ export default function PlayArena({
         sharinganPoseRef.current = null;
         sharinganFaceLandmarksRef.current = null;
         sharinganSmoothEyesRef.current = null;
-        setSharinganVisualPose(null);
+        setSharinganVisualPoseIfChanged(null);
       }
-      setFaceAnchor(faceMotion.anchor);
+      faceAnchorRef.current = faceMotion.anchor;
+      setFaceAnchorIfChanged(faceMotion.anchor);
       if (faceMotion.anchor) {
         lastGoodFaceAnchorRef.current = faceMotion.anchor;
         lastGoodFaceAnchorAtRef.current = nowMs;
       }
-      setHeadYaw(faceMotion.yaw);
-      setHeadPitch(faceMotion.pitch);
+      headYawRef.current = faceMotion.yaw;
+      headPitchRef.current = faceMotion.pitch;
+      setHeadYawIfChanged(faceMotion.yaw);
+      setHeadPitchIfChanged(faceMotion.pitch);
       const handAnchor = computeEffectAnchor(result.landmarks ?? []);
       const nextAnchor = handAnchor || (
         faceMotion.anchor
@@ -4268,9 +4465,9 @@ export default function PlayArena({
       );
       const smoothedAnchor = nextAnchor ? smoothEffectAnchor(effectAnchorRef.current, nextAnchor) : null;
       effectAnchorRef.current = smoothedAnchor;
-      setEffectAnchor(smoothedAnchor);
+      setEffectAnchorIfChanged(smoothedAnchor);
       const { features, numHands, imputedHands } = buildFeatures(result, handSlotsRef.current);
-      setDetectedHands(numHands);
+      setDetectedHandsIfChanged(numHands);
       const stepIdxForAssist = currentStepRef.current;
       const expectedStepSign = stepIdxForAssist < sequence.length ? sequence[stepIdxForAssist] : "";
       const assistModeEnabled = !restrictedSigns;
@@ -4304,23 +4501,23 @@ export default function PlayArena({
         const faceTracked = faceMotion.anchor !== null;
         if (!faceTracked) {
           sharinganBlinkHoldStartedAtRef.current = 0;
-          setSharinganBlinkHoldMs(0);
-          setRawDetectedLabel("Face not found");
-          setRawDetectedConfidence(0);
-          setVoteHits(0);
-          setDetectedLabel("Center your face");
-          setDetectedConfidence(0);
+          setSharinganBlinkHoldMsIfChanged(0);
+          setRawDetectedLabelIfChanged("Face not found");
+          setRawDetectedConfidenceIfChanged(0);
+          setVoteHitsIfChanged(0);
+          setDetectedLabelIfChanged("Center your face");
+          setDetectedConfidenceIfChanged(0);
           return;
         }
 
         if (!sharinganBlinkClosed) {
           sharinganBlinkHoldStartedAtRef.current = 0;
-          setSharinganBlinkHoldMs(0);
-          setRawDetectedLabel("Open eyes");
-          setRawDetectedConfidence(0);
-          setVoteHits(0);
-          setDetectedLabel("Close both eyes");
-          setDetectedConfidence(0);
+          setSharinganBlinkHoldMsIfChanged(0);
+          setRawDetectedLabelIfChanged("Open eyes");
+          setRawDetectedConfidenceIfChanged(0);
+          setVoteHitsIfChanged(0);
+          setDetectedLabelIfChanged("Close both eyes");
+          setDetectedConfidenceIfChanged(0);
           return;
         }
 
@@ -4330,12 +4527,12 @@ export default function PlayArena({
         const holdMs = Math.max(0, nowMs - sharinganBlinkHoldStartedAtRef.current);
         const holdClamped = Math.min(SHARINGAN_BLINK_HOLD_MS, holdMs);
         const holdRatio = SHARINGAN_BLINK_HOLD_MS > 0 ? (holdClamped / SHARINGAN_BLINK_HOLD_MS) : 0;
-        setSharinganBlinkHoldMs(holdClamped);
-        setRawDetectedLabel("Eyes closed");
-        setRawDetectedConfidence(holdRatio);
-        setVoteHits(Math.min(VOTE_WINDOW_SIZE, Math.ceil(holdRatio * VOTE_WINDOW_SIZE)));
-        setDetectedLabel(sharinganChargeLabel);
-        setDetectedConfidence(holdRatio);
+        setSharinganBlinkHoldMsIfChanged(holdClamped);
+        setRawDetectedLabelIfChanged("Eyes closed");
+        setRawDetectedConfidenceIfChanged(holdRatio);
+        setVoteHitsIfChanged(Math.min(VOTE_WINDOW_SIZE, Math.ceil(holdRatio * VOTE_WINDOW_SIZE)));
+        setDetectedLabelIfChanged(sharinganChargeLabel);
+        setDetectedConfidenceIfChanged(holdRatio);
 
         if (holdMs < SHARINGAN_BLINK_HOLD_MS) {
           return;
@@ -4402,7 +4599,7 @@ export default function PlayArena({
           lightingStatusRef.current = stats.status;
           lightingMeanRef.current = stats.mean;
           lightingContrastRef.current = stats.contrast;
-          setLightingStatus(stats.status);
+          setLightingStatusIfChanged(stats.status);
         }
       }
 
@@ -4414,11 +4611,11 @@ export default function PlayArena({
       if (features.length === 0) {
         voteWindowRef.current = [];
         voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
-        setRawDetectedLabel("No hands");
-        setRawDetectedConfidence(0);
-        setVoteHits(0);
-        setDetectedLabel("No hands");
-        setDetectedConfidence(0);
+        setRawDetectedLabelIfChanged("No hands");
+        setRawDetectedConfidenceIfChanged(0);
+        setVoteHitsIfChanged(0);
+        setDetectedLabelIfChanged("No hands");
+        setDetectedConfidenceIfChanged(0);
       } else {
         const prediction = (() => {
           if (assistModeEnabled && numHands < 2) {
@@ -4463,11 +4660,11 @@ export default function PlayArena({
         }
         voteWindowRef.current = [];
         voteStableRef.current = { label: "idle", confidence: 0, timeMs: 0 };
-        setRawDetectedLabel(exceedsTwoHandDistanceGate ? "Bring hands closer" : "Show both hands");
-        setRawDetectedConfidence(0);
-        setVoteHits(0);
-        setDetectedLabel(exceedsTwoHandDistanceGate ? "Bring hands closer" : "Show both hands");
-        setDetectedConfidence(0);
+        setRawDetectedLabelIfChanged(exceedsTwoHandDistanceGate ? "Bring hands closer" : "Show both hands");
+        setRawDetectedConfidenceIfChanged(0);
+        setVoteHitsIfChanged(0);
+        setDetectedLabelIfChanged(exceedsTwoHandDistanceGate ? "Bring hands closer" : "Show both hands");
+        setDetectedConfidenceIfChanged(0);
         return;
       }
 
@@ -4497,11 +4694,11 @@ export default function PlayArena({
         stableLabel = vote.label;
         stableConfidence = vote.confidence;
         const stableIdle = normalizeLabel(vote.label) === "idle" || normalizeLabel(vote.label) === "unknown";
-        setRawDetectedLabel(oneHandDistanceForcedIdle ? "Idle (distance)" : toDisplayLabel(rawLabel));
-        setRawDetectedConfidence(rawConfidence);
-        setVoteHits(vote.hits);
-        setDetectedLabel(oneHandDistanceForcedIdle && stableIdle ? "Idle (distance)" : toDisplayLabel(vote.label));
-        setDetectedConfidence(vote.confidence);
+        setRawDetectedLabelIfChanged(oneHandDistanceForcedIdle ? "Idle (distance)" : toDisplayLabel(rawLabel));
+        setRawDetectedConfidenceIfChanged(rawConfidence);
+        setVoteHitsIfChanged(vote.hits);
+        setDetectedLabelIfChanged(oneHandDistanceForcedIdle && stableIdle ? "Idle (distance)" : toDisplayLabel(vote.label));
+        setDetectedConfidenceIfChanged(vote.confidence);
       }
 
       if (isCalibrationMode && phaseRef.current === "active") {
@@ -4642,6 +4839,19 @@ export default function PlayArena({
   }, [
     activeCalibrationProfile,
     appendProofEvent,
+    setDetectedConfidenceIfChanged,
+    setDetectedHandsIfChanged,
+    setDetectedLabelIfChanged,
+    setEffectAnchorIfChanged,
+    setFaceAnchorIfChanged,
+    setHeadPitchIfChanged,
+    setHeadYawIfChanged,
+    setLightingStatusIfChanged,
+    setRawDetectedConfidenceIfChanged,
+    setRawDetectedLabelIfChanged,
+    setSharinganBlinkHoldMsIfChanged,
+    setSharinganVisualPoseIfChanged,
+    setVoteHitsIfChanged,
     finalizeCalibrationRun,
     finishRun,
     easyMode,
