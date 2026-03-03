@@ -317,12 +317,8 @@ const UI_EFFECT_ANGLE_EPSILON = 0.45;
 const UI_SHARINGAN_POS_EPSILON = 0.002;
 const UI_SHARINGAN_SIZE_EPSILON = 0.2;
 const UI_SHARINGAN_ANGLE_EPSILON = 0.35;
-
-const RESOLUTION_OPTIONS: Array<{ width: number; height: number }> = [
-  { width: 640, height: 480 },
-  { width: 1280, height: 720 },
-  { width: 1920, height: 1080 },
-];
+const FIXED_INFERENCE_WIDTH = 640;
+const FIXED_INFERENCE_HEIGHT = 480;
 
 const MEDIAPIPE_CONSOLE_NOISE_PATTERNS: RegExp[] = [
   /Created TensorFlow Lite XNNPACK delegate for CPU\.?/i,
@@ -1624,22 +1620,14 @@ function SignTile({
 }
 
 async function getStreamWithPreferences(cameraIdx: number, resolutionIdx: number, preferLowResolution = false): Promise<MediaStream> {
-  const requestedRes = RESOLUTION_OPTIONS[Math.max(0, Math.min(RESOLUTION_OPTIONS.length - 1, Math.floor(resolutionIdx)))]
-    || RESOLUTION_OPTIONS[0];
-  const res = preferLowResolution ? RESOLUTION_OPTIONS[0] : requestedRes;
-
-  const baseVideo: MediaTrackConstraints = preferLowResolution
-    ? {
-      width: { ideal: 640, max: 960 },
-      height: { ideal: 480, max: 720 },
-      frameRate: { ideal: 24, max: 30 },
-      facingMode: "user",
-    }
-    : {
-      width: { ideal: res.width },
-      height: { ideal: res.height },
-      facingMode: "user",
-    };
+  // Detection is intentionally fixed at 640x480 for consistent CPU cost across devices.
+  void resolutionIdx;
+  const baseVideo: MediaTrackConstraints = {
+    width: { ideal: FIXED_INFERENCE_WIDTH, max: 960 },
+    height: { ideal: FIXED_INFERENCE_HEIGHT, max: 720 },
+    frameRate: preferLowResolution ? { ideal: 24, max: 30 } : { ideal: 30, max: 30 },
+    facingMode: "user",
+  };
 
   const safeIdx = Math.max(0, Math.floor(cameraIdx));
 
