@@ -6180,7 +6180,7 @@ function PlayPageInner() {
                       </button>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-[1.8fr,1fr]">
+                    <div className="grid gap-3 sm:grid-cols-2">
                       <label className="text-sm text-zinc-100">
                         <span className="block text-xs uppercase tracking-[0.14em] text-zinc-400">{t("settings.cameraDevice", "Camera Device")}</span>
                         <select
@@ -6202,6 +6202,24 @@ function PlayPageInner() {
                           {!currentCameraOption && cameraOptions.length > 0 && (
                             <option value={draftSettings.cameraIdx}>{t("settings.cameraLabel", "Camera")} {draftSettings.cameraIdx}</option>
                           )}
+                        </select>
+                      </label>
+
+                      <label className="text-sm text-zinc-100">
+                        <span className="block text-xs uppercase tracking-[0.14em] text-zinc-400">{t("settings.cameraResolution", "Resolution")}</span>
+                        <select
+                          value={draftSettings.resolutionIdx}
+                          onChange={(event) => {
+                            const next = clampInt(event.target.value, 0, RESOLUTION_OPTIONS.length - 1, draftSettings.resolutionIdx);
+                            setDraftSettings((prev) => ({ ...prev, resolutionIdx: next }));
+                          }}
+                          className="mt-2 w-full rounded-md border border-ninja-border bg-black/30 px-2 py-1 text-sm text-white"
+                        >
+                          {RESOLUTION_OPTIONS.map((res, idx) => (
+                            <option key={`${res.width}x${res.height}`} value={idx}>
+                              {res.label}
+                            </option>
+                          ))}
                         </select>
                       </label>
                     </div>
