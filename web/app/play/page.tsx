@@ -17,6 +17,7 @@ import {
   Maximize,
   Settings,
   Sparkles,
+  Star,
   Video,
   WifiOff,
   X,
@@ -211,6 +212,7 @@ const MENU_MUTE_STORAGE_KEY = "jutsu-play-menu-mute-v1";
 const PENDING_RANK_QUEUE_PREFIX = "jutsu-play-pending-rank-submit-v1";
 const CALIBRATION_SKIP_PREFIX = "jutsu-play-calibration-skip-v1";
 const RETENTION_STORAGE_PREFIX = "jutsu-play-retention-v1";
+const RATING_PROMPT_STORAGE_PREFIX = "jutsu-play-rating-prompt-v1";
 const DISCORD_INVITE_URL = "https://discord.gg/7xBQ22SnN2";
 const PENDING_RANK_QUEUE_MAX = 20;
 const PENDING_RANK_REPLAY_BATCH = 4;
@@ -220,6 +222,12 @@ const COMEBACK_INACTIVE_DAYS = 7;
 const COMEBACK_BONUS_PCT = 35;
 const COMEBACK_BONUS_RUNS = 3;
 const WEB_APP_VERSION = "1.0.0";
+const RATING_PROMPT_MIN_SUCCESSFUL_RUNS = 5;
+const RATING_PROMPT_COOLDOWN_DAYS = 21;
+const RATING_SUBMISSION_COOLDOWN_DAYS = 90;
+const RATING_COMMENT_MAX_LEN = 600;
+const RATING_SUGGESTION_MAX_LEN = 600;
+const RATING_PROMPT_DELAY_MS = 900;
 const DEFAULT_RUNTIME_DATASET = {
   version: "",
   url: "/mediapipe_signs_db.csv",
@@ -279,6 +287,19 @@ interface DirectProfileMetaResult {
   profile?: Record<string, unknown>;
   reason?: string;
   detail?: string;
+}
+
+interface RatingPromptState {
+  runsSincePrompt: number;
+  lastPromptedAt: string;
+  lastSubmittedAt: string;
+  dismissedForever: boolean;
+}
+
+interface RatingPromptCandidate {
+  mode: "free" | "rank";
+  jutsuName: string;
+  elapsedSeconds: number;
 }
 
 type LightingReadiness = "good" | "low_light" | "overexposed" | "low_contrast";
@@ -1583,6 +1604,37 @@ function buildRetentionStorageKey(discordId: string): string {
   return `${RETENTION_STORAGE_PREFIX}:${String(discordId || "").trim()}`;
 }
 
+function buildRatingPromptStorageKey(discordId: string): string {
+  return `${RATING_PROMPT_STORAGE_PREFIX}:${String(discordId || "").trim()}`;
+}
+
+function createDefaultRatingPromptState(): RatingPromptState {
+  return {
+    runsSincePrompt: 0,
+    lastPromptedAt: "",
+    lastSubmittedAt: "",
+    dismissedForever: false,
+  };
+}
+
+function sanitizeRatingPromptState(raw: unknown): RatingPromptState {
+  if (!isRecord(raw)) return createDefaultRatingPromptState();
+  return {
+    runsSincePrompt: Math.max(0, Math.min(999, Math.floor(Number(raw.runsSincePrompt) || 0))),
+    lastPromptedAt: String(raw.lastPromptedAt || ""),
+    lastSubmittedAt: String(raw.lastSubmittedAt || ""),
+    dismissedForever: parseBoolean(raw.dismissedForever, false),
+  };
+}
+
+function isoElapsedMs(iso: string, nowMs: number): number {
+  const text = String(iso || "").trim();
+  if (!text) return Number.POSITIVE_INFINITY;
+  const ts = Date.parse(text);
+  if (!Number.isFinite(ts)) return Number.POSITIVE_INFINITY;
+  return Math.max(0, nowMs - ts);
+}
+
 function makePendingRankRecordId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -2145,6 +2197,16 @@ function PlayPageInner() {
   const [identityLinked, setIdentityLinked] = useState(false);
   const [levelUpPanel, setLevelUpPanel] = useState<LevelUpPanelState | null>(null);
   const [masteryPanel, setMasteryPanel] = useState<MasteryPanelState | null>(null);
+  const [ratingPromptState, setRatingPromptState] = useState<RatingPromptState>(() => createDefaultRatingPromptState());
+  const [ratingPromptPending, setRatingPromptPending] = useState<RatingPromptCandidate | null>(null);
+  const [ratingModal, setRatingModal] = useState<RatingPromptCandidate | null>(null);
+  const [ratingStars, setRatingStars] = useState(0);
+  const [ratingHoverStars, setRatingHoverStars] = useState(0);
+  const [ratingComment, setRatingComment] = useState("");
+  const [ratingSuggestion, setRatingSuggestion] = useState("");
+  const [ratingSubmitBusy, setRatingSubmitBusy] = useState(false);
+  const [ratingSubmitError, setRatingSubmitError] = useState("");
+  const [ratingPromptShownThisSession, setRatingPromptShownThisSession] = useState(false);
   const [masteryBarDisplayPct, setMasteryBarDisplayPct] = useState(0);
   const [uiSfxReady, setUiSfxReady] = useState(false);
   const [uiSfxLoadCompleted, setUiSfxLoadCompleted] = useState(0);
@@ -2320,6 +2382,10 @@ function PlayPageInner() {
     const discordId = String(identity?.discordId || "").trim();
     return discordId ? buildRetentionStorageKey(discordId) : "";
   }, [identity?.discordId]);
+  const ratingPromptStorageKey = useMemo(() => {
+    const discordId = String(identity?.discordId || "").trim();
+    return discordId ? buildRatingPromptStorageKey(discordId) : "";
+  }, [identity?.discordId]);
   const effectiveMenuMusicVol = useMemo(
     () => clampVolume(view === "settings" ? draftSettings.musicVol : savedSettings.musicVol, DEFAULT_SETTINGS.musicVol),
     [draftSettings.musicVol, savedSettings.musicVol, view],
@@ -2394,6 +2460,51 @@ function PlayPageInner() {
       // Ignore localStorage write failures.
     }
   }, [retentionState, retentionStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!ratingPromptStorageKey) {
+      setRatingPromptState(createDefaultRatingPromptState());
+      setRatingPromptPending(null);
+      setRatingModal(null);
+      setRatingStars(0);
+      setRatingHoverStars(0);
+      setRatingComment("");
+      setRatingSuggestion("");
+      setRatingSubmitError("");
+      setRatingSubmitBusy(false);
+      setRatingPromptShownThisSession(false);
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(ratingPromptStorageKey);
+      if (!raw) {
+        setRatingPromptState(createDefaultRatingPromptState());
+      } else {
+        setRatingPromptState(sanitizeRatingPromptState(JSON.parse(raw)));
+      }
+    } catch {
+      setRatingPromptState(createDefaultRatingPromptState());
+    }
+    setRatingPromptPending(null);
+    setRatingModal(null);
+    setRatingStars(0);
+    setRatingHoverStars(0);
+    setRatingComment("");
+    setRatingSuggestion("");
+    setRatingSubmitError("");
+    setRatingSubmitBusy(false);
+    setRatingPromptShownThisSession(false);
+  }, [ratingPromptStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !ratingPromptStorageKey) return;
+    try {
+      window.localStorage.setItem(ratingPromptStorageKey, JSON.stringify(ratingPromptState));
+    } catch {
+      // Ignore localStorage write failures.
+    }
+  }, [ratingPromptState, ratingPromptStorageKey]);
 
   const applyCompetitivePayload = useCallback((payload: Record<string, unknown>) => {
     const payloadResult = firstRecord(payload.result);
@@ -2623,6 +2734,182 @@ function PlayPageInner() {
       buttonText: String(buttonText || "OK"),
     });
   }, []);
+
+  const resetRatingModalDraft = useCallback(() => {
+    setRatingStars(0);
+    setRatingHoverStars(0);
+    setRatingComment("");
+    setRatingSuggestion("");
+    setRatingSubmitError("");
+    setRatingSubmitBusy(false);
+  }, []);
+
+  const closeRatingModal = useCallback(() => {
+    setRatingModal(null);
+    resetRatingModalDraft();
+  }, [resetRatingModalDraft]);
+
+  const dismissRatingPromptForever = useCallback(() => {
+    setRatingPromptState((prev) => ({
+      ...prev,
+      runsSincePrompt: 0,
+      dismissedForever: true,
+    }));
+    setRatingPromptPending(null);
+    closeRatingModal();
+  }, [closeRatingModal]);
+
+  const queueRatingPromptForRun = useCallback((result: PlayArenaResult, accepted: boolean) => {
+    if (!accepted) return;
+    if (!session?.user?.id || !identity?.discordId) return;
+
+    const nowIso = toUtcIsoNoMs();
+    const nowMs = Date.now();
+    const nextRuns = Math.min(999, Math.max(0, ratingPromptState.runsSincePrompt) + 1);
+    const promptCooldownMs = RATING_PROMPT_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+    const submitCooldownMs = RATING_SUBMISSION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+    const cooldownSincePromptOk = isoElapsedMs(ratingPromptState.lastPromptedAt, nowMs) >= promptCooldownMs;
+    const cooldownSinceSubmitOk = isoElapsedMs(ratingPromptState.lastSubmittedAt, nowMs) >= submitCooldownMs;
+    const shouldPrompt = !ratingPromptShownThisSession
+      && !ratingPromptState.dismissedForever
+      && nextRuns >= RATING_PROMPT_MIN_SUCCESSFUL_RUNS
+      && cooldownSincePromptOk
+      && cooldownSinceSubmitOk;
+
+    if (!shouldPrompt) {
+      setRatingPromptState((prev) => ({ ...prev, runsSincePrompt: nextRuns }));
+      return;
+    }
+
+    setRatingPromptState((prev) => ({
+      ...prev,
+      runsSincePrompt: 0,
+      lastPromptedAt: nowIso,
+    }));
+    setRatingPromptPending({
+      mode: result.mode,
+      jutsuName: result.jutsuName,
+      elapsedSeconds: Number(result.elapsedSeconds || 0),
+    });
+    setRatingPromptShownThisSession(true);
+  }, [
+    identity?.discordId,
+    ratingPromptShownThisSession,
+    ratingPromptState.dismissedForever,
+    ratingPromptState.lastPromptedAt,
+    ratingPromptState.lastSubmittedAt,
+    ratingPromptState.runsSincePrompt,
+    session?.user?.id,
+  ]);
+
+  const submitRatingFeedback = useCallback(async () => {
+    if (!ratingModal || ratingSubmitBusy) return;
+    const stars = Math.max(0, Math.min(5, Math.floor(Number(ratingStars) || 0)));
+    if (stars < 1) {
+      setRatingSubmitError("Pick a star rating before submitting.");
+      return;
+    }
+    if (!supabase) {
+      setRatingSubmitError("Feedback service is unavailable right now.");
+      return;
+    }
+    const authUserId = String(session?.user?.id || "").trim();
+    if (!authUserId) {
+      setRatingSubmitError("Sign in is required to submit feedback.");
+      return;
+    }
+
+    const comment = String(ratingComment || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, RATING_COMMENT_MAX_LEN);
+    const suggestion = String(ratingSuggestion || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, RATING_SUGGESTION_MAX_LEN);
+
+    setRatingSubmitBusy(true);
+    setRatingSubmitError("");
+    try {
+      const elapsedRaw = Number(ratingModal.elapsedSeconds || 0);
+      const elapsedSeconds = Number.isFinite(elapsedRaw)
+        ? Number(Math.max(0, Math.min(900, elapsedRaw)).toFixed(4))
+        : null;
+      const { error } = await supabase.from("user_ratings").insert({
+        auth_user_id: authUserId,
+        username: identity?.username || null,
+        discord_id: identity?.discordId || null,
+        stars,
+        comment,
+        run_mode: ratingModal.mode,
+        jutsu_name: String(ratingModal.jutsuName || "").slice(0, 80) || null,
+        elapsed_seconds: elapsedSeconds,
+        app_version: WEB_APP_VERSION,
+        prompt_context: {
+          source: "play_post_run_v1",
+          runs_since_prompt: ratingPromptState.runsSincePrompt,
+          suggestion,
+        },
+      });
+      if (error) {
+        setRatingSubmitError(`Failed to save feedback: ${String(error.message || "unknown_error")}`);
+        return;
+      }
+
+      const nowIso = toUtcIsoNoMs();
+      setRatingPromptState((prev) => ({
+        ...prev,
+        runsSincePrompt: 0,
+        lastSubmittedAt: nowIso,
+      }));
+      setRatingPromptPending(null);
+      closeRatingModal();
+    } catch (err) {
+      setRatingSubmitError(`Failed to save feedback: ${String((err as Error)?.message || "unknown_error")}`);
+    } finally {
+      setRatingSubmitBusy(false);
+    }
+  }, [
+    closeRatingModal,
+    identity?.discordId,
+    identity?.username,
+    ratingComment,
+    ratingSuggestion,
+    ratingModal,
+    ratingPromptState.runsSincePrompt,
+    ratingStars,
+    ratingSubmitBusy,
+    session?.user?.id,
+  ]);
+
+  useEffect(() => {
+    if (!ratingPromptPending || ratingModal) return;
+    if (view !== "free_session" && view !== "rank_session") return;
+    if (maintenanceGate || updateGate || connectionLostState) return;
+    if (showAnnouncements || showLogoutConfirm) return;
+    if (errorModal || alertModal || jutsuInfoModal || masteryPanel || levelUpPanel) return;
+    const timer = window.setTimeout(() => {
+      setRatingModal(ratingPromptPending);
+      setRatingPromptPending(null);
+      resetRatingModalDraft();
+    }, RATING_PROMPT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    alertModal,
+    connectionLostState,
+    errorModal,
+    jutsuInfoModal,
+    levelUpPanel,
+    maintenanceGate,
+    masteryPanel,
+    ratingModal,
+    ratingPromptPending,
+    resetRatingModalDraft,
+    showAnnouncements,
+    showLogoutConfirm,
+    updateGate,
+    view,
+  ]);
 
   const triggerConnectionLost = useCallback((title?: string, lines?: string[]) => {
     setConnectionLostState({
@@ -4576,6 +4863,7 @@ function PlayPageInner() {
     if (isRankRun && !runRes.ok && runRes.reason) {
       detailParts.push(`XP sync skipped: ${runRes.reason}`);
     }
+    queueRatingPromptForRun(result, isRankRun ? true : runRes.ok);
 
     return {
       ok: isRankRun ? true : runRes.ok,
@@ -4588,7 +4876,7 @@ function PlayPageInner() {
       rankText: secureRes.rankText,
       xpAwarded: runRes.ok ? runRes.xpAwarded : 0,
     };
-  }, [effectiveRetentionState, now, queueRunCompletionPanels, recordMasteryCompletion, recordTrainingRun, submitRankRunSecure]);
+  }, [effectiveRetentionState, now, queueRatingPromptForRun, queueRunCompletionPanels, recordMasteryCompletion, recordTrainingRun, submitRankRunSecure]);
 
   const handleCalibrationComplete = useCallback(async (profile: CalibrationProfile): Promise<boolean> => {
     setCalibrationProfile(profile);
@@ -6719,6 +7007,145 @@ function PlayPageInner() {
                   ? t("common.done", "DONE")
                   : t("common.next", "NEXT")}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {ratingModal && !connectionLostState && !maintenanceGate && !updateGate && (
+        <div className="fixed inset-0 z-[58] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close rating prompt"
+            onClick={closeRatingModal}
+            disabled={ratingSubmitBusy}
+            className="absolute inset-0 bg-black/80 backdrop-blur-[1px]"
+          />
+          <div className="relative w-full max-w-[560px] overflow-hidden rounded-[24px] border border-amber-200/55 bg-[radial-gradient(circle_at_14%_12%,rgba(255,200,120,0.2),transparent_44%),radial-gradient(circle_at_80%_86%,rgba(90,180,255,0.16),transparent_42%),linear-gradient(180deg,rgba(16,20,34,0.97)_0%,rgba(10,12,24,0.98)_100%)] p-6 shadow-[0_30px_95px_rgba(0,0,0,0.72)]">
+            <div className="pointer-events-none absolute -left-20 -top-16 h-48 w-48 rounded-full bg-amber-300/20 blur-3xl" />
+            <div className="pointer-events-none absolute -right-24 -bottom-16 h-56 w-56 rounded-full bg-cyan-300/16 blur-3xl" />
+            <div className="pointer-events-none absolute inset-[2px] rounded-[22px] border border-amber-100/16" />
+
+            <button
+              type="button"
+              aria-label={t("common.close", "Close")}
+              onClick={closeRatingModal}
+              disabled={ratingSubmitBusy}
+              className="absolute right-4 top-4 z-20 flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-black/45 text-zinc-200 hover:border-white/45 hover:text-white disabled:opacity-55"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="relative">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-amber-200">
+                {t("rating.title", "Rate Your Run")}
+              </p>
+              <p className="mt-2 text-2xl font-black tracking-tight text-white">
+                {t("rating.question", "How was this run experience?")}
+              </p>
+              <p className="mt-1 text-xs text-zinc-300">
+                {t("rating.context", "Shown after 5 successful free/rank runs only.")}
+              </p>
+
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 sm:justify-start">
+                {[1, 2, 3, 4, 5].map((star) => {
+                  const active = star <= (ratingHoverStars || ratingStars);
+                  return (
+                    <button
+                      key={`rating-star-${star}`}
+                      type="button"
+                      onMouseEnter={() => setRatingHoverStars(star)}
+                      onMouseLeave={() => setRatingHoverStars(0)}
+                      onClick={() => {
+                        setRatingStars(star);
+                        setRatingSubmitError("");
+                      }}
+                      className={`rounded-lg border px-2 py-1.5 transition-colors ${active
+                        ? "border-amber-300/70 bg-amber-500/18 text-amber-200"
+                        : "border-zinc-600/75 bg-zinc-900/45 text-zinc-400 hover:border-zinc-500/85 hover:text-zinc-200"
+                        }`}
+                      aria-label={`${star} star${star > 1 ? "s" : ""}`}
+                    >
+                      <Star className={`h-6 w-6 ${active ? "fill-current" : ""}`} />
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className={`mt-2 text-xs ${ratingStars <= 0 ? "text-zinc-400" : ratingStars <= 3 ? "text-amber-200" : "text-emerald-200"}`}>
+                {ratingStars <= 0
+                  ? t("rating.pickStars", "Pick 1-5 stars.")
+                  : ratingStars <= 3
+                    ? t("rating.lowHint", "Thanks. Tell us what felt off (optional).")
+                    : t("rating.highHint", "Great. Optional note helps us keep quality high.")}
+              </p>
+
+              <p className="mt-3 text-[11px] font-black uppercase tracking-[0.14em] text-zinc-300">
+                {t("rating.commentLabel", "Comment (optional)")}
+              </p>
+              <textarea
+                value={ratingComment}
+                onChange={(event) => {
+                  setRatingComment(event.target.value.slice(0, RATING_COMMENT_MAX_LEN));
+                  if (ratingSubmitError) setRatingSubmitError("");
+                }}
+                rows={3}
+                placeholder={t("rating.commentPlaceholder", "Optional comment (FPS, tracking, controls, effects, bugs...)")}
+                className="mt-1 w-full resize-none rounded-xl border border-zinc-600/70 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-amber-300/55"
+              />
+              <p className="mt-1 text-right text-[11px] font-mono text-zinc-400">
+                {Math.max(0, RATING_COMMENT_MAX_LEN - ratingComment.length)}
+              </p>
+
+              <p className="mt-3 text-[11px] font-black uppercase tracking-[0.14em] text-zinc-300">
+                {t("rating.suggestionLabel", "Suggestion (optional)")}
+              </p>
+              <textarea
+                value={ratingSuggestion}
+                onChange={(event) => {
+                  setRatingSuggestion(event.target.value.slice(0, RATING_SUGGESTION_MAX_LEN));
+                  if (ratingSubmitError) setRatingSubmitError("");
+                }}
+                rows={3}
+                placeholder={t("rating.suggestionPlaceholder", "Any suggestion to improve the game?")}
+                className="mt-1 w-full resize-none rounded-xl border border-zinc-600/70 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-cyan-300/55"
+              />
+              <p className="mt-1 text-right text-[11px] font-mono text-zinc-400">
+                {Math.max(0, RATING_SUGGESTION_MAX_LEN - ratingSuggestion.length)}
+              </p>
+
+              {!!ratingSubmitError && (
+                <p className="mt-2 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                  {ratingSubmitError}
+                </p>
+              )}
+
+              <div className="mt-5 grid gap-2 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={closeRatingModal}
+                  disabled={ratingSubmitBusy}
+                  className="h-11 rounded-xl border border-zinc-600/75 bg-zinc-900/45 text-xs font-black tracking-[0.08em] text-zinc-200 hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-55"
+                >
+                  {t("rating.notNow", "NOT NOW")}
+                </button>
+                <button
+                  type="button"
+                  onClick={dismissRatingPromptForever}
+                  disabled={ratingSubmitBusy}
+                  className="h-11 rounded-xl border border-red-400/45 bg-red-500/10 text-xs font-black tracking-[0.08em] text-red-200 hover:bg-red-500/18 disabled:cursor-not-allowed disabled:opacity-55"
+                >
+                  {t("rating.neverAsk", "NEVER ASK")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitRatingFeedback()}
+                  disabled={ratingSubmitBusy || ratingStars < 1}
+                  className="h-11 rounded-xl border border-amber-300/65 bg-gradient-to-r from-orange-500 to-amber-500 text-xs font-black tracking-[0.08em] text-zinc-950 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {ratingSubmitBusy ? t("rating.sending", "SAVING...") : t("rating.submit", "SUBMIT")}
+                </button>
+              </div>
             </div>
           </div>
         </div>
