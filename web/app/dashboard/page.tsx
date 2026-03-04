@@ -141,6 +141,40 @@ interface OnlineUserRow {
   isOnlineGuess: boolean;
 }
 
+interface RatingRow {
+  id: string;
+  stars: number;
+  comment: string;
+  suggestion: string;
+  username: string;
+  discordId: string;
+  runMode: string;
+  jutsuName: string;
+  createdAt: string;
+}
+
+interface RatingEventRow {
+  id: string;
+  eventType: "prompt_shown" | "dismiss_not_now" | "dismiss_never" | "submitted" | string;
+  stars: number;
+  comment: string;
+  suggestion: string;
+  username: string;
+  discordId: string;
+  runMode: string;
+  jutsuName: string;
+  createdAt: string;
+}
+
+interface RatingEventSummary {
+  promptsShown: number;
+  dismissNotNow: number;
+  dismissNever: number;
+  submissions: number;
+  noFeedback: number;
+  submitRatePct: number;
+}
+
 interface ConfigFormState {
   type: "announcement" | "maintenance" | "version" | "dataset";
   message: string;
@@ -149,13 +183,6 @@ interface ConfigFormState {
   checksum: string;
   isActive: boolean;
   priority: number;
-}
-
-interface ApiError {
-  ok: false;
-  reason?: string;
-  detail?: string;
-  retry_seconds?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -396,6 +423,69 @@ function parseOnlineRows(raw: unknown): OnlineUserRow[] {
     }));
 }
 
+function parseRatingRows(raw: unknown): RatingRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(isRecord)
+    .map((row) => ({
+      id: toText(row.id),
+      stars: Math.max(0, Math.min(5, toInt(row.stars))),
+      comment: toText(row.comment),
+      suggestion: toText(row.suggestion),
+      username: toText(row.username) || "unknown",
+      discordId: toText(row.discord_id),
+      runMode: toText(row.run_mode),
+      jutsuName: toText(row.jutsu_name),
+      createdAt: toText(row.created_at),
+    }));
+}
+
+function parseRatingEventRows(raw: unknown): RatingEventRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(isRecord)
+    .map((row) => ({
+      id: toText(row.id),
+      eventType: toText(row.event_type) || "unknown",
+      stars: Math.max(0, Math.min(5, toInt(row.stars))),
+      comment: toText(row.comment),
+      suggestion: toText(row.suggestion),
+      username: toText(row.username) || "unknown",
+      discordId: toText(row.discord_id),
+      runMode: toText(row.run_mode),
+      jutsuName: toText(row.jutsu_name),
+      createdAt: toText(row.created_at),
+    }));
+}
+
+function parseRatingEventSummary(raw: unknown): RatingEventSummary {
+  const source = isRecord(raw) ? raw : {};
+  return {
+    promptsShown: toInt(source.prompts_shown),
+    dismissNotNow: toInt(source.dismiss_not_now),
+    dismissNever: toInt(source.dismiss_never),
+    submissions: toInt(source.submissions),
+    noFeedback: toInt(source.no_feedback),
+    submitRatePct: toNumber(source.submit_rate_pct),
+  };
+}
+
+function formatRatingEventType(eventType: string): string {
+  if (eventType === "prompt_shown") return "PROMPT SHOWN";
+  if (eventType === "dismiss_not_now") return "NOT NOW";
+  if (eventType === "dismiss_never") return "NEVER ASK";
+  if (eventType === "submitted") return "SUBMITTED";
+  return eventType || "UNKNOWN";
+}
+
+function ratingEventBadgeClass(eventType: string): string {
+  if (eventType === "submitted") return "bg-emerald-500/20 text-emerald-200";
+  if (eventType === "dismiss_not_now") return "bg-amber-500/20 text-amber-200";
+  if (eventType === "dismiss_never") return "bg-red-500/20 text-red-200";
+  if (eventType === "prompt_shown") return "bg-sky-500/20 text-sky-200";
+  return "bg-zinc-700/40 text-zinc-200";
+}
+
 function buildSparkline(values: number[]): string {
   if (values.length <= 0) return "";
   const width = 160;
@@ -445,6 +535,18 @@ export default function AdminDashboardPage() {
   const [onlineNowCount, setOnlineNowCount] = useState(0);
   const [onlinePeakToday, setOnlinePeakToday] = useState(0);
   const [onlineWindowSeconds, setOnlineWindowSeconds] = useState(90);
+  const [ratingRows, setRatingRows] = useState<RatingRow[]>([]);
+  const [ratingCount, setRatingCount] = useState(0);
+  const [ratingAvg, setRatingAvg] = useState(0);
+  const [ratingEventRows, setRatingEventRows] = useState<RatingEventRow[]>([]);
+  const [ratingEventSummary, setRatingEventSummary] = useState<RatingEventSummary>({
+    promptsShown: 0,
+    dismissNotNow: 0,
+    dismissNever: 0,
+    submissions: 0,
+    noFeedback: 0,
+    submitRatePct: 0,
+  });
   const [busy, setBusy] = useState(false);
   const [configBusy, setConfigBusy] = useState(false);
   const [error, setError] = useState("");
@@ -500,7 +602,7 @@ export default function AdminDashboardPage() {
     }
     return reason === "rpc_error"
       && detail.includes("admin_get_user_reports")
-      && detail.includes("does not exist");
+      && (detail.includes("does not exist") || detail.includes("could not find the function"));
   };
 
   const isOnlineUnavailableError = (json: unknown): boolean => {
@@ -512,7 +614,31 @@ export default function AdminDashboardPage() {
     }
     return reason === "rpc_error"
       && detail.includes("admin_get_online_users")
-      && detail.includes("does not exist");
+      && (detail.includes("does not exist") || detail.includes("could not find the function"));
+  };
+
+  const isRatingsUnavailableError = (json: unknown): boolean => {
+    if (!isRecord(json)) return false;
+    const reason = toText(json.reason).toLowerCase();
+    const detail = toText(json.detail).toLowerCase();
+    if (reason === "missing_user_ratings_table" || reason === "missing_admin_stats_function") {
+      return true;
+    }
+    return reason === "rpc_error"
+      && detail.includes("admin_get_user_ratings")
+      && (detail.includes("does not exist") || detail.includes("could not find the function"));
+  };
+
+  const isRatingEventsUnavailableError = (json: unknown): boolean => {
+    if (!isRecord(json)) return false;
+    const reason = toText(json.reason).toLowerCase();
+    const detail = toText(json.detail).toLowerCase();
+    if (reason === "missing_user_rating_events_table" || reason === "missing_admin_stats_function") {
+      return true;
+    }
+    return reason === "rpc_error"
+      && detail.includes("admin_get_user_rating_events")
+      && (detail.includes("does not exist") || detail.includes("could not find the function"));
   };
 
   const loadStats = async (): Promise<boolean> => {
@@ -591,6 +717,67 @@ export default function AdminDashboardPage() {
     return true;
   };
 
+  const loadRatingRows = async (): Promise<boolean> => {
+    const { res, json } = await apiPost({
+      action: "ratings_list",
+      password,
+      limit: 200,
+    });
+    if (!res.ok || !isRecord(json) || !Boolean(json.ok)) {
+      if (isRatingsUnavailableError(json)) {
+        setRatingRows([]);
+        setRatingCount(0);
+        setRatingAvg(0);
+        return true;
+      }
+      setError(handleApiError(json));
+      setRatingRows([]);
+      setRatingCount(0);
+      setRatingAvg(0);
+      return false;
+    }
+    setRatingRows(parseRatingRows(json.rows));
+    setRatingCount(toInt(json.rating_count));
+    setRatingAvg(toNumber(json.rating_avg));
+    return true;
+  };
+
+  const loadRatingEventRows = async (): Promise<boolean> => {
+    const { res, json } = await apiPost({
+      action: "rating_events_list",
+      password,
+      limit: 260,
+    });
+    if (!res.ok || !isRecord(json) || !Boolean(json.ok)) {
+      if (isRatingEventsUnavailableError(json)) {
+        setRatingEventRows([]);
+        setRatingEventSummary({
+          promptsShown: 0,
+          dismissNotNow: 0,
+          dismissNever: 0,
+          submissions: 0,
+          noFeedback: 0,
+          submitRatePct: 0,
+        });
+        return true;
+      }
+      setError(handleApiError(json));
+      setRatingEventRows([]);
+      setRatingEventSummary({
+        promptsShown: 0,
+        dismissNotNow: 0,
+        dismissNever: 0,
+        submissions: 0,
+        noFeedback: 0,
+        submitRatePct: 0,
+      });
+      return false;
+    }
+    setRatingEventRows(parseRatingEventRows(json.rows));
+    setRatingEventSummary(parseRatingEventSummary(json));
+    return true;
+  };
+
   const openDashboard = async (event?: FormEvent<HTMLFormElement>) => {
     if (event) event.preventDefault();
     if (!password.trim()) {
@@ -601,8 +788,15 @@ export default function AdminDashboardPage() {
     setBusy(true);
     setError("");
     try {
-      const [statsOk, configOk, reportsOk, onlineOk] = await Promise.all([loadStats(), loadConfigRows(), loadReportRows(), loadOnlineRows()]);
-      if (!statsOk || !configOk || !reportsOk || !onlineOk) return;
+      const [statsOk, configOk, reportsOk, onlineOk, ratingsOk, ratingEventsOk] = await Promise.all([
+        loadStats(),
+        loadConfigRows(),
+        loadReportRows(),
+        loadOnlineRows(),
+        loadRatingRows(),
+        loadRatingEventRows(),
+      ]);
+      if (!statsOk || !configOk || !reportsOk || !onlineOk || !ratingsOk || !ratingEventsOk) return;
     } catch (err) {
       setError(String((err as Error)?.message || err || "Request failed."));
     } finally {
@@ -615,7 +809,14 @@ export default function AdminDashboardPage() {
     setBusy(true);
     setError("");
     try {
-      await Promise.all([loadStats(), loadConfigRows(), loadReportRows(), loadOnlineRows()]);
+      await Promise.all([
+        loadStats(),
+        loadConfigRows(),
+        loadReportRows(),
+        loadOnlineRows(),
+        loadRatingRows(),
+        loadRatingEventRows(),
+      ]);
     } finally {
       setBusy(false);
     }
@@ -713,6 +914,18 @@ export default function AdminDashboardPage() {
                 setOnlineRows([]);
                 setOnlineNowCount(0);
                 setOnlinePeakToday(0);
+                setRatingRows([]);
+                setRatingCount(0);
+                setRatingAvg(0);
+                setRatingEventRows([]);
+                setRatingEventSummary({
+                  promptsShown: 0,
+                  dismissNotNow: 0,
+                  dismissNever: 0,
+                  submissions: 0,
+                  noFeedback: 0,
+                  submitRatePct: 0,
+                });
                 setError("");
                 setRetrySeconds(0);
               }}
@@ -1133,6 +1346,147 @@ export default function AdminDashboardPage() {
                     {reportRows.length === 0 && (
                       <tr>
                         <td colSpan={6} className="px-2 py-3 text-zinc-400">No reports found.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-white/15 bg-black/25 p-4">
+              <h2 className="text-sm font-black tracking-[0.14em] text-zinc-200">User Ratings</h2>
+              <p className="mt-1 text-xs text-zinc-400">Submitted from the in-game rating prompt.</p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Overall Rating</p>
+                  <p className="mt-1 text-2xl font-black text-amber-300">
+                    {ratingCount > 0 ? `${ratingAvg.toFixed(2)} / 5` : "-"}
+                  </p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Total Ratings</p>
+                  <p className="mt-1 text-2xl font-black text-zinc-100">{ratingCount}</p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">With Suggestions</p>
+                  <p className="mt-1 text-2xl font-black text-sky-300">
+                    {ratingRows.filter((row) => Boolean(row.suggestion)).length}
+                  </p>
+                </article>
+              </div>
+              <div className="mt-3 max-h-[420px] overflow-auto rounded-lg border border-white/10">
+                <table className="w-full min-w-[1080px] text-xs">
+                  <thead>
+                    <tr className="border-b border-white/10 bg-black/35 text-left uppercase tracking-[0.12em] text-zinc-400">
+                      <th className="px-2 py-2">Created</th>
+                      <th className="px-2 py-2">Stars</th>
+                      <th className="px-2 py-2">User</th>
+                      <th className="px-2 py-2">Mode</th>
+                      <th className="px-2 py-2">Jutsu</th>
+                      <th className="px-2 py-2">Comment</th>
+                      <th className="px-2 py-2">Suggestion</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ratingRows.map((row) => (
+                      <tr key={`${row.id}-${row.createdAt}`} className="border-b border-white/5 align-top">
+                        <td className="whitespace-nowrap px-2 py-2 text-zinc-300">
+                          {row.createdAt ? new Date(row.createdAt).toLocaleString() : "-"}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2">
+                          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-amber-200">
+                            {row.stars}/5
+                          </span>
+                        </td>
+                        <td className="max-w-[220px] truncate px-2 py-2 text-zinc-100" title={row.discordId || row.username}>
+                          {row.username || row.discordId || "-"}
+                        </td>
+                        <td className="px-2 py-2 text-zinc-300">{row.runMode || "-"}</td>
+                        <td className="px-2 py-2 text-zinc-300">{row.jutsuName || "-"}</td>
+                        <td className="max-w-[280px] whitespace-pre-wrap px-2 py-2 text-zinc-100">{row.comment || "-"}</td>
+                        <td className="max-w-[280px] whitespace-pre-wrap px-2 py-2 text-cyan-200">{row.suggestion || "-"}</td>
+                      </tr>
+                    ))}
+                    {ratingRows.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-2 py-3 text-zinc-400">No ratings found.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-white/15 bg-black/25 p-4">
+              <h2 className="text-sm font-black tracking-[0.14em] text-zinc-200">Rating Prompt Events</h2>
+              <p className="mt-1 text-xs text-zinc-400">Prompt shown, not now, never ask, and submitted events from gameplay.</p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Prompts Shown</p>
+                  <p className="mt-1 text-2xl font-black text-sky-300">{ratingEventSummary.promptsShown}</p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Submitted</p>
+                  <p className="mt-1 text-2xl font-black text-emerald-300">{ratingEventSummary.submissions}</p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Not Now</p>
+                  <p className="mt-1 text-2xl font-black text-amber-300">{ratingEventSummary.dismissNotNow}</p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Never Ask</p>
+                  <p className="mt-1 text-2xl font-black text-red-300">{ratingEventSummary.dismissNever}</p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">No Feedback</p>
+                  <p className="mt-1 text-2xl font-black text-zinc-100">{ratingEventSummary.noFeedback}</p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Submit Rate</p>
+                  <p className="mt-1 text-2xl font-black text-cyan-300">{formatPct(ratingEventSummary.submitRatePct)}</p>
+                </article>
+              </div>
+
+              <div className="mt-3 max-h-[380px] overflow-auto rounded-lg border border-white/10">
+                <table className="w-full min-w-[1180px] text-xs">
+                  <thead>
+                    <tr className="border-b border-white/10 bg-black/35 text-left uppercase tracking-[0.12em] text-zinc-400">
+                      <th className="px-2 py-2">Created</th>
+                      <th className="px-2 py-2">Event</th>
+                      <th className="px-2 py-2">User</th>
+                      <th className="px-2 py-2">Mode</th>
+                      <th className="px-2 py-2">Jutsu</th>
+                      <th className="px-2 py-2">Stars</th>
+                      <th className="px-2 py-2">Comment / Suggestion</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ratingEventRows.map((row) => (
+                      <tr key={`${row.id}-${row.createdAt}`} className="border-b border-white/5 align-top">
+                        <td className="whitespace-nowrap px-2 py-2 text-zinc-300">
+                          {row.createdAt ? new Date(row.createdAt).toLocaleString() : "-"}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2">
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] ${ratingEventBadgeClass(row.eventType)}`}>
+                            {formatRatingEventType(row.eventType)}
+                          </span>
+                        </td>
+                        <td className="max-w-[220px] truncate px-2 py-2 text-zinc-100" title={row.discordId || row.username}>
+                          {row.username || row.discordId || "-"}
+                        </td>
+                        <td className="px-2 py-2 text-zinc-300">{row.runMode || "-"}</td>
+                        <td className="px-2 py-2 text-zinc-300">{row.jutsuName || "-"}</td>
+                        <td className="px-2 py-2 text-zinc-300">{row.stars > 0 ? `${row.stars}/5` : "-"}</td>
+                        <td className="max-w-[420px] whitespace-pre-wrap px-2 py-2 text-zinc-100">
+                          {row.comment || row.suggestion
+                            ? `${row.comment || "-"}${row.suggestion ? `\n\nSuggestion: ${row.suggestion}` : ""}`
+                            : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                    {ratingEventRows.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-2 py-3 text-zinc-400">No rating events found.</td>
                       </tr>
                     )}
                   </tbody>

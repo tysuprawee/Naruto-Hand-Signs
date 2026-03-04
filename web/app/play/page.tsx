@@ -302,6 +302,8 @@ interface RatingPromptCandidate {
   elapsedSeconds: number;
 }
 
+type RatingPromptEventType = "prompt_shown" | "dismiss_not_now" | "dismiss_never" | "submitted";
+
 type LightingReadiness = "good" | "low_light" | "overexposed" | "low_contrast";
 
 const DEFAULT_SETTINGS: MenuSettingsState = {
@@ -1627,6 +1629,19 @@ function sanitizeRatingPromptState(raw: unknown): RatingPromptState {
   };
 }
 
+function normalizeRatingText(raw: unknown, maxLen: number): string {
+  return String(raw || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, Math.max(0, Math.floor(maxLen)));
+}
+
+function normalizeRatingElapsedSeconds(raw: unknown): number | null {
+  const elapsedRaw = Number(raw || 0);
+  if (!Number.isFinite(elapsedRaw)) return null;
+  return Number(Math.max(0, Math.min(900, elapsedRaw)).toFixed(4));
+}
+
 function isoElapsedMs(iso: string, nowMs: number): number {
   const text = String(iso || "").trim();
   if (!text) return Number.POSITIVE_INFINITY;
@@ -2744,12 +2759,79 @@ function PlayPageInner() {
     setRatingSubmitBusy(false);
   }, []);
 
+  const trackRatingPromptEvent = useCallback(async (
+    eventType: RatingPromptEventType,
+    options?: {
+      candidate?: RatingPromptCandidate | null;
+      stars?: number | null;
+      comment?: string;
+      suggestion?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ) => {
+    if (!supabase) return;
+    const authUserId = String(session?.user?.id || "").trim();
+    if (!authUserId) return;
+
+    const candidate = options?.candidate || ratingModal || ratingPromptPending || null;
+    const starsRaw = Number(options?.stars);
+    const stars = Number.isFinite(starsRaw)
+      ? Math.max(1, Math.min(5, Math.floor(starsRaw)))
+      : null;
+    const comment = normalizeRatingText(options?.comment || "", RATING_COMMENT_MAX_LEN);
+    const suggestion = normalizeRatingText(options?.suggestion || "", RATING_SUGGESTION_MAX_LEN);
+
+    const { error } = await supabase.from("user_rating_events").insert({
+      auth_user_id: authUserId,
+      username: identity?.username || null,
+      discord_id: identity?.discordId || null,
+      event_type: eventType,
+      stars: eventType === "submitted" ? stars : null,
+      comment: eventType === "submitted" ? comment : null,
+      suggestion: eventType === "submitted" ? suggestion : null,
+      run_mode: candidate?.mode || null,
+      jutsu_name: String(candidate?.jutsuName || "").slice(0, 80) || null,
+      elapsed_seconds: normalizeRatingElapsedSeconds(candidate?.elapsedSeconds),
+      app_version: WEB_APP_VERSION,
+      metadata: {
+        source: "play_post_run_v1",
+        runs_since_prompt: ratingPromptState.runsSincePrompt,
+        ...(options?.metadata || {}),
+      },
+    });
+
+    if (error) {
+      console.warn(`[rating-events] failed ${eventType}: ${String(error.message || "unknown_error")}`);
+    }
+  }, [
+    identity?.discordId,
+    identity?.username,
+    ratingModal,
+    ratingPromptPending,
+    ratingPromptState.runsSincePrompt,
+    session?.user?.id,
+  ]);
+
   const closeRatingModal = useCallback(() => {
     setRatingModal(null);
     resetRatingModalDraft();
   }, [resetRatingModalDraft]);
 
+  const dismissRatingPromptNotNow = useCallback(() => {
+    if (ratingModal) {
+      void trackRatingPromptEvent("dismiss_not_now", {
+        candidate: ratingModal,
+      });
+    }
+    closeRatingModal();
+  }, [closeRatingModal, ratingModal, trackRatingPromptEvent]);
+
   const dismissRatingPromptForever = useCallback(() => {
+    if (ratingModal) {
+      void trackRatingPromptEvent("dismiss_never", {
+        candidate: ratingModal,
+      });
+    }
     setRatingPromptState((prev) => ({
       ...prev,
       runsSincePrompt: 0,
@@ -2757,7 +2839,7 @@ function PlayPageInner() {
     }));
     setRatingPromptPending(null);
     closeRatingModal();
-  }, [closeRatingModal]);
+  }, [closeRatingModal, ratingModal, trackRatingPromptEvent]);
 
   const queueRatingPromptForRun = useCallback((result: PlayArenaResult, accepted: boolean) => {
     if (!accepted) return;
@@ -2819,22 +2901,13 @@ function PlayPageInner() {
       return;
     }
 
-    const comment = String(ratingComment || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, RATING_COMMENT_MAX_LEN);
-    const suggestion = String(ratingSuggestion || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, RATING_SUGGESTION_MAX_LEN);
+    const comment = normalizeRatingText(ratingComment, RATING_COMMENT_MAX_LEN);
+    const suggestion = normalizeRatingText(ratingSuggestion, RATING_SUGGESTION_MAX_LEN);
 
     setRatingSubmitBusy(true);
     setRatingSubmitError("");
     try {
-      const elapsedRaw = Number(ratingModal.elapsedSeconds || 0);
-      const elapsedSeconds = Number.isFinite(elapsedRaw)
-        ? Number(Math.max(0, Math.min(900, elapsedRaw)).toFixed(4))
-        : null;
+      const elapsedSeconds = normalizeRatingElapsedSeconds(ratingModal.elapsedSeconds);
       const { error } = await supabase.from("user_ratings").insert({
         auth_user_id: authUserId,
         username: identity?.username || null,
@@ -2855,6 +2928,13 @@ function PlayPageInner() {
         setRatingSubmitError(`Failed to save feedback: ${String(error.message || "unknown_error")}`);
         return;
       }
+
+      void trackRatingPromptEvent("submitted", {
+        candidate: ratingModal,
+        stars,
+        comment,
+        suggestion,
+      });
 
       const nowIso = toUtcIsoNoMs();
       setRatingPromptState((prev) => ({
@@ -2880,6 +2960,7 @@ function PlayPageInner() {
     ratingStars,
     ratingSubmitBusy,
     session?.user?.id,
+    trackRatingPromptEvent,
   ]);
 
   useEffect(() => {
@@ -2888,10 +2969,14 @@ function PlayPageInner() {
     if (maintenanceGate || updateGate || connectionLostState) return;
     if (showAnnouncements || showLogoutConfirm) return;
     if (errorModal || alertModal || jutsuInfoModal || masteryPanel || levelUpPanel) return;
+    const pendingCandidate = ratingPromptPending;
     const timer = window.setTimeout(() => {
-      setRatingModal(ratingPromptPending);
+      setRatingModal(pendingCandidate);
       setRatingPromptPending(null);
       resetRatingModalDraft();
+      void trackRatingPromptEvent("prompt_shown", {
+        candidate: pendingCandidate,
+      });
     }, RATING_PROMPT_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [
@@ -2907,6 +2992,7 @@ function PlayPageInner() {
     resetRatingModalDraft,
     showAnnouncements,
     showLogoutConfirm,
+    trackRatingPromptEvent,
     updateGate,
     view,
   ]);
@@ -7017,7 +7103,7 @@ function PlayPageInner() {
           <button
             type="button"
             aria-label="Close rating prompt"
-            onClick={closeRatingModal}
+            onClick={dismissRatingPromptNotNow}
             disabled={ratingSubmitBusy}
             className="absolute inset-0 bg-black/80 backdrop-blur-[1px]"
           />
@@ -7029,7 +7115,7 @@ function PlayPageInner() {
             <button
               type="button"
               aria-label={t("common.close", "Close")}
-              onClick={closeRatingModal}
+              onClick={dismissRatingPromptNotNow}
               disabled={ratingSubmitBusy}
               className="absolute right-4 top-4 z-20 flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-black/45 text-zinc-200 hover:border-white/45 hover:text-white disabled:opacity-55"
             >
@@ -7123,7 +7209,7 @@ function PlayPageInner() {
               <div className="mt-5 grid gap-2 sm:grid-cols-3">
                 <button
                   type="button"
-                  onClick={closeRatingModal}
+                  onClick={dismissRatingPromptNotNow}
                   disabled={ratingSubmitBusy}
                   className="h-11 rounded-xl border border-zinc-600/75 bg-zinc-900/45 text-xs font-black tracking-[0.08em] text-zinc-200 hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-55"
                 >

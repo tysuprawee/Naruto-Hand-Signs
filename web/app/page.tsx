@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Sword, Scroll, ArrowRight, Video, Trophy, Youtube, Instagram, Shield, Info, Hand } from "lucide-react";
+import { Sword, Scroll, ArrowRight, Video, Trophy, Youtube, Instagram, Twitch, Shield, Info, Hand } from "lucide-react";
 
 import { ModalProvider, useModal } from "./components/modal-provider";
 import FireShader from "./components/fire-shader";
@@ -156,6 +156,15 @@ export default function Home() {
                 </a>
                 <a href="https://www.instagram.com/james.uzumaki_/" target="_blank" onClick={() => trackClick("instagram_hero")} className="h-14 w-14 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 hover:text-pink-500 hover:border-pink-500/50 rounded-lg flex items-center justify-center transition-all opacity-85 hover:opacity-100">
                   <Instagram className="w-6 h-6" />
+                </a>
+                <a
+                  href="https://www.twitch.tv/ralphtailzz"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => trackClick("twitch_hero")}
+                  className="h-14 w-14 bg-zinc-900/70 border border-zinc-700/80 text-zinc-400 hover:text-violet-400 hover:border-violet-500/50 rounded-lg flex items-center justify-center transition-all opacity-85 hover:opacity-100"
+                >
+                  <Twitch className="w-6 h-6" />
                 </a>
                 <a
                   href="https://discord.gg/s6ZJUVG5U7"
@@ -383,6 +392,9 @@ export default function Home() {
                 <a href="https://www.instagram.com/james.uzumaki_/" target="_blank" className="bg-pink-600/10 hover:bg-pink-600/20 text-pink-500 hover:text-pink-400 px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors border border-pink-600/20">
                   <Instagram className="w-5 h-5" /> Instagram
                 </a>
+                <a href="https://www.twitch.tv/ralphtailzz" target="_blank" rel="noopener noreferrer" className="bg-violet-600/10 hover:bg-violet-600/20 text-violet-400 hover:text-violet-300 px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors border border-violet-500/20">
+                  <Twitch className="w-5 h-5" /> Twitch
+                </a>
               </div>
             </div>
           </div>
@@ -406,6 +418,9 @@ export default function Home() {
               </a>
               <a href="https://www.instagram.com/james.uzumaki_/" target="_blank" className="hover:text-pink-500 transition-colors">
                 <Instagram className="w-5 h-5" />
+              </a>
+              <a href="https://www.twitch.tv/ralphtailzz" target="_blank" rel="noopener noreferrer" className="hover:text-violet-400 transition-colors">
+                <Twitch className="w-5 h-5" />
               </a>
               <a href="https://discord.gg/s6ZJUVG5U7" target="_blank" rel="noopener noreferrer" className="hover:text-indigo-400 transition-colors">
                 <svg className="w-5 h-5 fill-current" viewBox="0 0 127.14 96.36" xmlns="http://www.w3.org/2000/svg">
