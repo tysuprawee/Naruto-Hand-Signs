@@ -135,6 +135,12 @@ interface ReportRow {
   createdAt: string;
 }
 
+interface OnlineUserRow {
+  username: string;
+  lastSeenAt: string;
+  isOnlineGuess: boolean;
+}
+
 interface ConfigFormState {
   type: "announcement" | "maintenance" | "version" | "dataset";
   message: string;
@@ -379,6 +385,17 @@ function parseReportRows(raw: unknown): ReportRow[] {
     }));
 }
 
+function parseOnlineRows(raw: unknown): OnlineUserRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(isRecord)
+    .map((row) => ({
+      username: toText(row.username) || "unknown",
+      lastSeenAt: toText(row.last_seen_at),
+      isOnlineGuess: Boolean(row.is_online_guess),
+    }));
+}
+
 function buildSparkline(values: number[]): string {
   if (values.length <= 0) return "";
   const width = 160;
@@ -424,6 +441,10 @@ export default function AdminDashboardPage() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [configRows, setConfigRows] = useState<ConfigRow[]>([]);
   const [reportRows, setReportRows] = useState<ReportRow[]>([]);
+  const [onlineRows, setOnlineRows] = useState<OnlineUserRow[]>([]);
+  const [onlineNowCount, setOnlineNowCount] = useState(0);
+  const [onlinePeakToday, setOnlinePeakToday] = useState(0);
+  const [onlineWindowSeconds, setOnlineWindowSeconds] = useState(90);
   const [busy, setBusy] = useState(false);
   const [configBusy, setConfigBusy] = useState(false);
   const [error, setError] = useState("");
@@ -482,6 +503,18 @@ export default function AdminDashboardPage() {
       && detail.includes("does not exist");
   };
 
+  const isOnlineUnavailableError = (json: unknown): boolean => {
+    if (!isRecord(json)) return false;
+    const reason = toText(json.reason).toLowerCase();
+    const detail = toText(json.detail).toLowerCase();
+    if (reason === "missing_admin_stats_function" || reason === "missing_profiles_table") {
+      return true;
+    }
+    return reason === "rpc_error"
+      && detail.includes("admin_get_online_users")
+      && detail.includes("does not exist");
+  };
+
   const loadStats = async (): Promise<boolean> => {
     const { res, json } = await apiPost({
       action: "stats",
@@ -531,6 +564,33 @@ export default function AdminDashboardPage() {
     return true;
   };
 
+  const loadOnlineRows = async (): Promise<boolean> => {
+    const { res, json } = await apiPost({
+      action: "online_list",
+      password,
+      limit: 240,
+      window_seconds: 90,
+    });
+    if (!res.ok || !isRecord(json) || !Boolean(json.ok)) {
+      if (isOnlineUnavailableError(json)) {
+        setOnlineRows([]);
+        setOnlineNowCount(0);
+        setOnlinePeakToday(0);
+        return true;
+      }
+      setError(handleApiError(json));
+      setOnlineRows([]);
+      setOnlineNowCount(0);
+      setOnlinePeakToday(0);
+      return false;
+    }
+    setOnlineRows(parseOnlineRows(json.rows));
+    setOnlineNowCount(toInt(json.online_now));
+    setOnlinePeakToday(toInt(json.peak_online_today));
+    setOnlineWindowSeconds(Math.max(30, toInt(json.window_seconds) || 90));
+    return true;
+  };
+
   const openDashboard = async (event?: FormEvent<HTMLFormElement>) => {
     if (event) event.preventDefault();
     if (!password.trim()) {
@@ -541,8 +601,8 @@ export default function AdminDashboardPage() {
     setBusy(true);
     setError("");
     try {
-      const [statsOk, configOk, reportsOk] = await Promise.all([loadStats(), loadConfigRows(), loadReportRows()]);
-      if (!statsOk || !configOk || !reportsOk) return;
+      const [statsOk, configOk, reportsOk, onlineOk] = await Promise.all([loadStats(), loadConfigRows(), loadReportRows(), loadOnlineRows()]);
+      if (!statsOk || !configOk || !reportsOk || !onlineOk) return;
     } catch (err) {
       setError(String((err as Error)?.message || err || "Request failed."));
     } finally {
@@ -555,7 +615,7 @@ export default function AdminDashboardPage() {
     setBusy(true);
     setError("");
     try {
-      await Promise.all([loadStats(), loadConfigRows(), loadReportRows()]);
+      await Promise.all([loadStats(), loadConfigRows(), loadReportRows(), loadOnlineRows()]);
     } finally {
       setBusy(false);
     }
@@ -650,6 +710,9 @@ export default function AdminDashboardPage() {
                 setDashboard(null);
                 setConfigRows([]);
                 setReportRows([]);
+                setOnlineRows([]);
+                setOnlineNowCount(0);
+                setOnlinePeakToday(0);
                 setError("");
                 setRetrySeconds(0);
               }}
@@ -694,6 +757,59 @@ export default function AdminDashboardPage() {
                   {dashboard.metrics.activePlayers7d} / {dashboard.metrics.activePlayers30d}
                 </p>
               </article>
+            </div>
+
+            <div className="rounded-xl border border-white/15 bg-black/25 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-black tracking-[0.14em] text-zinc-200">Online Users ({onlineWindowSeconds}s Guess)</h2>
+                <p className="text-xs text-zinc-400">Most online today: <span className="font-black text-zinc-200">{onlinePeakToday}</span></p>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Online Now</p>
+                  <p className="mt-1 text-2xl font-black text-emerald-300">{onlineNowCount}</p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Most Online Today</p>
+                  <p className="mt-1 text-2xl font-black text-orange-300">{onlinePeakToday}</p>
+                </article>
+                <article className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-xs uppercase tracking-[0.12em] text-zinc-400">Profiles Sampled</p>
+                  <p className="mt-1 text-2xl font-black text-sky-300">{onlineRows.length}</p>
+                </article>
+              </div>
+              <div className="mt-3 max-h-[340px] overflow-auto rounded-lg border border-white/10">
+                <table className="w-full min-w-[520px] text-xs">
+                  <thead>
+                    <tr className="border-b border-white/10 bg-black/35 text-left uppercase tracking-[0.12em] text-zinc-400">
+                      <th className="px-2 py-2">Username</th>
+                      <th className="px-2 py-2">Last Seen</th>
+                      <th className="px-2 py-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {onlineRows.map((row, idx) => (
+                      <tr key={`${row.username}-${row.lastSeenAt}-${idx}`} className="border-b border-white/5">
+                        <td className="px-2 py-2 font-semibold text-zinc-100">{row.username || "-"}</td>
+                        <td className="px-2 py-2 text-zinc-300">{row.lastSeenAt ? new Date(row.lastSeenAt).toLocaleString() : "-"}</td>
+                        <td className="px-2 py-2">
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] ${row.isOnlineGuess
+                            ? "bg-emerald-500/20 text-emerald-200"
+                            : "bg-zinc-500/20 text-zinc-300"
+                            }`}>
+                            {row.isOnlineGuess ? "ONLINE" : "OFFLINE"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {onlineRows.length === 0 && (
+                      <tr>
+                        <td colSpan={3} className="px-2 py-3 text-zinc-400">No profile activity found.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <div className="rounded-xl border border-white/15 bg-black/25 p-4">

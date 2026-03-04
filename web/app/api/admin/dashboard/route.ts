@@ -112,6 +112,16 @@ export async function POST(request: Request): Promise<Response> {
         p_user_agent: userAgent,
         p_ip: ip,
       };
+    } else if (action === "online_list") {
+      rpcName = "admin_get_online_users";
+      rpcPayload = {
+        p_password: password,
+        p_limit: Math.max(1, Math.min(500, Number(body.limit ?? 200) || 200)),
+        p_window_seconds: Math.max(30, Math.min(300, Number(body.window_seconds ?? 90) || 90)),
+        p_client_id: clientId,
+        p_user_agent: userAgent,
+        p_ip: ip,
+      };
     } else {
       return toErrorResponse(400, { ok: false, reason: "invalid_action" });
     }
