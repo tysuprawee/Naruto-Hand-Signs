@@ -1,5 +1,8 @@
 begin;
 
+alter table if exists public.profiles
+  add column if not exists auth_user_id uuid;
+
 create table if not exists public.profile_presence_events (
   id bigserial primary key,
   profile_id uuid not null,
@@ -43,7 +46,7 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
-  if tg_op = 'INSERT' or new.updated_at is distinct from old.updated_at then
+  if tg_op = 'INSERT' then
     insert into public.profile_presence_events (
       profile_id,
       auth_user_id,
@@ -58,7 +61,24 @@ begin
       nullif(trim(coalesce(new.username, '')), ''),
       nullif(trim(coalesce(new.discord_id, '')), ''),
       coalesce(new.updated_at, now()),
-      case when tg_op = 'INSERT' then 'profile_insert' else 'profile_update' end
+      'profile_insert'
+    );
+  elsif new.updated_at is distinct from old.updated_at then
+    insert into public.profile_presence_events (
+      profile_id,
+      auth_user_id,
+      username,
+      discord_id,
+      seen_at,
+      source
+    )
+    values (
+      new.id,
+      new.auth_user_id,
+      nullif(trim(coalesce(new.username, '')), ''),
+      nullif(trim(coalesce(new.discord_id, '')), ''),
+      coalesce(new.updated_at, now()),
+      'profile_update'
     );
   end if;
   return new;

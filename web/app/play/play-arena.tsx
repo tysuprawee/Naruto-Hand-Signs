@@ -14,7 +14,6 @@ import {
 import { KNNClassifier, normalizeHand } from "@/utils/knn";
 import { OFFICIAL_JUTSUS } from "@/utils/jutsu-registry";
 import { getXpForLevel } from "@/utils/progression";
-import FireballThreeOverlay from "@/app/play/effects/fireball-three-overlay";
 import RasenshurikenOverlay from "@/app/play/effects/rasenshuriken-overlay";
 import SharinganCrowOverlay from "@/app/play/effects/sharingan-crow-overlay";
 import WaterDragonOverlay from "@/app/play/effects/water-dragon-overlay";
@@ -5534,7 +5533,6 @@ export default function PlayArena({
   const fireFinalY = Math.round((clamp((fireAnchorY + fireOffsetY + fireAimShiftYPct) / 100, 0, 1) * 1000)) / 10;
   const fireBlastWidth = Math.max(140, Math.min(250, Math.round(170 + (Math.abs(fireAimYaw) * 64))));
   const fireBlastHeight = Math.max(140, Math.min(250, Math.round(170 + (Math.abs(fireAimPitch) * 54))));
-  const fireThreeSizePx = Math.max(260, Math.min(620, Math.round((fireBlastWidth + fireBlastHeight) * 1.45)));
   const detectorErrorShort = detectorError
     ? `${detectorError.slice(0, 120)}${detectorError.length > 120 ? "..." : ""}`
     : "none";
@@ -6016,41 +6014,42 @@ export default function PlayArena({
                     />
                   )}
                   {effectLabel === "fire" && !isPhoenixFireEffect && (
-                    <>
-                      <div className="absolute inset-0 bg-gradient-to-t from-orange-700/35 via-amber-500/20 to-transparent" />
-                      <FireballThreeOverlay
-                        leftPct={fireAnchorX}
-                        topPct={fireAnchorY}
-                        offsetXPct={fireOffsetX}
-                        offsetYPct={fireOffsetY}
-                        aimYaw={fireAimYaw}
-                        aimPitch={fireAimPitch}
-                        sizePx={fireThreeSizePx}
-                        lowPower={isLikelyLowPowerMobile}
-                        mirroredInput={false}
-                        sourceAspect={videoAspect}
-                      />
+                    <div className="absolute inset-0">
+                      <div className="absolute inset-0 bg-gradient-to-b from-orange-900/24 via-orange-600/12 to-transparent" />
                       <div
-                        className="absolute rounded-full bg-orange-400/45 blur-2xl"
+                        className="absolute inset-0 mix-blend-screen opacity-95"
+                        style={{
+                          filter: "saturate(1.75) brightness(1.35) contrast(1.06)",
+                          WebkitMaskImage:
+                            "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.95) 20%, rgba(0,0,0,0.88) 58%, rgba(0,0,0,0.26) 78%, rgba(0,0,0,0) 100%)",
+                          maskImage:
+                            "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.95) 20%, rgba(0,0,0,0.88) 58%, rgba(0,0,0,0.26) 78%, rgba(0,0,0,0) 100%)",
+                        }}
+                      >
+                        <FireShader className="h-full w-full" height="100%" opacity={1} enableAudio={false} palette="red" />
+                      </div>
+                      <div
+                        className="absolute rounded-full bg-orange-500/55 blur-3xl"
                         style={{
                           width: `${fireBlastWidth}px`,
                           height: `${fireBlastHeight}px`,
-                          left: `calc(${fireAnchorX}% + ${(fireOffsetX + fireAimShiftXPct).toFixed(2)}%)`,
-                          top: `calc(${fireAnchorY}% + ${(fireOffsetY + fireAimShiftYPct).toFixed(2)}%)`,
+                          left: `${fireFinalX}%`,
+                          top: `${Math.max(8, fireFinalY - 5)}%`,
                           transform: "translate(-50%, -50%)",
                         }}
                       />
                       <div
-                        className="absolute rounded-full bg-amber-200/30 blur-3xl"
+                        className="absolute rounded-full bg-amber-300/24 blur-[64px]"
                         style={{
                           width: `${Math.round(fireBlastWidth * 0.72)}px`,
                           height: `${Math.round(fireBlastHeight * 0.72)}px`,
-                          left: `calc(${fireAnchorX}% + ${((fireOffsetX * 1.2) + (fireAimShiftXPct * 1.25)).toFixed(2)}%)`,
-                          top: `calc(${fireAnchorY}% + ${((fireOffsetY * 1.2) + (fireAimShiftYPct * 1.2)).toFixed(2)}%)`,
+                          left: `${fireFinalX}%`,
+                          top: `${Math.max(8, fireFinalY - 5)}%`,
                           transform: "translate(-50%, -50%)",
                         }}
                       />
-                    </>
+                      <div className="absolute inset-0 bg-gradient-to-br from-orange-700/16 via-transparent to-transparent" />
+                    </div>
                   )}
                   {isPhoenixFireEffect && (
                     <div className="absolute inset-0">

@@ -23,6 +23,7 @@ declare
   v_peak_today integer := 0;
   v_now timestamptz := now();
   v_today_start timestamptz := date_trunc('day', now());
+  v_has_presence_log boolean := false;
 begin
   -- Reuse existing admin password + lockout validation.
   select public.admin_dashboard_stats(
@@ -80,25 +81,47 @@ begin
     limit v_limit
   ) q;
 
-  -- Peak guess today: max count of profiles whose latest activity timestamps cluster within the rolling window.
-  with seen_today as (
-    select p.updated_at as ts
-    from public.profiles p
-    where p.updated_at is not null
-      and p.updated_at >= v_today_start
-      and p.updated_at <= v_now
-  ),
-  peaks as (
-    select count(*)::integer as concurrent_guess
-    from seen_today anchor_ts
-    join seen_today points
-      on points.ts > (anchor_ts.ts - make_interval(secs => v_window_seconds))
-     and points.ts <= anchor_ts.ts
-    group by anchor_ts.ts
-  )
-  select coalesce(max(peaks.concurrent_guess), 0)
-  into v_peak_today
-  from peaks;
+  -- Peak guess today:
+  -- Prefer history from profile_presence_events (true per-update heartbeat stream).
+  -- Fallback to current online guess when history table is not installed yet.
+  select to_regclass('public.profile_presence_events') is not null into v_has_presence_log;
+
+  if v_has_presence_log then
+    with seen_today as (
+      select
+        coalesce(
+          nullif(trim(coalesce(e.username, '')), ''),
+          nullif(trim(coalesce(e.discord_id, '')), ''),
+          e.auth_user_id::text,
+          e.profile_id::text
+        ) as user_key,
+        e.seen_at
+      from public.profile_presence_events e
+      where e.seen_at is not null
+        and e.seen_at >= v_today_start
+        and e.seen_at <= v_now
+    ),
+    anchors as (
+      select distinct s.seen_at as anchor_ts
+      from seen_today s
+    ),
+    peaks as (
+      select
+        count(distinct s.user_key)::integer as concurrent_guess
+      from anchors a
+      join seen_today s
+        on s.seen_at > (a.anchor_ts - make_interval(secs => v_window_seconds))
+       and s.seen_at <= a.anchor_ts
+      group by a.anchor_ts
+    )
+    select coalesce(max(peaks.concurrent_guess), 0)
+    into v_peak_today
+    from peaks;
+  else
+    v_peak_today := v_online_now;
+  end if;
+
+  v_peak_today := greatest(v_peak_today, v_online_now);
 
   return jsonb_build_object(
     'ok', true,

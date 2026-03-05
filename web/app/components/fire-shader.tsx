@@ -15,6 +15,9 @@ precision mediump float;
 uniform vec2 resolution;
 uniform float time;
 uniform vec4 mouse;
+uniform vec3 colorCore;
+uniform vec3 colorRim;
+uniform vec3 colorSpark;
 
 vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
 vec4 mod289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
@@ -121,12 +124,13 @@ void main(){
 
   float f=ypartClippedFalloff*pow(1.0-flames*flames*flames,8.0);
   float fff=f*f*f;
-  vec3 fireCore=vec3(f*0.01, fff*0.004, fff*fff*0.02);
-  vec3 fireRim=vec3(0.10,0.03,0.16)*pow(f,6.0);
+  vec3 fireCore=vec3(f, fff, fff*fff)*colorCore;
+  vec3 fireRim=colorRim*pow(f,6.0);
   vec3 fire=fireCore+fireRim;
 
   float smokeNoise=0.5+snoise(0.4*position+timing*vec3(1.0,1.0,0.2))/2.0;
-  vec3 smoke=vec3(0.02*pow(xfuel,3.0)*pow(ypart,2.0)*(smokeNoise+0.4*(1.0-noise)));
+  float smokeBase=0.02*pow(xfuel,3.0)*pow(ypart,2.0)*(smokeNoise+0.4*(1.0-noise));
+  vec3 smoke=(colorRim*0.18+colorCore*0.04)*smokeBase;
 
   float sparkGridSize=30.0;
   vec2 sparkCoord=fragCoord-vec2(2.0*offset.x,190.0*realTime);
@@ -145,7 +149,7 @@ void main(){
     vec2 sparkModulus=mod(sparkCoord+sparkOffset,sparkGridSize)-0.5*vec2(sparkGridSize);
     float sparkLength=length(sparkModulus);
     float sparksGray=max(0.0,1.0-sparkLength/(sparkSize*sparkGridSize));
-    sparks=sparkLife*sparksGray*vec3(0.06,0.02,0.10);
+    sparks=sparkLife*sparksGray*colorSpark;
   }
 
   vec3 color=max(fire,sparks)+smoke*0.28;
@@ -240,7 +244,26 @@ interface FireShaderProps {
   enableAudio?: boolean;
   /** Master opacity 0-1 */
   opacity?: number;
+  /** Color palette for the shader */
+  palette?: "black" | "red";
 }
+
+const FIRE_SHADER_PALETTE: Record<"black" | "red", {
+  core: [number, number, number];
+  rim: [number, number, number];
+  spark: [number, number, number];
+}> = {
+  black: {
+    core: [0.01, 0.004, 0.02],
+    rim: [0.10, 0.03, 0.16],
+    spark: [0.06, 0.02, 0.10],
+  },
+  red: {
+    core: [6.5, 1.45, 0.15],
+    rim: [3.2, 0.9, 0.08],
+    spark: [2.0, 0.95, 0.26],
+  },
+};
 
 /* ═══════════════════════════════════════════════════════════════════════ */
 /* Component                                                              */
@@ -250,6 +273,7 @@ export default function FireShader({
   height = "220px",
   enableAudio = true,
   opacity = 1,
+  palette = "black",
 }: FireShaderProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const glRef = useRef<WebGLRenderingContext | null>(null);
@@ -308,6 +332,14 @@ export default function FireShader({
     const uRes = gl.getUniformLocation(prog, "resolution");
     const uTime = gl.getUniformLocation(prog, "time");
     const uMouse = gl.getUniformLocation(prog, "mouse");
+    const uColorCore = gl.getUniformLocation(prog, "colorCore");
+    const uColorRim = gl.getUniformLocation(prog, "colorRim");
+    const uColorSpark = gl.getUniformLocation(prog, "colorSpark");
+    const colorSet = FIRE_SHADER_PALETTE[palette] || FIRE_SHADER_PALETTE.black;
+
+    if (uColorCore) gl.uniform3f(uColorCore, colorSet.core[0], colorSet.core[1], colorSet.core[2]);
+    if (uColorRim) gl.uniform3f(uColorRim, colorSet.rim[0], colorSet.rim[1], colorSet.rim[2]);
+    if (uColorSpark) gl.uniform3f(uColorSpark, colorSet.spark[0], colorSet.spark[1], colorSet.spark[2]);
 
     const resize = () => {
       canvas.width = canvas.clientWidth;
@@ -339,7 +371,7 @@ export default function FireShader({
         audioCtxRef.current.close().catch(() => { });
       }
     };
-  }, []);
+  }, [palette]);
 
   /* ── Fire audio on click ──────────────────────────────────────────── */
   const startAudio = useCallback(async () => {
