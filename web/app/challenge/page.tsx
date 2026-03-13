@@ -188,7 +188,7 @@ const SIGN_LORE: Record<SignName, SignLoreEntry> = {
   },
 };
 
-const DETECTION_INTERVAL_MS = 60; // ~16 FPS
+const DETECTION_FRAME_STRIDE = 2;
 const RESTRICTED_SIGNS = true; // Match pygame default behavior
 
 const LIGHTING_MIN = 45.0;
@@ -753,7 +753,8 @@ export default function ChallengePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const renderRafIdRef = useRef<number>(0);
   const detectRafIdRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(0);
+  const lastDetectVideoTimeRef = useRef<number>(-1);
+  const detectVideoFrameCountRef = useRef<number>(0);
   const latestLandmarksRef = useRef<Landmark[][]>([]);
   const holdRef = useRef<{ label: string; count: number }>({ label: "", count: 0 });
   const triggeredSignRef = useRef<string>("");
@@ -879,7 +880,12 @@ export default function ChallengePage() {
 
         setLoadMsg("Starting camera...");
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: 640, height: 480 },
+          video: {
+            facingMode: "user",
+            width: { ideal: 640, max: 640 },
+            height: { ideal: 480, max: 480 },
+            frameRate: { ideal: 30, max: 30 },
+          },
         });
         streamRef.current = stream;
 
@@ -937,7 +943,8 @@ export default function ChallengePage() {
       confirmedSignUiRef.current = null;
       showFpsRef.current = false;
       latestLandmarksRef.current = [];
-      lastTimeRef.current = 0;
+      lastDetectVideoTimeRef.current = -1;
+      detectVideoFrameCountRef.current = 0;
       setDrawMs(0);
       setDetectMs(0);
       setLightingMs(0);
@@ -959,7 +966,8 @@ export default function ChallengePage() {
     lightingCountRef.current = 0;
     videoResRef.current = "0x0";
     uiLastCommitRef.current = 0;
-    lastTimeRef.current = 0;
+    lastDetectVideoTimeRef.current = -1;
+    detectVideoFrameCountRef.current = 0;
     latestLandmarksRef.current = [];
     setFps(0);
     setDetectionRate(0);
@@ -1066,9 +1074,12 @@ export default function ChallengePage() {
       const knn = knnRef.current;
       if (!video || !hands || !knn) return;
       if (video.readyState < 2) return;
-
-      if (now - lastTimeRef.current < DETECTION_INTERVAL_MS) return;
-      lastTimeRef.current = now;
+      const currentVideoTime = Number(video.currentTime || 0);
+      if (!Number.isFinite(currentVideoTime) || currentVideoTime <= 0) return;
+      if (Math.abs(currentVideoTime - lastDetectVideoTimeRef.current) < 0.0001) return;
+      lastDetectVideoTimeRef.current = currentVideoTime;
+      detectVideoFrameCountRef.current += 1;
+      if ((detectVideoFrameCountRef.current % DETECTION_FRAME_STRIDE) !== 0) return;
       const uiTickDue = now - uiLastCommitRef.current >= UI_UPDATE_INTERVAL_MS;
       let uiStateTouched = false;
 

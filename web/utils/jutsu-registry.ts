@@ -18,6 +18,9 @@ export interface JutsuConfig {
     comboParts?: ComboPart[];
 }
 
+const PRANK_JUTSU_SIGNS = ["horse", "snake", "ram", "monkey", "boar", "tiger", "rat", "dog", "ox", "hare"];
+const PRANK_JUTSU_SEQUENCE = Array.from({ length: 30 }, (_, index) => PRANK_JUTSU_SIGNS[index % PRANK_JUTSU_SIGNS.length]);
+
 export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
     "Shadow Clone + Chidori Combo": {
         sequence: ["ram", "snake", "tiger", "ox", "hare", "monkey"],
@@ -64,9 +67,9 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         minLevel: 12,
     },
     Amaterasu: {
-        sequence: ["snake", "ram", "tiger", "bird"],
+        sequence: [],
         displayText: "BLACK FLAMES: AMATERASU!",
-        soundPath: "/sounds/fireball.mp3",
+        soundPath: "/sounds/amaterasu.mp3",
         videoPath: null,
         effect: "amaterasu",
         duration: 7.0,
@@ -143,6 +146,15 @@ export const OFFICIAL_JUTSUS: Record<string, JutsuConfig> = {
         effect: "eye",
         duration: 10.0,
         minLevel: 15,
+    },
+    "Prank Jutsu": {
+        sequence: PRANK_JUTSU_SEQUENCE,
+        displayText: "PRANK JUTSU: TRY ALL 30 SIGNS!",
+        soundPath: "/sounds/click.mp3",
+        videoPath: null,
+        effect: "clone",
+        duration: 12.0,
+        minLevel: 25,
     },
 };
 

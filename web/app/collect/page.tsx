@@ -68,7 +68,7 @@ const FEATURE_KEYS: string[] = (() => {
   return keys;
 })();
 
-const DETECT_INTERVAL_MS = 70;
+const DETECTION_FRAME_STRIDE = 2;
 const AUTO_CAPTURE_DEFAULT_MS = 220;
 const AUTO_CAPTURE_MIN_MS = 120;
 const AUTO_CAPTURE_MAX_MS = 1000;
@@ -207,7 +207,8 @@ export default function CollectPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const renderRafRef = useRef<number>(0);
   const detectRafRef = useRef<number>(0);
-  const lastDetectRef = useRef<number>(0);
+  const lastDetectVideoTimeRef = useRef<number>(-1);
+  const detectVideoFrameCountRef = useRef<number>(0);
   const latestLandmarksRef = useRef<Landmark[][]>([]);
   const latestFeaturesRef = useRef<number[]>([]);
   const latestHandsRef = useRef(0);
@@ -382,9 +383,9 @@ export default function CollectPage() {
         setStatus("Starting camera...");
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: 640, max: 1280 },
-            height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 24, max: 30 },
+            width: { ideal: 640, max: 640 },
+            height: { ideal: 480, max: 480 },
+            frameRate: { ideal: 30, max: 30 },
             facingMode: "user",
           },
         });
@@ -398,6 +399,8 @@ export default function CollectPage() {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
         if (cancelled) return;
+        lastDetectVideoTimeRef.current = -1;
+        detectVideoFrameCountRef.current = 0;
 
         setReady(true);
         setStatus("Ready");
@@ -458,12 +461,16 @@ export default function CollectPage() {
 
     const detect = (nowMs: number) => {
       detectRafRef.current = requestAnimationFrame(detect);
-      if (nowMs - lastDetectRef.current < DETECT_INTERVAL_MS) return;
-      lastDetectRef.current = nowMs;
 
       const video = videoRef.current;
       const hands = handsRef.current;
       if (!video || !hands || video.readyState < 2) return;
+      const currentVideoTime = Number(video.currentTime || 0);
+      if (!Number.isFinite(currentVideoTime) || currentVideoTime <= 0) return;
+      if (Math.abs(currentVideoTime - lastDetectVideoTimeRef.current) < 0.0001) return;
+      lastDetectVideoTimeRef.current = currentVideoTime;
+      detectVideoFrameCountRef.current += 1;
+      if ((detectVideoFrameCountRef.current % DETECTION_FRAME_STRIDE) !== 0) return;
 
       if (!fpsWindowStartRef.current) {
         fpsWindowStartRef.current = nowMs;

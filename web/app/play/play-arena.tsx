@@ -200,7 +200,7 @@ interface PlayArenaProps {
   }) => Promise<{ token?: string; source?: string; reason?: string } | void>;
 }
 
-const DETECTION_INTERVAL_MS = 70;
+const DETECTION_FRAME_STRIDE = 2;
 const VOTE_WINDOW_SIZE = 2;
 const VOTE_TTL_MS = 700;
 const SIGN_ACCEPT_COOLDOWN_MS = 500;
@@ -247,6 +247,13 @@ const SHARINGAN_BLOOD_FRAME_RATE = 24;
 const SHARINGAN_POSE_POS_LERP = 0.42;
 const SHARINGAN_POSE_SIZE_LERP = 0.34;
 const SHARINGAN_POSE_ANGLE_LERP = 0.28;
+const SHARINGAN_POSE_LOCK_MIN_FRAMES = 4;
+const SHARINGAN_POSE_MIN_EYE_SIZE_PCT = 5.8;
+const SHARINGAN_POSE_MIN_EYE_GAP = 0.08;
+const SHARINGAN_POSE_MAX_EYE_GAP = 0.45;
+const SHARINGAN_POSE_MAX_CENTER_DELTA = 0.035;
+const SHARINGAN_POSE_MAX_SIZE_DELTA_PCT = 4.2;
+const SHARINGAN_POSE_MAX_ANGLE_DELTA_DEG = 18;
 const EFFECT_ANCHOR_POS_LERP = 0.4;
 const EFFECT_ANCHOR_SCALE_LERP = 0.3;
 const EFFECT_ANCHOR_ANGLE_LERP = 0.3;
@@ -299,9 +306,9 @@ const REAPER_BG_FLOAT_HZ = 0.16;
 // Keep resolution/scaling untouched; shift visual center lower so Reaper sits on the player.
 const REAPER_BG_Y_OFFSET = 260;
 const REAPER_BG_KEEP_RATIO = 0.4;
-const REAPER_BG_DARKEN_ALPHA = 0.42;
-const REAPER_PERSON_BRIGHTNESS = 0.82;
-const REAPER_PERSON_DARKNESS = 0.78;
+const REAPER_BG_DARKEN_ALPHA = 0.3;
+const REAPER_PERSON_BRIGHTNESS = 1.2;
+const REAPER_PERSON_DARKNESS = 0.24;
 const REAPER_FADE_IN_MS = 900;
 const REAPER_FADE_OUT_MS = 900;
 
@@ -499,7 +506,7 @@ const EFFECT_MEDIA_PRELOAD_TABLE: Record<string, { images?: string[]; videos?: s
     images: ["/effects/m_sharingan.jpg", "/sharingan.png", "/mangekyou_eyes.png"],
   },
   amaterasu: {
-    images: ["/effects/amaterasu.jpg"],
+    images: ["/effects/amaterasu.jpg", "/Amaterasu.webp"],
   },
   reaper: {
     images: [REAPER_BG_IMAGE_PATH],
@@ -1424,6 +1431,44 @@ function smoothSharinganVisualPose(
   };
 }
 
+function isReliableSharinganPose(previous: SharinganVisualPose | null, next: SharinganVisualPose): boolean {
+  if (
+    !Number.isFinite(next.leftEye.x)
+    || !Number.isFinite(next.leftEye.y)
+    || !Number.isFinite(next.rightEye.x)
+    || !Number.isFinite(next.rightEye.y)
+    || !Number.isFinite(next.leftEye.sizePct)
+    || !Number.isFinite(next.rightEye.sizePct)
+    || !Number.isFinite(next.angleDeg)
+  ) {
+    return false;
+  }
+
+  if (next.leftEye.sizePct < SHARINGAN_POSE_MIN_EYE_SIZE_PCT || next.rightEye.sizePct < SHARINGAN_POSE_MIN_EYE_SIZE_PCT) {
+    return false;
+  }
+
+  const eyeGap = Math.hypot(next.leftEye.x - next.rightEye.x, next.leftEye.y - next.rightEye.y);
+  if (eyeGap < SHARINGAN_POSE_MIN_EYE_GAP || eyeGap > SHARINGAN_POSE_MAX_EYE_GAP) return false;
+
+  if (!previous) return true;
+
+  const leftDelta = Math.hypot(next.leftEye.x - previous.leftEye.x, next.leftEye.y - previous.leftEye.y);
+  const rightDelta = Math.hypot(next.rightEye.x - previous.rightEye.x, next.rightEye.y - previous.rightEye.y);
+  const sizeDelta = Math.max(
+    Math.abs(next.leftEye.sizePct - previous.leftEye.sizePct),
+    Math.abs(next.rightEye.sizePct - previous.rightEye.sizePct),
+  );
+  const angleDelta = Math.abs((((next.angleDeg - previous.angleDeg) + 540) % 360) - 180);
+
+  return (
+    leftDelta <= SHARINGAN_POSE_MAX_CENTER_DELTA
+    && rightDelta <= SHARINGAN_POSE_MAX_CENTER_DELTA
+    && sizeDelta <= SHARINGAN_POSE_MAX_SIZE_DELTA_PCT
+    && angleDelta <= SHARINGAN_POSE_MAX_ANGLE_DELTA_DEG
+  );
+}
+
 function smoothEffectAnchor(previous: EffectAnchor | null, next: EffectAnchor): EffectAnchor {
   if (!previous) return next;
   return {
@@ -1619,12 +1664,13 @@ function SignTile({
 }
 
 async function getStreamWithPreferences(cameraIdx: number, resolutionIdx: number, preferLowResolution = false): Promise<MediaStream> {
-  // Detection is intentionally fixed at 640x480 for consistent CPU cost across devices.
+  // Detection is intentionally fixed at 640x480@30 for consistent CPU cost across devices.
   void resolutionIdx;
+  void preferLowResolution;
   const baseVideo: MediaTrackConstraints = {
-    width: { ideal: FIXED_INFERENCE_WIDTH, max: 960 },
-    height: { ideal: FIXED_INFERENCE_HEIGHT, max: 720 },
-    frameRate: preferLowResolution ? { ideal: 24, max: 30 } : { ideal: 30, max: 30 },
+    width: { ideal: FIXED_INFERENCE_WIDTH, max: FIXED_INFERENCE_WIDTH },
+    height: { ideal: FIXED_INFERENCE_HEIGHT, max: FIXED_INFERENCE_HEIGHT },
+    frameRate: { ideal: 30, max: 30 },
     facingMode: "user",
   };
 
@@ -1710,19 +1756,38 @@ export default function PlayArena({
   const jutsu = OFFICIAL_JUTSUS[jutsuName];
   const jutsuTitle = String(jutsu?.displayName || jutsuName || "");
   const sharinganModeName = useMemo(
-    () => normalizeLabel(jutsuTitle).includes("mangekyou") ? "Mangekyou Sharingan" : "Sharingan",
-    [jutsuTitle],
+    () => {
+      const token = normalizeLabel(jutsuTitle || jutsuName);
+      if (token.includes("mangekyou")) return "Mangekyou Sharingan";
+      if (token.includes("amaterasu")) return "Amaterasu";
+      return "Sharingan";
+    },
+    [jutsuName, jutsuTitle],
   );
   const sharinganEyeTexturePath = useMemo(
-    () => (sharinganModeName === "Mangekyou Sharingan" ? "/mangekyou_eyes.png" : "/sharingan.png"),
+    () => (
+      sharinganModeName === "Mangekyou Sharingan"
+        ? "/mangekyou_eyes.png"
+        : sharinganModeName === "Amaterasu"
+          ? "/Amaterasu.webp"
+          : "/sharingan.png"
+    ),
     [sharinganModeName],
   );
-  const sharinganChargeLabel = sharinganModeName === "Mangekyou Sharingan" ? "Mangekyou charge" : "Sharingan charge";
+  const sharinganChargeLabel = sharinganModeName === "Mangekyou Sharingan"
+    ? "Mangekyou charge"
+    : sharinganModeName === "Amaterasu"
+      ? "Amaterasu charge"
+      : "Sharingan charge";
   const isSharinganChargedMode = useMemo(
-    () => !isCalibrationMode
-      && normalizeLabel(jutsuName).includes("sharingan")
-      && normalizeLabel(String(jutsu?.effect || "")) === "eye",
-    [isCalibrationMode, jutsu?.effect, jutsuName],
+    () => {
+      if (isCalibrationMode) return false;
+      const jutsuToken = normalizeLabel(jutsuName || jutsuTitle);
+      const effectToken = normalizeLabel(String(jutsu?.effect || ""));
+      if (jutsuToken.includes("sharingan") && effectToken === "eye") return true;
+      return jutsuToken.includes("amaterasu") && effectToken === "amaterasu";
+    },
+    [isCalibrationMode, jutsu?.effect, jutsuName, jutsuTitle],
   );
   const shouldPrioritizeFaceAnchor = useMemo(
     () => !isCalibrationMode
@@ -1730,6 +1795,7 @@ export default function PlayArena({
     [isCalibrationMode, jutsu?.effect],
   );
   const sequence = useMemo(() => (jutsu?.sequence ?? []).map((s) => normalizeLabel(s)), [jutsu]);
+  const isPrankJutsu = useMemo(() => normalizeLabel(jutsuName) === "prank jutsu", [jutsuName]);
   // DB secure-submit rules can require at least one sign event; eye-only modes have no hand-sign sequence.
   const rankProofExpectedSigns = useMemo(
     () => (isRankMode && isSharinganChargedMode ? 1 : sequence.length),
@@ -1778,6 +1844,9 @@ export default function PlayArena({
     left: { x: number; y: number; s: number };
     right: { x: number; y: number; s: number };
   } | null>(null);
+  const sharinganRawPoseRef = useRef<SharinganVisualPose | null>(null);
+  const sharinganPoseLockFramesRef = useRef(0);
+  const sharinganPoseReliableRef = useRef(false);
   const sharinganAssetImageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const shadowCloneSmokeFramesRef = useRef<HTMLImageElement[]>([]);
   const shadowCloneSegmentationBusyRef = useRef(false);
@@ -1791,7 +1860,8 @@ export default function PlayArena({
   const renderRafRef = useRef(0);
   const detectRafRef = useRef(0);
   const lastRenderDrawAtRef = useRef(0);
-  const lastDetectRef = useRef(0);
+  const lastDetectVideoTimeRef = useRef(-1);
+  const detectVideoFrameCountRef = useRef(0);
   const voteWindowRef = useRef<VoteEntry[]>([]);
   const voteStableRef = useRef<VoteStableState>({ label: "idle", confidence: 0, timeMs: 0 });
   const handSlotsRef = useRef<[HandSlotState | null, HandSlotState | null]>([null, null]);
@@ -2454,7 +2524,8 @@ export default function PlayArena({
       && comboCloneHoldRef.current
       && (effectToken === "lightning" || effectToken === "rasengan");
     const cloneEffectActive = showJutsuEffectRef.current && (effectToken === "clone" || comboClonePersistActive);
-    const sharinganEffectActive = showJutsuEffectRef.current && effectToken === "eye";
+    const sharinganEffectActive = showJutsuEffectRef.current
+      && (effectToken === "eye" || effectToken === "amaterasu");
     const reaperEffectActive = showJutsuEffectRef.current && effectToken === "reaper";
     if (!cloneEffectActive && !sharinganEffectActive && !reaperEffectActive) {
       clearShadowCloneOverlay(false);
@@ -2574,7 +2645,7 @@ export default function PlayArena({
           overlayCtx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
           overlayCtx.globalAlpha = effectAlpha;
-          overlayCtx.filter = `brightness(${REAPER_PERSON_BRIGHTNESS}) contrast(1.02) saturate(0.92)`;
+          overlayCtx.filter = `brightness(${REAPER_PERSON_BRIGHTNESS}) contrast(1.06) saturate(1.08)`;
           overlayCtx.drawImage(layerCanvas, 0, 0, overlayCanvas.width, overlayCanvas.height);
           overlayCtx.filter = "none";
           overlayCtx.restore();
@@ -2629,9 +2700,16 @@ export default function PlayArena({
 
           foregroundCtx.save();
           foregroundCtx.clearRect(0, 0, foregroundCanvas.width, foregroundCanvas.height);
-          foregroundCtx.drawImage(foregroundLayerCanvas, 0, 0, foregroundCanvas.width, foregroundCanvas.height);
+          if (effectToken === "eye") {
+            // For Sharingan keep foreground body composited; Amaterasu keeps only eye layer on this canvas.
+            foregroundCtx.drawImage(foregroundLayerCanvas, 0, 0, foregroundCanvas.width, foregroundCanvas.height);
+          }
           const faceLandmarks = sharinganFaceLandmarksRef.current;
-          if (Array.isArray(faceLandmarks) && faceLandmarks.length >= 474) {
+          if (
+            Array.isArray(faceLandmarks)
+            && faceLandmarks.length >= 474
+            && (sharinganPoseReliableRef.current || effectToken === "amaterasu")
+          ) {
             const leftIris = faceLandmarks[468];
             const rightIris = faceLandmarks[473];
             const leftOuter = faceLandmarks[33];
@@ -2773,6 +2851,7 @@ export default function PlayArena({
 
               if (eyeTextureReady) {
                 const drawSeamlessEye = (iris: { x: number; y: number }, size: number, lidIndices: number[]) => {
+                  const eyeBlend = effectToken === "amaterasu" ? 1 : SHARINGAN_EYE_BLEND;
                   foregroundCtx.save();
                   foregroundCtx.beginPath();
                   for (let i = 0; i < lidIndices.length; i += 1) {
@@ -2791,21 +2870,21 @@ export default function PlayArena({
 
                   foregroundCtx.globalCompositeOperation = "screen";
                   const glowGrad = foregroundCtx.createRadialGradient(0, 0, 0, 0, 0, size * 0.8);
-                  glowGrad.addColorStop(0, `rgba(255, 0, 0, ${SHARINGAN_EYE_GLOW * SHARINGAN_EYE_BLEND})`);
-                  glowGrad.addColorStop(0.4, `rgba(255, 0, 0, ${(SHARINGAN_EYE_GLOW * 0.33) * SHARINGAN_EYE_BLEND})`);
+                  glowGrad.addColorStop(0, `rgba(255, 0, 0, ${SHARINGAN_EYE_GLOW * eyeBlend})`);
+                  glowGrad.addColorStop(0.4, `rgba(255, 0, 0, ${(SHARINGAN_EYE_GLOW * 0.33) * eyeBlend})`);
                   glowGrad.addColorStop(1, "rgba(255, 0, 0, 0)");
                   foregroundCtx.fillStyle = glowGrad;
                   foregroundCtx.fillRect(-size, -size, size * 2, size * 2);
 
                   foregroundCtx.globalCompositeOperation = "multiply";
-                  foregroundCtx.globalAlpha = SHARINGAN_EYE_SHADOW * SHARINGAN_EYE_BLEND;
+                  foregroundCtx.globalAlpha = SHARINGAN_EYE_SHADOW * eyeBlend;
                   foregroundCtx.drawImage(eyeTextureImage, -size / 2, -size / 2, size, size);
 
                   foregroundCtx.globalCompositeOperation = "hard-light";
-                  foregroundCtx.globalAlpha = SHARINGAN_EYE_LIGHT * SHARINGAN_EYE_BLEND;
+                  foregroundCtx.globalAlpha = SHARINGAN_EYE_LIGHT * eyeBlend;
                   foregroundCtx.drawImage(eyeTextureImage, -size / 2, -size / 2, size, size);
 
-                  const reflectionStrength = Math.max(0, Math.min(1, SHARINGAN_EYE_REFLECT * SHARINGAN_EYE_BLEND));
+                  const reflectionStrength = Math.max(0, Math.min(1, SHARINGAN_EYE_REFLECT * eyeBlend));
                   if (reflectionStrength > 0) {
                     foregroundCtx.globalCompositeOperation = "screen";
                     foregroundCtx.globalAlpha = reflectionStrength;
@@ -3371,6 +3450,9 @@ export default function PlayArena({
     sharinganPoseRef.current = null;
     sharinganFaceLandmarksRef.current = null;
     sharinganSmoothEyesRef.current = null;
+    sharinganRawPoseRef.current = null;
+    sharinganPoseLockFramesRef.current = 0;
+    sharinganPoseReliableRef.current = false;
     calibrationStartedAtRef.current = 0;
     calibrationSamplesRef.current = [];
     calibrationFinalizeBusyRef.current = false;
@@ -3955,7 +4037,9 @@ export default function PlayArena({
       && !noEffects
       && comboCloneHoldRef.current
       && (effectNow === "lightning" || effectNow === "rasengan");
-    const sharinganEffectActive = showJutsuEffect && !noEffects && effectNow === "eye";
+    const sharinganEffectActive = showJutsuEffect
+      && !noEffects
+      && (effectNow === "eye" || effectNow === "amaterasu");
     const reaperEffectActive = showJutsuEffect && !noEffects && effectNow === "reaper";
     const needsSegmentation = cloneEffectActive || comboClonePersistActive || sharinganEffectActive || reaperEffectActive;
     if (!needsSegmentation) {
@@ -4287,6 +4371,8 @@ export default function PlayArena({
         cameraFpsWindowStartRef.current = 0;
         cameraFpsFrameCountRef.current = 0;
         fpsRef.current = 0;
+        lastDetectVideoTimeRef.current = -1;
+        detectVideoFrameCountRef.current = 0;
         setFps(0);
         clearCameraFailure();
 
@@ -4395,6 +4481,9 @@ export default function PlayArena({
       sharinganPoseRef.current = null;
       sharinganFaceLandmarksRef.current = null;
       sharinganSmoothEyesRef.current = null;
+      sharinganRawPoseRef.current = null;
+      sharinganPoseLockFramesRef.current = 0;
+      sharinganPoseReliableRef.current = false;
       phoenixLastAtRef.current = 0;
       if (xpPopupTimerRef.current) {
         window.clearTimeout(xpPopupTimerRef.current);
@@ -4600,13 +4689,17 @@ export default function PlayArena({
   useEffect(() => {
     const detect = (nowMs: number) => {
       detectRafRef.current = requestAnimationFrame(detect);
-      if (nowMs - lastDetectRef.current < DETECTION_INTERVAL_MS) return;
-      lastDetectRef.current = nowMs;
 
       const video = videoRef.current;
       const hands = handsRef.current;
       const knn = knnRef.current;
       if (!video || !hands || !knn || video.readyState < 2) return;
+      const currentVideoTime = Number(video.currentTime || 0);
+      if (!Number.isFinite(currentVideoTime) || currentVideoTime <= 0) return;
+      if (Math.abs(currentVideoTime - lastDetectVideoTimeRef.current) < 0.0001) return;
+      lastDetectVideoTimeRef.current = currentVideoTime;
+      detectVideoFrameCountRef.current += 1;
+      if ((detectVideoFrameCountRef.current % DETECTION_FRAME_STRIDE) !== 0) return;
       if (cameraFailureRef.current !== "none") {
         latestLandmarksRef.current = [];
         voteWindowRef.current = [];
@@ -4615,6 +4708,9 @@ export default function PlayArena({
         sharinganPoseRef.current = null;
         sharinganFaceLandmarksRef.current = null;
         sharinganSmoothEyesRef.current = null;
+        sharinganRawPoseRef.current = null;
+        sharinganPoseLockFramesRef.current = 0;
+        sharinganPoseReliableRef.current = false;
         setSharinganVisualPoseIfChanged(null);
         setDetectedHandsIfChanged(0);
         setRawDetectedLabelIfChanged("No hands");
@@ -4653,6 +4749,9 @@ export default function PlayArena({
           sharinganPoseRef.current = null;
           sharinganFaceLandmarksRef.current = null;
           sharinganSmoothEyesRef.current = null;
+          sharinganRawPoseRef.current = null;
+          sharinganPoseLockFramesRef.current = 0;
+          sharinganPoseReliableRef.current = false;
           setSharinganVisualPoseIfChanged(null);
           setSharinganBlinkHoldMsIfChanged(0);
         }
@@ -4720,13 +4819,22 @@ export default function PlayArena({
               sharinganFaceLandmarksRef.current = firstFace;
               const rawPose = buildSharinganVisualPose(firstFace);
               if (rawPose) {
+                const reliableFrame = isReliableSharinganPose(sharinganRawPoseRef.current, rawPose);
+                sharinganRawPoseRef.current = rawPose;
+                sharinganPoseLockFramesRef.current = reliableFrame
+                  ? Math.min(sharinganPoseLockFramesRef.current + 1, SHARINGAN_POSE_LOCK_MIN_FRAMES + 8)
+                  : Math.max(0, sharinganPoseLockFramesRef.current - 2);
+                sharinganPoseReliableRef.current = sharinganPoseLockFramesRef.current >= SHARINGAN_POSE_LOCK_MIN_FRAMES;
                 const smoothedPose = smoothSharinganVisualPose(sharinganPoseRef.current, rawPose);
                 sharinganPoseRef.current = smoothedPose;
-                setSharinganVisualPoseIfChanged(smoothedPose);
+                setSharinganVisualPoseIfChanged(sharinganPoseReliableRef.current ? smoothedPose : null);
               } else {
                 sharinganPoseRef.current = null;
                 sharinganFaceLandmarksRef.current = null;
                 sharinganSmoothEyesRef.current = null;
+                sharinganRawPoseRef.current = null;
+                sharinganPoseLockFramesRef.current = 0;
+                sharinganPoseReliableRef.current = false;
                 setSharinganVisualPoseIfChanged(null);
               }
             }
@@ -4734,6 +4842,9 @@ export default function PlayArena({
             sharinganPoseRef.current = null;
             sharinganFaceLandmarksRef.current = null;
             sharinganSmoothEyesRef.current = null;
+            sharinganRawPoseRef.current = null;
+            sharinganPoseLockFramesRef.current = 0;
+            sharinganPoseReliableRef.current = false;
             setSharinganVisualPoseIfChanged(null);
           }
           if (isSharinganChargedMode && phaseNow === "active") {
@@ -4745,6 +4856,9 @@ export default function PlayArena({
             sharinganPoseRef.current = null;
             sharinganFaceLandmarksRef.current = null;
             sharinganSmoothEyesRef.current = null;
+            sharinganRawPoseRef.current = null;
+            sharinganPoseLockFramesRef.current = 0;
+            sharinganPoseReliableRef.current = false;
             setSharinganVisualPoseIfChanged(null);
           }
           const message = String((err as Error)?.message || err || "face_detect_failed");
@@ -4759,6 +4873,9 @@ export default function PlayArena({
         sharinganPoseRef.current = null;
         sharinganFaceLandmarksRef.current = null;
         sharinganSmoothEyesRef.current = null;
+        sharinganRawPoseRef.current = null;
+        sharinganPoseLockFramesRef.current = 0;
+        sharinganPoseReliableRef.current = false;
         setSharinganVisualPoseIfChanged(null);
       }
       faceAnchorRef.current = faceMotion.anchor;
@@ -5351,12 +5468,27 @@ export default function PlayArena({
   const sequenceProgressPct = sequence.length > 0
     ? Math.min(100, Math.round((sequenceProgressStep / sequence.length) * 100))
     : 0;
+  const prankGridColumns = isViewportFitSession ? 6 : 8;
   const sharinganBlinkProgressPct = Math.min(
     100,
     Math.round((Math.max(0, Math.min(SHARINGAN_BLINK_HOLD_MS, sharinganBlinkHoldMs)) / SHARINGAN_BLINK_HOLD_MS) * 100),
   );
   const iconLayout = useMemo(() => {
     const n = Math.max(1, sequence.length);
+    if (isPrankJutsu) {
+      const gap = isViewportFitSession ? 5 : 6;
+      const maxGridWidth = isViewportFitSession ? 760 : 840;
+      const maxIconSize = isViewportFitSession ? 34 : 46;
+      const minIconSize = isViewportFitSession ? 26 : 34;
+      let iconSize = maxIconSize;
+      let totalWidth = (prankGridColumns * iconSize) + ((prankGridColumns - 1) * gap);
+      if (totalWidth > maxGridWidth) {
+        iconSize = Math.floor((maxGridWidth - ((prankGridColumns - 1) * gap)) / prankGridColumns);
+        iconSize = Math.max(minIconSize, iconSize);
+        totalWidth = (prankGridColumns * iconSize) + ((prankGridColumns - 1) * gap);
+      }
+      return { iconSize, gap, totalWidth };
+    }
     const maxIconSize = isViewportFitSession ? 68 : 80;
     const minIconSize = isViewportFitSession ? 34 : 40;
     const gap = isViewportFitSession ? 10 : 12;
@@ -5369,7 +5501,7 @@ export default function PlayArena({
       totalWidth = (n * iconSize) + ((n - 1) * gap);
     }
     return { iconSize, gap, totalWidth };
-  }, [isViewportFitSession, sequence.length]);
+  }, [isPrankJutsu, isViewportFitSession, prankGridColumns, sequence.length]);
   const calibrationProgressPct = Math.min(
     100,
     Math.round((1 - (calibrationSecondsLeft / CALIBRATION_DURATION_S)) * 100),
@@ -5486,7 +5618,9 @@ export default function PlayArena({
     && !isLikelyLowPowerMobile,
   );
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
+  const isEyeOverlayEffect = effectLabel === "eye" || (effectLabel === "amaterasu" && isSharinganChargedMode);
   const isAmaterasuEffect = effectLabel === "amaterasu";
+  const eyeOverlayBackgroundPath = "/effects/m_sharingan.jpg";
   const showMangekyouTunePanel = false;
   const detectedLabelUi = localizeArenaText(detectedLabel);
   const rawDetectedLabelUi = localizeArenaText(rawDetectedLabel);
@@ -5605,10 +5739,12 @@ export default function PlayArena({
     const cache = sharinganAssetImageCacheRef.current;
     getCachedImage(cache, "/sharingan.png");
     getCachedImage(cache, "/mangekyou_eyes.png");
+    getCachedImage(cache, "/Amaterasu.webp");
   }, []);
 
   useEffect(() => {
-    const isSharinganEffectActive = showJutsuEffect && effectLabel === "eye";
+    const isSharinganEffectActive = showJutsuEffect
+      && (effectLabel === "eye" || effectLabel === "amaterasu");
     if (!isSharinganEffectActive) {
       if (sharinganBloodAnimRafRef.current) {
         cancelAnimationFrame(sharinganBloodAnimRafRef.current);
@@ -5645,7 +5781,7 @@ export default function PlayArena({
   }, [effectLabel, showJutsuEffect]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || isCalibrationMode) return;
+    if (typeof window === "undefined" || isCalibrationMode || isPrankJutsu) return;
     const strip = sequenceStripRef.current;
     if (!strip) return;
     if (strip.scrollWidth <= strip.clientWidth + 4) return;
@@ -5668,7 +5804,7 @@ export default function PlayArena({
 
     if (Math.abs(strip.scrollLeft - clampedLeft) < 2) return;
     strip.scrollTo({ left: clampedLeft, behavior: "smooth" });
-  }, [iconProgressStep, isCalibrationMode, isViewportFitSession, sequence.length, sequenceKey]);
+  }, [iconProgressStep, isCalibrationMode, isPrankJutsu, isViewportFitSession, sequence.length, sequenceKey]);
   const comboCloneOffsetNorm = Math.max(
     0,
     (shadowCloneCurrentOffsetRatioRef.current > 0
@@ -5864,7 +6000,7 @@ export default function PlayArena({
                       <div>FIRE POS: X {fireFinalX.toFixed(1)}% • Y {fireFinalY.toFixed(1)}%</div>
                     </>
                   )}
-                  {effectLabel === "eye" && (
+                  {isEyeOverlayEffect && (
                     <>
                       <div>EYE TEX: {sharinganEyeTexturePath}</div>
                       <div>EYE POSE: {sharinganVisualPose ? "LOCKED" : "NONE"}</div>
@@ -5990,20 +6126,24 @@ export default function PlayArena({
                       />
                     </>
                   )}
-                  {effectLabel === "eye" && (
+                  {isEyeOverlayEffect && (
                     <div className="absolute inset-0 animate-[sharinganFadeIn_650ms_ease-out]">
-                      <Image
-                        src="/effects/m_sharingan.jpg"
-                        alt={`${sharinganModeName} background`}
-                        fill
-                        sizes="(max-width: 1024px) 100vw, 900px"
-                        className="object-cover opacity-92"
-                      />
-                      <SharinganCrowOverlay lowPower={isLikelyLowPowerMobile} />
-                      <div className="absolute inset-0 bg-gradient-to-br from-red-950/45 via-rose-700/18 to-black/40" />
+                      {effectLabel === "eye" && (
+                        <Image
+                          src={eyeOverlayBackgroundPath}
+                          alt={`${sharinganModeName} background`}
+                          fill
+                          sizes="(max-width: 1024px) 100vw, 900px"
+                          className="object-cover opacity-92"
+                        />
+                      )}
+                      {effectLabel === "eye" && <SharinganCrowOverlay lowPower={isLikelyLowPowerMobile} />}
+                      {effectLabel === "eye" && (
+                        <div className="absolute inset-0 bg-gradient-to-br from-red-950/45 via-rose-700/18 to-black/40" />
+                      )}
                       <canvas
                         ref={sharinganForegroundCanvasRef}
-                        className="absolute inset-0 z-[3] h-full w-full object-cover"
+                        className={`absolute inset-0 ${effectLabel === "amaterasu" ? "z-[10]" : "z-[3]"} h-full w-full object-cover`}
                       />
                     </div>
                   )}
@@ -6072,30 +6212,41 @@ export default function PlayArena({
                     </div>
                   )}
                   {isAmaterasuEffect && (
-                    <div className="absolute inset-0">
-                      <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/55 via-black/35 to-black/72" />
+                    <div className="absolute inset-0 z-[8]">
+                      <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/24 via-zinc-800/12 to-transparent" />
                       <div
-                        className="absolute inset-0 mix-blend-multiply opacity-95"
+                        className="absolute inset-0 mix-blend-screen opacity-95"
                         style={{
+                          filter: "saturate(0.15) brightness(0.45) contrast(1.35)",
                           WebkitMaskImage:
-                            "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.98) 20%, rgba(0,0,0,0.92) 58%, rgba(0,0,0,0.35) 78%, rgba(0,0,0,0) 100%)",
+                            "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.95) 20%, rgba(0,0,0,0.88) 58%, rgba(0,0,0,0.26) 78%, rgba(0,0,0,0) 100%)",
                           maskImage:
-                            "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.98) 20%, rgba(0,0,0,0.92) 58%, rgba(0,0,0,0.35) 78%, rgba(0,0,0,0) 100%)",
+                            "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.95) 20%, rgba(0,0,0,0.88) 58%, rgba(0,0,0,0.26) 78%, rgba(0,0,0,0) 100%)",
                         }}
                       >
-                        <FireShader className="h-full w-full" height="100%" opacity={1} enableAudio={false} />
+                        <FireShader className="h-full w-full" height="100%" opacity={1} enableAudio={false} palette="black" />
                       </div>
                       <div
-                        className="absolute rounded-full bg-black/80 blur-3xl"
+                        className="absolute rounded-full bg-black/72 blur-3xl"
                         style={{
-                          width: "240px",
-                          height: "240px",
+                          width: `${fireBlastWidth}px`,
+                          height: `${fireBlastHeight}px`,
                           left: `${fireFinalX}%`,
                           top: `${Math.max(8, fireFinalY - 5)}%`,
                           transform: "translate(-50%, -50%)",
                         }}
                       />
-                      <div className="absolute inset-0 bg-gradient-to-br from-black/45 via-transparent to-zinc-950/62" />
+                      <div
+                        className="absolute rounded-full bg-zinc-300/12 blur-[64px]"
+                        style={{
+                          width: `${Math.round(fireBlastWidth * 0.72)}px`,
+                          height: `${Math.round(fireBlastHeight * 0.72)}px`,
+                          left: `${fireFinalX}%`,
+                          top: `${Math.max(8, fireFinalY - 5)}%`,
+                          transform: "translate(-50%, -50%)",
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-br from-zinc-700/10 via-transparent to-transparent" />
                     </div>
                   )}
                   {effectLabel === "reaper" && (
@@ -6418,14 +6569,20 @@ export default function PlayArena({
             <>
               <div
                 ref={sequenceStripRef}
-                className={`${isViewportFitSession ? "mt-2" : "mt-4"} overflow-x-auto scroll-smooth px-1 pb-1`}
+                className={`${isViewportFitSession ? "mt-2" : "mt-4"} ${isPrankJutsu ? "overflow-visible px-1 pb-1" : "overflow-x-auto scroll-smooth px-1 pb-1"}`}
               >
                 <div
-                  className="mx-auto flex w-max items-start justify-center"
-                  style={{
-                    columnGap: `${iconLayout.gap}px`,
-                    minWidth: `${iconLayout.totalWidth}px`,
-                  }}
+                  className={isPrankJutsu ? "mx-auto grid items-start justify-center" : "mx-auto flex w-max items-start justify-center"}
+                  style={isPrankJutsu
+                    ? {
+                      columnGap: `${iconLayout.gap}px`,
+                      rowGap: `${iconLayout.gap}px`,
+                      gridTemplateColumns: `repeat(${prankGridColumns}, minmax(0, ${iconLayout.iconSize}px))`,
+                    }
+                    : {
+                      columnGap: `${iconLayout.gap}px`,
+                      minWidth: `${iconLayout.totalWidth}px`,
+                    }}
                 >
                   {sequence.map((sign, index) => {
                     const signState =
@@ -6552,6 +6709,11 @@ export default function PlayArena({
           0% { transform: translate(0px, 0px) scale(0.8); opacity: 0.18; }
           45% { opacity: 0.7; }
           100% { transform: translate(0px, -26px) scale(1.12); opacity: 0.1; }
+        }
+        @keyframes amaterasuPlumePulse {
+          0% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.82; }
+          50% { transform: translate(-50%, -50%) scale(1.05); opacity: 1; }
+          100% { transform: translate(-50%, -50%) scale(0.98); opacity: 0.86; }
         }
       `}</style>
     </div>

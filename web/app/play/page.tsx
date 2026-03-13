@@ -734,6 +734,7 @@ const JUTSU_TEXTURES: Record<string, string> = {
   "Mangekyou Sharingan": "/effects/m_sharingan.jpg",
   Amaterasu: "/effects/amaterasu.jpg",
   "Reaper Death Seal": "/pics/textured_buttons/reaper_death.jpg",
+  "Prank Jutsu": "/prank.jpg",
 };
 
 const JUTSU_INFO_SUMMARIES: Record<string, string> = {
@@ -750,6 +751,7 @@ const JUTSU_INFO_SUMMARIES: Record<string, string> = {
   "Reaper Death Seal": "Forbidden sealing art with a heavy cost and extreme finishing power.",
   "Shadow Clone + Rasengan Combo": "Deploy clones first, then collapse the angle with synchronized Rasengan.",
   "Shadow Clone + Chidori Combo": "Split with clones, then chain into lightning finish from converging lanes.",
+  "Prank Jutsu": "A troll challenge sequence with 30 signs shown at once. No scrolling, no mercy.",
 };
 
 const JUTSU_EFFECT_LABELS: Record<string, string> = {
@@ -2222,6 +2224,7 @@ function PlayPageInner() {
   const [ratingSubmitBusy, setRatingSubmitBusy] = useState(false);
   const [ratingSubmitError, setRatingSubmitError] = useState("");
   const [ratingPromptShownThisSession, setRatingPromptShownThisSession] = useState(false);
+  const [hasSubmittedRating, setHasSubmittedRating] = useState(false);
   const [masteryBarDisplayPct, setMasteryBarDisplayPct] = useState(0);
   const [uiSfxReady, setUiSfxReady] = useState(false);
   const [uiSfxLoadCompleted, setUiSfxLoadCompleted] = useState(0);
@@ -2520,6 +2523,64 @@ function PlayPageInner() {
       // Ignore localStorage write failures.
     }
   }, [ratingPromptState, ratingPromptStorageKey]);
+
+  useEffect(() => {
+    if (!supabase) {
+      setHasSubmittedRating(false);
+      return;
+    }
+    const authUserId = String(session?.user?.id || "").trim();
+    const discordId = String(identity?.discordId || "").trim();
+    if (!authUserId && !discordId) {
+      setHasSubmittedRating(false);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      let latestSubmittedAt = "";
+
+      if (authUserId) {
+        const { data } = await supabase
+          .from("user_ratings")
+          .select("created_at")
+          .eq("auth_user_id", authUserId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        latestSubmittedAt = String(data?.created_at || "").trim();
+      }
+
+      if (!latestSubmittedAt && discordId) {
+        const { data } = await supabase
+          .from("user_ratings")
+          .select("created_at")
+          .eq("discord_id", discordId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        latestSubmittedAt = String(data?.created_at || "").trim();
+      }
+
+      if (cancelled) return;
+      const alreadySubmitted = Boolean(latestSubmittedAt);
+      setHasSubmittedRating(alreadySubmitted);
+      if (alreadySubmitted) {
+        setRatingPromptState((prev) => ({
+          ...prev,
+          runsSincePrompt: 0,
+          lastSubmittedAt: latestSubmittedAt || prev.lastSubmittedAt || toUtcIsoNoMs(),
+          dismissedForever: true,
+        }));
+        setRatingPromptPending(null);
+        setRatingModal(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [identity?.discordId, session?.user?.id]);
 
   const applyCompetitivePayload = useCallback((payload: Record<string, unknown>) => {
     const payloadResult = firstRecord(payload.result);
@@ -2853,6 +2914,7 @@ function PlayPageInner() {
     const cooldownSincePromptOk = isoElapsedMs(ratingPromptState.lastPromptedAt, nowMs) >= promptCooldownMs;
     const cooldownSinceSubmitOk = isoElapsedMs(ratingPromptState.lastSubmittedAt, nowMs) >= submitCooldownMs;
     const shouldPrompt = !ratingPromptShownThisSession
+      && !hasSubmittedRating
       && !ratingPromptState.dismissedForever
       && nextRuns >= RATING_PROMPT_MIN_SUCCESSFUL_RUNS
       && cooldownSincePromptOk
@@ -2875,6 +2937,7 @@ function PlayPageInner() {
     });
     setRatingPromptShownThisSession(true);
   }, [
+    hasSubmittedRating,
     identity?.discordId,
     ratingPromptShownThisSession,
     ratingPromptState.dismissedForever,
@@ -2941,7 +3004,9 @@ function PlayPageInner() {
         ...prev,
         runsSincePrompt: 0,
         lastSubmittedAt: nowIso,
+        dismissedForever: true,
       }));
+      setHasSubmittedRating(true);
       setRatingPromptPending(null);
       closeRatingModal();
     } catch (err) {
@@ -7327,101 +7392,101 @@ function PlayPageInner() {
 
               <div className="relative z-10">
 
-              <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 220, 80)" }}>
-                {masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null
-                  ? t("mastery.masteryUnlocked", "MASTERY UNLOCKED")
-                  : t("mastery.newBest", "NEW BEST")}
-              </p>
-              <p className="mt-1 text-center text-xl font-black" style={{ color: "rgb(200, 180, 130)" }}>{getJutsuUiName(masteryPanel.jutsuName)}</p>
-
-              <p className="mt-3 text-center text-5xl font-black" style={{ color: "rgb(255, 245, 200)" }}>{masteryPanel.newBest.toFixed(2)}s</p>
-              <p className="mt-1 text-center text-xs uppercase tracking-[0.16em]" style={{ color: "rgb(160, 220, 160)" }}>
-                {masteryPanel.previousBest === null
-                  ? t("mastery.firstRecord", "FIRST RECORD")
-                  : t("mastery.newBestTime", "NEW BEST TIME")}
-              </p>
-
-              <div
-                className="mx-auto mt-4 flex h-[38px] w-[240px] items-center justify-center gap-2 rounded-full border px-4"
-                style={{
-                  color: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
-                  borderColor: `rgba(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b}, 0.78)`,
-                  backgroundColor: `rgba(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b}, 0.16)`,
-                }}
-              >
-                <Image
-                  src={MASTERY_ICON_BY_TIER[masteryPanel.newTier]}
-                  alt={masteryPanel.newTier}
-                  width={32}
-                  height={32}
-                  className="h-8 w-8 object-contain"
-                />
-                <p className="text-sm font-black uppercase tracking-wide">
-                  {masteryPanel.newTier === "none" ? t("mastery.unranked", "UNRANKED") : masteryPanel.newTier}
+                <p className="text-center text-[11px] font-black uppercase tracking-[0.24em]" style={{ color: "rgb(255, 220, 80)" }}>
+                  {masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null
+                    ? t("mastery.masteryUnlocked", "MASTERY UNLOCKED")
+                    : t("mastery.newBest", "NEW BEST")}
                 </p>
-                {(masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null) && (
-                  <span className="ml-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: "rgb(200, 255, 180)" }}>
-                    {t("mastery.unlocked", "Unlocked!")}
-                  </span>
-                )}
-              </div>
+                <p className="mt-1 text-center text-xl font-black" style={{ color: "rgb(200, 180, 130)" }}>{getJutsuUiName(masteryPanel.jutsuName)}</p>
 
-              {masteryDelta !== null && (
-                <p
-                  className="mt-2 text-center text-xs font-black"
-                  style={{ color: masteryDelta < 0 ? "rgb(100, 230, 120)" : "rgb(230, 110, 80)" }}
+                <p className="mt-3 text-center text-5xl font-black" style={{ color: "rgb(255, 245, 200)" }}>{masteryPanel.newBest.toFixed(2)}s</p>
+                <p className="mt-1 text-center text-xs uppercase tracking-[0.16em]" style={{ color: "rgb(160, 220, 160)" }}>
+                  {masteryPanel.previousBest === null
+                    ? t("mastery.firstRecord", "FIRST RECORD")
+                    : t("mastery.newBestTime", "NEW BEST TIME")}
+                </p>
+
+                <div
+                  className="mx-auto mt-4 flex h-[38px] w-[240px] items-center justify-center gap-2 rounded-full border px-4"
+                  style={{
+                    color: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
+                    borderColor: `rgba(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b}, 0.78)`,
+                    backgroundColor: `rgba(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b}, 0.16)`,
+                  }}
                 >
-                  {masteryDelta < 0 ? t("mastery.up", "UP") : t("mastery.down", "DOWN")} {Math.abs(masteryDelta).toFixed(2)}s
-                </p>
-              )}
-
-              {masteryThresholds && (
-                <div className="mt-4">
-                  <div className="relative h-[8px] rounded-full" style={{ backgroundColor: "rgb(50, 40, 30)" }}>
-                    <div
-                      className="h-[8px] rounded-full transition-[width] duration-700 ease-out"
-                      style={{
-                        width: `${masteryBarDisplayPct}%`,
-                        backgroundColor: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
-                      }}
-                    />
-                    <span
-                      className="absolute -top-[7px] h-[22px] w-[2px] rounded-full transition-[left] duration-700 ease-out"
-                      style={{
-                        left: `${masteryBarDisplayPct}%`,
-                        transform: "translateX(-50%)",
-                        backgroundColor: "rgba(245, 245, 245, 0.85)",
-                        boxShadow: "0 0 8px rgba(255,255,255,0.35)",
-                      }}
-                    />
-                    <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryBronzePct}%`, backgroundColor: "rgb(196, 128, 60)" }} />
-                    <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masterySilverPct}%`, backgroundColor: "rgb(180, 190, 200)" }} />
-                    <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryGoldPct}%`, backgroundColor: "rgb(255, 200, 40)" }} />
-                  </div>
-                  <div className="mt-2 flex justify-between text-[10px] uppercase tracking-wide" style={{ color: "rgb(180, 160, 120)" }}>
-                    <span>{t("mastery.bronze", "BRONZE")} {masteryThresholds.bronze.toFixed(1)}s</span>
-                    <span>{t("mastery.silver", "SILVER")} {masteryThresholds.silver.toFixed(1)}s</span>
-                    <span>{t("mastery.gold", "GOLD")} {masteryThresholds.gold.toFixed(1)}s</span>
-                  </div>
-                  {masteryNextTierHint && (
-                    <p className="mt-2 text-center text-[11px]" style={{ color: "rgb(180, 160, 110)" }}>
-                      {t("common.next", "NEXT")}: {masteryNextTierHint.name} ({masteryNextTierHint.target.toFixed(2)}s) - {(masteryPanel.newBest - masteryNextTierHint.target).toFixed(2)}s {t("mastery.toGo", "to go")}
-                    </p>
+                  <Image
+                    src={MASTERY_ICON_BY_TIER[masteryPanel.newTier]}
+                    alt={masteryPanel.newTier}
+                    width={32}
+                    height={32}
+                    className="h-8 w-8 object-contain"
+                  />
+                  <p className="text-sm font-black uppercase tracking-wide">
+                    {masteryPanel.newTier === "none" ? t("mastery.unranked", "UNRANKED") : masteryPanel.newTier}
+                  </p>
+                  {(masteryPanel.newTier !== masteryPanel.previousTier || masteryPanel.previousBest === null) && (
+                    <span className="ml-2 text-[11px] font-bold uppercase tracking-wide" style={{ color: "rgb(200, 255, 180)" }}>
+                      {t("mastery.unlocked", "Unlocked!")}
+                    </span>
                   )}
                 </div>
-              )}
 
-              <button
-                type="button"
-                onClick={() => setMasteryPanel(null)}
-                className="mt-5 flex h-11 w-full items-center justify-center rounded-[12px] border text-sm font-black text-white hover:bg-[#c87314]"
-                style={{
-                  backgroundColor: "rgb(170, 90, 15)",
-                  borderColor: "rgb(255, 190, 60)",
-                }}
-              >
-                {t("common.continue", "Continue")}
-              </button>
+                {masteryDelta !== null && (
+                  <p
+                    className="mt-2 text-center text-xs font-black"
+                    style={{ color: masteryDelta < 0 ? "rgb(100, 230, 120)" : "rgb(230, 110, 80)" }}
+                  >
+                    {masteryDelta < 0 ? t("mastery.up", "UP") : t("mastery.down", "DOWN")} {Math.abs(masteryDelta).toFixed(2)}s
+                  </p>
+                )}
+
+                {masteryThresholds && (
+                  <div className="mt-4">
+                    <div className="relative h-[8px] rounded-full" style={{ backgroundColor: "rgb(50, 40, 30)" }}>
+                      <div
+                        className="h-[8px] rounded-full transition-[width] duration-700 ease-out"
+                        style={{
+                          width: `${masteryBarDisplayPct}%`,
+                          backgroundColor: `rgb(${masteryTierRgb.r}, ${masteryTierRgb.g}, ${masteryTierRgb.b})`,
+                        }}
+                      />
+                      <span
+                        className="absolute -top-[7px] h-[22px] w-[2px] rounded-full transition-[left] duration-700 ease-out"
+                        style={{
+                          left: `${masteryBarDisplayPct}%`,
+                          transform: "translateX(-50%)",
+                          backgroundColor: "rgba(245, 245, 245, 0.85)",
+                          boxShadow: "0 0 8px rgba(255,255,255,0.35)",
+                        }}
+                      />
+                      <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryBronzePct}%`, backgroundColor: "rgb(196, 128, 60)" }} />
+                      <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masterySilverPct}%`, backgroundColor: "rgb(180, 190, 200)" }} />
+                      <span className="absolute -top-[6px] h-[20px] w-[1px]" style={{ left: `${masteryGoldPct}%`, backgroundColor: "rgb(255, 200, 40)" }} />
+                    </div>
+                    <div className="mt-2 flex justify-between text-[10px] uppercase tracking-wide" style={{ color: "rgb(180, 160, 120)" }}>
+                      <span>{t("mastery.bronze", "BRONZE")} {masteryThresholds.bronze.toFixed(1)}s</span>
+                      <span>{t("mastery.silver", "SILVER")} {masteryThresholds.silver.toFixed(1)}s</span>
+                      <span>{t("mastery.gold", "GOLD")} {masteryThresholds.gold.toFixed(1)}s</span>
+                    </div>
+                    {masteryNextTierHint && (
+                      <p className="mt-2 text-center text-[11px]" style={{ color: "rgb(180, 160, 110)" }}>
+                        {t("common.next", "NEXT")}: {masteryNextTierHint.name} ({masteryNextTierHint.target.toFixed(2)}s) - {(masteryPanel.newBest - masteryNextTierHint.target).toFixed(2)}s {t("mastery.toGo", "to go")}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setMasteryPanel(null)}
+                  className="mt-5 flex h-11 w-full items-center justify-center rounded-[12px] border text-sm font-black text-white hover:bg-[#c87314]"
+                  style={{
+                    backgroundColor: "rgb(170, 90, 15)",
+                    borderColor: "rgb(255, 190, 60)",
+                  }}
+                >
+                  {t("common.continue", "Continue")}
+                </button>
               </div>
             </div>
           </div>
