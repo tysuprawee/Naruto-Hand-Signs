@@ -190,6 +190,7 @@ const SIGN_LORE: Record<SignName, SignLoreEntry> = {
 
 const DETECTION_FRAME_STRIDE = 2;
 const RESTRICTED_SIGNS = true; // Match pygame default behavior
+const SHOW_HAND_SKELETON = false;
 
 const LIGHTING_MIN = 45.0;
 const LIGHTING_MAX = 210.0;
@@ -1029,7 +1030,7 @@ export default function ChallengePage() {
       ctx.restore();
 
       const landmarks = latestLandmarksRef.current;
-      if (landmarks.length > 0) {
+      if (SHOW_HAND_SKELETON && landmarks.length > 0) {
         for (const hand of landmarks) {
           drawLandmarks(ctx, hand, canvas.width, canvas.height);
         }
