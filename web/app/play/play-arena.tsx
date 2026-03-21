@@ -200,7 +200,8 @@ interface PlayArenaProps {
   }) => Promise<{ token?: string; source?: string; reason?: string } | void>;
 }
 
-const DETECTION_FRAME_STRIDE = 2;
+const DETECTION_INTERVAL_MS = 50;
+const LOW_POWER_DETECTION_INTERVAL_MS = 67;
 const VOTE_WINDOW_SIZE = 2;
 const VOTE_TTL_MS = 700;
 const SIGN_ACCEPT_COOLDOWN_MS = 500;
@@ -1812,6 +1813,9 @@ export default function PlayArena({
     [datasetUrl],
   );
   const isLikelyLowPowerMobile = useMemo(() => isLikelyLowPowerMobileDevice(), []);
+  const detectionIntervalMs = isLikelyLowPowerMobile
+    ? LOW_POWER_DETECTION_INTERVAL_MS
+    : DETECTION_INTERVAL_MS;
 
   const activeCalibrationProfile = useMemo(
     () => sanitizeCalibrationProfile(calibrationProfile),
@@ -1861,7 +1865,7 @@ export default function PlayArena({
   const detectRafRef = useRef(0);
   const lastRenderDrawAtRef = useRef(0);
   const lastDetectVideoTimeRef = useRef(-1);
-  const detectVideoFrameCountRef = useRef(0);
+  const lastDetectAtRef = useRef(0);
   const voteWindowRef = useRef<VoteEntry[]>([]);
   const voteStableRef = useRef<VoteStableState>({ label: "idle", confidence: 0, timeMs: 0 });
   const handSlotsRef = useRef<[HandSlotState | null, HandSlotState | null]>([null, null]);
@@ -4372,7 +4376,7 @@ export default function PlayArena({
         cameraFpsFrameCountRef.current = 0;
         fpsRef.current = 0;
         lastDetectVideoTimeRef.current = -1;
-        detectVideoFrameCountRef.current = 0;
+        lastDetectAtRef.current = 0;
         setFps(0);
         clearCameraFailure();
 
@@ -4698,8 +4702,8 @@ export default function PlayArena({
       if (!Number.isFinite(currentVideoTime) || currentVideoTime <= 0) return;
       if (Math.abs(currentVideoTime - lastDetectVideoTimeRef.current) < 0.0001) return;
       lastDetectVideoTimeRef.current = currentVideoTime;
-      detectVideoFrameCountRef.current += 1;
-      if ((detectVideoFrameCountRef.current % DETECTION_FRAME_STRIDE) !== 0) return;
+      if (lastDetectAtRef.current > 0 && nowMs - lastDetectAtRef.current < detectionIntervalMs) return;
+      lastDetectAtRef.current = nowMs;
       if (cameraFailureRef.current !== "none") {
         latestLandmarksRef.current = [];
         voteWindowRef.current = [];
@@ -5301,6 +5305,7 @@ export default function PlayArena({
     jutsuName,
     playSfx,
     pushComboCue,
+    detectionIntervalMs,
     ramTigerShared,
     restrictedSigns,
     sequence,

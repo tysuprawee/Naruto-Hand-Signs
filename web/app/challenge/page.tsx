@@ -188,7 +188,7 @@ const SIGN_LORE: Record<SignName, SignLoreEntry> = {
   },
 };
 
-const DETECTION_FRAME_STRIDE = 2;
+const DETECTION_INTERVAL_MS = 50;
 const RESTRICTED_SIGNS = true; // Match pygame default behavior
 const SHOW_HAND_SKELETON = false;
 
@@ -755,7 +755,7 @@ export default function ChallengePage() {
   const renderRafIdRef = useRef<number>(0);
   const detectRafIdRef = useRef<number>(0);
   const lastDetectVideoTimeRef = useRef<number>(-1);
-  const detectVideoFrameCountRef = useRef<number>(0);
+  const lastDetectAtRef = useRef<number>(0);
   const latestLandmarksRef = useRef<Landmark[][]>([]);
   const holdRef = useRef<{ label: string; count: number }>({ label: "", count: 0 });
   const triggeredSignRef = useRef<string>("");
@@ -945,7 +945,7 @@ export default function ChallengePage() {
       showFpsRef.current = false;
       latestLandmarksRef.current = [];
       lastDetectVideoTimeRef.current = -1;
-      detectVideoFrameCountRef.current = 0;
+      lastDetectAtRef.current = 0;
       setDrawMs(0);
       setDetectMs(0);
       setLightingMs(0);
@@ -968,7 +968,7 @@ export default function ChallengePage() {
     videoResRef.current = "0x0";
     uiLastCommitRef.current = 0;
     lastDetectVideoTimeRef.current = -1;
-    detectVideoFrameCountRef.current = 0;
+    lastDetectAtRef.current = 0;
     latestLandmarksRef.current = [];
     setFps(0);
     setDetectionRate(0);
@@ -1079,8 +1079,8 @@ export default function ChallengePage() {
       if (!Number.isFinite(currentVideoTime) || currentVideoTime <= 0) return;
       if (Math.abs(currentVideoTime - lastDetectVideoTimeRef.current) < 0.0001) return;
       lastDetectVideoTimeRef.current = currentVideoTime;
-      detectVideoFrameCountRef.current += 1;
-      if ((detectVideoFrameCountRef.current % DETECTION_FRAME_STRIDE) !== 0) return;
+      if (lastDetectAtRef.current > 0 && now - lastDetectAtRef.current < DETECTION_INTERVAL_MS) return;
+      lastDetectAtRef.current = now;
       const uiTickDue = now - uiLastCommitRef.current >= UI_UPDATE_INTERVAL_MS;
       let uiStateTouched = false;
 
