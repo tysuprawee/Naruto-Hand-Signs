@@ -3,7 +3,7 @@
 import type { Session } from "@supabase/supabase-js";
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -306,16 +306,22 @@ type RatingPromptEventType = "prompt_shown" | "dismiss_not_now" | "dismiss_never
 
 type LightingReadiness = "good" | "low_light" | "overexposed" | "low_contrast";
 
+const FORCED_PLAY_SETTINGS = {
+  restrictedSigns: false,
+  ramTigerShared: true,
+  noEffects: false,
+} as const;
+
 const DEFAULT_SETTINGS: MenuSettingsState = {
   musicVol: 0.5,
   sfxVol: 0.7,
   debugHands: false,
-  restrictedSigns: false,
-  ramTigerShared: true,
+  restrictedSigns: FORCED_PLAY_SETTINGS.restrictedSigns,
+  ramTigerShared: FORCED_PLAY_SETTINGS.ramTigerShared,
   easyMode: false,
   cameraIdx: 0,
   resolutionIdx: 0,
-  noEffects: false,
+  noEffects: FORCED_PLAY_SETTINGS.noEffects,
   fullscreen: false,
   displayName: "",
   defaultName: "",
@@ -896,13 +902,13 @@ function sanitizeSettings(raw: MenuSettingsInput | null | undefined): MenuSettin
     musicVol: clampVolume(raw?.musicVol, DEFAULT_SETTINGS.musicVol),
     sfxVol: clampVolume(raw?.sfxVol, DEFAULT_SETTINGS.sfxVol),
     debugHands: parseBoolean(raw?.debugHands, DEFAULT_SETTINGS.debugHands),
-    restrictedSigns: parseBoolean(raw?.restrictedSigns, DEFAULT_SETTINGS.restrictedSigns),
-    ramTigerShared: parseBoolean(raw?.ramTigerShared, DEFAULT_SETTINGS.ramTigerShared),
+    restrictedSigns: FORCED_PLAY_SETTINGS.restrictedSigns,
+    ramTigerShared: FORCED_PLAY_SETTINGS.ramTigerShared,
     easyMode: false,
     cameraIdx: clampInt(raw?.cameraIdx, 0, 16, DEFAULT_SETTINGS.cameraIdx),
     // Resolution selector is removed; keep a fixed baseline capture profile.
     resolutionIdx: DEFAULT_SETTINGS.resolutionIdx,
-    noEffects: parseBoolean(raw?.noEffects, DEFAULT_SETTINGS.noEffects),
+    noEffects: FORCED_PLAY_SETTINGS.noEffects,
     fullscreen: parseBoolean(raw?.fullscreen, DEFAULT_SETTINGS.fullscreen),
     displayName: sanitizeDisplayName(raw?.displayName, DEFAULT_SETTINGS.displayName),
     defaultName: sanitizeDisplayName(raw?.defaultName, DEFAULT_SETTINGS.defaultName),
@@ -2184,14 +2190,13 @@ function PlayPageInner() {
   const [savedSettings, setSavedSettings] = useState<MenuSettingsState>(() => readStoredSettings());
   const [draftSettings, setDraftSettings] = useState<MenuSettingsState>(() => readStoredSettings());
 
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   useEffect(() => {
-    const noEffectsParam = searchParams.get("noEffects") === "true";
-    if (noEffectsParam) {
-      setSavedSettings((prev) => ({ ...prev, noEffects: true }));
-      setDraftSettings((prev) => ({ ...prev, noEffects: true }));
-    }
-  }, [searchParams]);
+    if (!searchParams.toString()) return;
+    router.replace(pathname || "/play");
+  }, [pathname, router, searchParams]);
   const [menuMusicMuted, setMenuMusicMuted] = useState(() => readStoredMenuMute());
   const [progression, setProgression] = useState<ProgressionState>(() => createInitialProgression());
   const [questState, setQuestState] = useState<QuestState>(() => createDefaultQuestState(new Date()));
@@ -6907,60 +6912,6 @@ function PlayPageInner() {
                     />
                   </label>
 
-                  <label className="flex items-center justify-between gap-3 rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
-                    <span className="flex flex-col">
-                      <span>{t("settings.strictTwoHandMode", "Strict Two-Hand Mode")}</span>
-                      <span className="text-xs text-zinc-400">
-                        {t("settings.strictTwoHandModeHint", "Require both hands visible before confirming signs.")}
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={draftSettings.restrictedSigns}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        setDraftSettings((prev) => ({ ...prev, restrictedSigns: checked }));
-                      }}
-                      className="h-4 w-4 accent-orange-500"
-                    />
-                  </label>
-
-                  <label className="flex items-center justify-between gap-3 rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
-                    <span className="flex flex-col">
-                      <span>{t("settings.ramTigerShared", "Ram/Tiger Assist")}</span>
-                      <span className="text-xs text-zinc-400">
-                        {t("settings.ramTigerSharedHint", "Allow Ram or Tiger to count for either sign in a sequence.")}
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={draftSettings.ramTigerShared}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        setDraftSettings((prev) => ({ ...prev, ramTigerShared: checked }));
-                      }}
-                      className="h-4 w-4 accent-orange-500"
-                    />
-                  </label>
-
-                  <label className="flex items-center justify-between gap-3 rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
-                    <span className="flex flex-col">
-                      <span>{t("settings.animations", "Animations")}</span>
-                      <span className="text-xs text-zinc-400">
-                        {t("settings.animationsHint", "Turn jutsu visual effects on or off.")}
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={!draftSettings.noEffects}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        setDraftSettings((prev) => ({ ...prev, noEffects: !checked }));
-                      }}
-                      className="h-4 w-4 accent-orange-500"
-                    />
-                  </label>
-
                   <label className="flex items-center justify-between rounded-lg border border-ninja-border bg-ninja-bg/30 px-4 py-3 text-sm text-zinc-100">
                     <span>{t("settings.fullscreen", "Fullscreen")}</span>
                     <input
@@ -6976,18 +6927,6 @@ function PlayPageInner() {
 
                 </div>
 
-                <div className="mt-8 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCalibrationReturnView("settings");
-                      setView("calibration_gate");
-                    }}
-                    className="h-12 w-full rounded-xl border border-amber-500/40 bg-amber-500/15 px-6 text-sm font-black tracking-wide text-amber-200 hover:bg-amber-500/25"
-                  >
-                    {t("settings.runCalibration", "RUN CALIBRATION")}
-                  </button>
-                </div>
               </div>
             )}
 
