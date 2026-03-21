@@ -209,6 +209,10 @@ interface PlayArenaProps {
 
 const DETECTION_INTERVAL_MS = 50;
 const LOW_POWER_DETECTION_INTERVAL_MS = 67;
+const CAMERA_WARMUP_TARGET_FRAMES = 4;
+const CAMERA_WARMUP_MIN_MS = 220;
+const CAMERA_WARMUP_FALLBACK_MS = 120;
+const CAMERA_WARMUP_TIMEOUT_MS = 1200;
 const VOTE_WINDOW_SIZE = 2;
 const VOTE_TTL_MS = 700;
 const SIGN_ACCEPT_COOLDOWN_MS = 500;
@@ -554,6 +558,12 @@ function supportsWebmEffectVideo(): boolean {
     EFFECT_WEBM_SUPPORT_CACHE = false;
   }
   return EFFECT_WEBM_SUPPORT_CACHE;
+}
+
+function waitForAnimationFrame(): Promise<number> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(resolve);
+  });
 }
 
 function hydratePersistedEffectReadyPaths(): void {
@@ -2133,6 +2143,8 @@ export default function PlayArena({
         return t("play.loadingHandTracker", "Loading hand tracker...");
       case "starting camera...":
         return t("play.startingCamera", "Starting camera...");
+      case "warming camera...":
+        return t("play.warmingCamera", "Warming camera...");
       case "idle":
         return t("play.labelIdle", "Idle");
       case "unknown":
@@ -2465,6 +2477,48 @@ export default function PlayArena({
     if (cameraFailureRef.current === "none") return;
     cameraFailureRef.current = "none";
     setCameraFailure("none");
+  }, []);
+
+  const warmCameraBehindLoading = useCallback(async (isCancelled?: () => boolean) => {
+    const startedAt = performance.now();
+    let sawAdvancingFrame = false;
+
+    while (!isCancelled?.()) {
+      await waitForAnimationFrame();
+      if (isCancelled?.()) return;
+
+      const frameCount = cameraFpsFrameCountRef.current;
+      const windowStartedAt = cameraFpsWindowStartRef.current;
+      const elapsedSinceWindowStart = windowStartedAt > 0 ? performance.now() - windowStartedAt : 0;
+
+      if (frameCount > 0 || lastVideoMediaTimeRef.current > 0) {
+        sawAdvancingFrame = true;
+      }
+
+      const warmedEnough = (
+        frameCount >= CAMERA_WARMUP_TARGET_FRAMES
+        && elapsedSinceWindowStart >= CAMERA_WARMUP_MIN_MS
+      ) || (
+        sawAdvancingFrame
+        && frameCount >= 2
+        && elapsedSinceWindowStart >= CAMERA_WARMUP_FALLBACK_MS
+      );
+
+      if (warmedEnough) break;
+      if ((performance.now() - startedAt) >= CAMERA_WARMUP_TIMEOUT_MS) break;
+    }
+
+    if (isCancelled?.()) return;
+
+    const frameCount = cameraFpsFrameCountRef.current;
+    const windowStartedAt = cameraFpsWindowStartRef.current;
+    const elapsedSinceWindowStart = windowStartedAt > 0 ? performance.now() - windowStartedAt : 0;
+    if (frameCount >= 2 && elapsedSinceWindowStart >= CAMERA_WARMUP_FALLBACK_MS) {
+      const estimated = Math.round((frameCount * 1000) / Math.max(1, elapsedSinceWindowStart));
+      const seededFps = Math.max(1, Math.min(120, estimated));
+      fpsRef.current = seededFps;
+      setFps(seededFps);
+    }
   }, []);
 
   const forceCalibrationDiagnostics = useCallback(() => {
@@ -4400,8 +4454,6 @@ export default function PlayArena({
 
         if (!videoRef.current) throw new Error("Video element unavailable");
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        if (cancelled) return;
         videoStallSinceRef.current = 0;
         lastVideoMediaTimeRef.current = -1;
         lastRenderDrawAtRef.current = 0;
@@ -4411,7 +4463,12 @@ export default function PlayArena({
         lastDetectVideoTimeRef.current = -1;
         lastDetectAtRef.current = 0;
         setFps(0);
+        await videoRef.current.play();
+        if (cancelled) return;
         clearCameraFailure();
+        setLoadingMessage("Warming camera...");
+        await warmCameraBehindLoading(() => cancelled);
+        if (cancelled) return;
 
         if (cameraTrackCleanupRef.current) {
           cameraTrackCleanupRef.current();
@@ -4565,6 +4622,7 @@ export default function PlayArena({
     noEffects,
     resolutionIdx,
     stopAllSfx,
+    warmCameraBehindLoading,
     warmupEffectsForRunStart,
   ]);
 
