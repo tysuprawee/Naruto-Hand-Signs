@@ -240,6 +240,8 @@ interface FireShaderProps {
   className?: string;
   /** Height in CSS – defaults to 220px */
   height?: string;
+  /** Keep resources mounted but pause animation when false */
+  running?: boolean;
   /** Whether to enable fire audio on click */
   enableAudio?: boolean;
   /** Master opacity 0-1 */
@@ -271,6 +273,7 @@ const FIRE_SHADER_PALETTE: Record<"black" | "red", {
 export default function FireShader({
   className = "",
   height = "220px",
+  running = true,
   enableAudio = true,
   opacity = 1,
   palette = "black",
@@ -280,8 +283,22 @@ export default function FireShader({
   const programRef = useRef<WebGLProgram | null>(null);
   const startRef = useRef(0);
   const rafRef = useRef(0);
+  const drawRef = useRef<((now: number) => void) | null>(null);
+  const runningRef = useRef(running);
   const audioStartedRef = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    runningRef.current = running;
+    if (!running && rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      return;
+    }
+    if (running && !rafRef.current && drawRef.current) {
+      rafRef.current = requestAnimationFrame(drawRef.current);
+    }
+  }, [running]);
 
   /* ── WebGL setup ──────────────────────────────────────────────────── */
   useEffect(() => {
@@ -354,6 +371,10 @@ export default function FireShader({
     startRef.current = performance.now();
 
     const draw = (now: number) => {
+      if (!runningRef.current) {
+        rafRef.current = 0;
+        return;
+      }
       rafRef.current = requestAnimationFrame(draw);
       const t = (now - startRef.current) * 0.001;
       if (uRes) gl.uniform2f(uRes, canvas.width, canvas.height);
@@ -362,10 +383,15 @@ export default function FireShader({
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     };
 
-    rafRef.current = requestAnimationFrame(draw);
+    drawRef.current = draw;
+    if (runningRef.current) {
+      rafRef.current = requestAnimationFrame(draw);
+    }
 
     return () => {
       cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      drawRef.current = null;
       ro.disconnect();
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => { });

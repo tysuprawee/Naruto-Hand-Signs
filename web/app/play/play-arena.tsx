@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -14,10 +15,6 @@ import {
 import { KNNClassifier, normalizeHand } from "@/utils/knn";
 import { OFFICIAL_JUTSUS } from "@/utils/jutsu-registry";
 import { getXpForLevel } from "@/utils/progression";
-import RasenshurikenOverlay from "@/app/play/effects/rasenshuriken-overlay";
-import SharinganCrowOverlay from "@/app/play/effects/sharingan-crow-overlay";
-import WaterDragonOverlay from "@/app/play/effects/water-dragon-overlay";
-import FireShader from "@/app/components/fire-shader";
 import {
   applyTemporalVote,
   DEFAULT_FILTERS,
@@ -29,6 +26,16 @@ import {
   type VoteStableState,
 } from "@/utils/detection-filters";
 import { useLanguage } from "@/app/components/language-provider";
+
+const loadRasenshurikenOverlay = () => import("@/app/play/effects/rasenshuriken-overlay");
+const loadSharinganCrowOverlay = () => import("@/app/play/effects/sharingan-crow-overlay");
+const loadWaterDragonOverlay = () => import("@/app/play/effects/water-dragon-overlay");
+const loadFireShader = () => import("@/app/components/fire-shader");
+
+const RasenshurikenOverlay = dynamic(loadRasenshurikenOverlay, { ssr: false });
+const SharinganCrowOverlay = dynamic(loadSharinganCrowOverlay, { ssr: false });
+const WaterDragonOverlay = dynamic(loadWaterDragonOverlay, { ssr: false });
+const FireShader = dynamic(loadFireShader, { ssr: false });
 
 type ArenaPhase = "loading" | "ready" | "countdown" | "active" | "casting" | "completed" | "error";
 type PlayMode = "free" | "rank" | "calibration";
@@ -504,7 +511,7 @@ const EFFECT_MEDIA_PRELOAD_TABLE: Record<string, { images?: string[]; videos?: s
     videos: ["/effects/rasengan-alpha.webm", "/effects/rasengan.mp4"],
   },
   eye: {
-    images: ["/effects/m_sharingan.jpg", "/sharingan.png", "/mangekyou_eyes.png"],
+    images: ["/effects/m_sharingan.jpg", "/sharingan.png", "/mangekyou_eyes.png", "/crow.png", "/crow2.png"],
   },
   amaterasu: {
     images: ["/effects/amaterasu.jpg", "/Amaterasu.webp"],
@@ -512,6 +519,13 @@ const EFFECT_MEDIA_PRELOAD_TABLE: Record<string, { images?: string[]; videos?: s
   reaper: {
     images: [REAPER_BG_IMAGE_PATH],
   },
+};
+const EFFECT_COMPONENT_PRELOADERS: Partial<Record<string, Array<() => Promise<unknown>>>> = {
+  fire: [loadFireShader],
+  water: [loadWaterDragonOverlay],
+  eye: [loadSharinganCrowOverlay],
+  amaterasu: [loadFireShader],
+  rasenshuriken: [loadRasenshurikenOverlay],
 };
 const SFX_PERSISTED_READY_KEY = "jutsu-play-sfx-ready-v1";
 const SFX_PERSISTED_READY_PATHS = new Set<string>();
@@ -3261,7 +3275,11 @@ export default function PlayArena({
     const supportsWebm = supportsWebmEffectVideo();
     const imagePaths = new Set<string>();
     const videoPaths = new Set<string>();
+    const componentLoaders = new Set<() => Promise<unknown>>();
     for (const token of prewarmEffectTokens) {
+      for (const loader of EFFECT_COMPONENT_PRELOADERS[token] || []) {
+        componentLoaders.add(loader);
+      }
       const assets = EFFECT_MEDIA_PRELOAD_TABLE[token];
       if (!assets) continue;
       for (const imagePath of assets.images || []) {
@@ -3305,6 +3323,21 @@ export default function PlayArena({
       tasks.push(async () => {
         const seg = await ensureSelfieSegmentation();
         return seg !== null;
+      });
+    }
+    if (componentLoaders.size > 0) {
+      tasks.push(async () => {
+        const results = await Promise.all(
+          [...componentLoaders].map(async (loader) => {
+            try {
+              await loader();
+              return true;
+            } catch {
+              return false;
+            }
+          }),
+        );
+        return results.every(Boolean);
       });
     }
 
@@ -5625,6 +5658,23 @@ export default function PlayArena({
   const isPhoenixFireEffect = effectLabel === "fire" && normalizeLabel(jutsuName).includes("phoenix");
   const isEyeOverlayEffect = effectLabel === "eye" || (effectLabel === "amaterasu" && isSharinganChargedMode);
   const isAmaterasuEffect = effectLabel === "amaterasu";
+  const showEyeOverlay = showJutsuEffect && isEyeOverlayEffect;
+  const showWaterOverlay = showJutsuEffect && effectLabel === "water";
+  const showEyeCrowOverlay = showJutsuEffect && effectLabel === "eye";
+  const showFireOverlay = showJutsuEffect && effectLabel === "fire" && !isPhoenixFireEffect;
+  const showAmaterasuOverlay = showJutsuEffect && isAmaterasuEffect;
+  const keepWaterOverlayMounted = prewarmEffectTokens.includes("water");
+  const keepEyeCrowOverlayMounted = prewarmEffectTokens.includes("eye");
+  const keepFireOverlayMounted = prewarmEffectTokens.includes("fire") && !isPhoenixFireEffect;
+  const keepAmaterasuOverlayMounted = prewarmEffectTokens.includes("amaterasu");
+  const runWaterOverlay = showWaterOverlay || (phase === "loading" && keepWaterOverlayMounted);
+  const runEyeCrowOverlay = showEyeCrowOverlay || (phase === "loading" && keepEyeCrowOverlayMounted);
+  const runFireOverlay = showFireOverlay || (phase === "loading" && keepFireOverlayMounted);
+  const runAmaterasuOverlay = showAmaterasuOverlay || (phase === "loading" && keepAmaterasuOverlayMounted);
+  const shouldRenderPersistentEffects =
+    keepWaterOverlayMounted
+    || keepEyeCrowOverlayMounted
+    || showEyeOverlay;
   const eyeOverlayBackgroundPath = "/effects/m_sharingan.jpg";
   const showMangekyouTunePanel = false;
   const detectedLabelUi = localizeArenaText(detectedLabel);
@@ -6107,15 +6157,16 @@ export default function PlayArena({
               <video ref={videoRef} className="hidden" playsInline muted />
               <canvas ref={canvasRef} className="h-full w-full object-cover" />
 
-              {showJutsuEffect && (
+              {shouldRenderPersistentEffects && (
                 <div className="pointer-events-none absolute inset-0 z-20">
-                  {effectLabel === "water" && (
-                    <>
+                  {(showWaterOverlay || keepWaterOverlayMounted) && (
+                    <div className={`absolute inset-0 transition-opacity duration-150 ${showWaterOverlay ? "opacity-100" : "opacity-0"}`}>
                       <div className="absolute inset-0 bg-gradient-to-t from-cyan-900/45 via-sky-500/16 to-transparent" />
                       <WaterDragonOverlay
                         leftPct={fireAnchorX}
                         topPct={Math.max(8, fireAnchorY - 4)}
                         lowPower={isLikelyLowPowerMobile}
+                        running={runWaterOverlay}
                         mirroredInput={false}
                         sourceAspect={videoAspect}
                       />
@@ -6129,11 +6180,11 @@ export default function PlayArena({
                           transform: "translate(-50%, -50%)",
                         }}
                       />
-                    </>
+                    </div>
                   )}
-                  {isEyeOverlayEffect && (
-                    <div className="absolute inset-0 animate-[sharinganFadeIn_650ms_ease-out]">
-                      {effectLabel === "eye" && (
+                  {(showEyeOverlay || keepEyeCrowOverlayMounted) && (
+                    <div className={`absolute inset-0 ${showEyeOverlay ? "animate-[sharinganFadeIn_650ms_ease-out] opacity-100" : "opacity-0"} transition-opacity duration-150`}>
+                      {(effectLabel === "eye" || keepEyeCrowOverlayMounted) && (
                         <Image
                           src={eyeOverlayBackgroundPath}
                           alt={`${sharinganModeName} background`}
@@ -6142,7 +6193,9 @@ export default function PlayArena({
                           className="object-cover opacity-92"
                         />
                       )}
-                      {effectLabel === "eye" && <SharinganCrowOverlay lowPower={isLikelyLowPowerMobile} />}
+                      {(showEyeCrowOverlay || keepEyeCrowOverlayMounted) && (
+                        <SharinganCrowOverlay lowPower={isLikelyLowPowerMobile} running={runEyeCrowOverlay} />
+                      )}
                       {effectLabel === "eye" && (
                         <div className="absolute inset-0 bg-gradient-to-br from-red-950/45 via-rose-700/18 to-black/40" />
                       )}
@@ -6152,14 +6205,19 @@ export default function PlayArena({
                       />
                     </div>
                   )}
+                </div>
+              )}
+
+              {(showJutsuEffect || keepFireOverlayMounted || keepAmaterasuOverlayMounted) && (
+                <div className="pointer-events-none absolute inset-0 z-20">
                   {(effectLabel === "clone" || comboClonePersistRender) && (
                     <canvas
                       ref={shadowCloneCanvasRef}
                       className="absolute inset-0 h-full w-full object-cover"
                     />
                   )}
-                  {effectLabel === "fire" && !isPhoenixFireEffect && (
-                    <div className="absolute inset-0">
+                  {(showFireOverlay || keepFireOverlayMounted) && (
+                    <div className={`absolute inset-0 transition-opacity duration-150 ${showFireOverlay ? "opacity-100" : "opacity-0"}`}>
                       <div className="absolute inset-0 bg-gradient-to-b from-orange-900/24 via-orange-600/12 to-transparent" />
                       <div
                         className="absolute inset-0 mix-blend-screen opacity-95"
@@ -6171,7 +6229,7 @@ export default function PlayArena({
                             "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.95) 20%, rgba(0,0,0,0.88) 58%, rgba(0,0,0,0.26) 78%, rgba(0,0,0,0) 100%)",
                         }}
                       >
-                        <FireShader className="h-full w-full" height="100%" opacity={1} enableAudio={false} palette="red" />
+                        <FireShader className="h-full w-full" height="100%" opacity={1} enableAudio={false} palette="red" running={runFireOverlay} />
                       </div>
                       <div
                         className="absolute rounded-full bg-orange-500/55 blur-3xl"
@@ -6216,8 +6274,8 @@ export default function PlayArena({
                       ))}
                     </div>
                   )}
-                  {isAmaterasuEffect && (
-                    <div className="absolute inset-0 z-[8]">
+                  {(showAmaterasuOverlay || keepAmaterasuOverlayMounted) && (
+                    <div className={`absolute inset-0 z-[8] transition-opacity duration-150 ${showAmaterasuOverlay ? "opacity-100" : "opacity-0"}`}>
                       <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/24 via-zinc-800/12 to-transparent" />
                       <div
                         className="absolute inset-0 mix-blend-screen opacity-95"
@@ -6229,7 +6287,7 @@ export default function PlayArena({
                             "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.95) 20%, rgba(0,0,0,0.88) 58%, rgba(0,0,0,0.26) 78%, rgba(0,0,0,0) 100%)",
                         }}
                       >
-                        <FireShader className="h-full w-full" height="100%" opacity={1} enableAudio={false} palette="black" />
+                        <FireShader className="h-full w-full" height="100%" opacity={1} enableAudio={false} palette="black" running={runAmaterasuOverlay} />
                       </div>
                       <div
                         className="absolute rounded-full bg-black/72 blur-3xl"

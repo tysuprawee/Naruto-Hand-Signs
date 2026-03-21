@@ -6,6 +6,7 @@ interface WaterDragonOverlayProps {
   leftPct: number;
   topPct: number;
   lowPower?: boolean;
+  running?: boolean;
   mirroredInput?: boolean;
   sourceAspect?: number;
 }
@@ -156,6 +157,7 @@ export default function WaterDragonOverlay({
   leftPct,
   topPct,
   lowPower = false,
+  running = true,
   mirroredInput = false,
   sourceAspect = 4 / 3,
 }: WaterDragonOverlayProps) {
@@ -164,6 +166,9 @@ export default function WaterDragonOverlay({
   const topPctRef = useRef(topPct);
   const mirroredInputRef = useRef(mirroredInput);
   const sourceAspectRef = useRef(sourceAspect);
+  const rafRef = useRef(0);
+  const drawRef = useRef<(() => void) | null>(null);
+  const runningRef = useRef(running);
 
   useEffect(() => {
     leftPctRef.current = leftPct;
@@ -171,6 +176,18 @@ export default function WaterDragonOverlay({
     mirroredInputRef.current = mirroredInput;
     sourceAspectRef.current = sourceAspect;
   }, [leftPct, topPct, mirroredInput, sourceAspect]);
+
+  useEffect(() => {
+    runningRef.current = running;
+    if (!running && rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      return;
+    }
+    if (running && !rafRef.current && drawRef.current) {
+      rafRef.current = requestAnimationFrame(drawRef.current);
+    }
+  }, [running]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -205,9 +222,11 @@ export default function WaterDragonOverlay({
     const segments = lowPower ? 28 : 44;
     const droplets = lowPower ? 20 : 36;
     const startAt = performance.now();
-    let rafId = 0;
-
     const draw = () => {
+      if (!runningRef.current) {
+        rafRef.current = 0;
+        return;
+      }
       const elapsed = (performance.now() - startAt) / 1000;
       const phase = elapsed * (lowPower ? 1.08 : 1.42);
       const viewAspect = Math.max(0.1, cssWidth / cssHeight);
@@ -305,13 +324,18 @@ export default function WaterDragonOverlay({
       drawDragonHead(ctx, head.x, head.y, headAngle, headSize, phase);
 
       ctx.globalCompositeOperation = "source-over";
-      rafId = requestAnimationFrame(draw);
+      rafRef.current = requestAnimationFrame(draw);
     };
 
-    rafId = requestAnimationFrame(draw);
+    drawRef.current = draw;
+    if (runningRef.current) {
+      rafRef.current = requestAnimationFrame(draw);
+    }
 
     return () => {
-      cancelAnimationFrame(rafId);
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      drawRef.current = null;
       resizeObserver.disconnect();
     };
   }, [lowPower]);

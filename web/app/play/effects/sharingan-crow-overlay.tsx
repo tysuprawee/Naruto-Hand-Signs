@@ -5,6 +5,7 @@ import * as THREE from "three";
 
 interface SharinganCrowOverlayProps {
   lowPower?: boolean;
+  running?: boolean;
 }
 
 const PRESET = {
@@ -20,8 +21,26 @@ const PRESET = {
   animOffset: 5,
 };
 
-export default function SharinganCrowOverlay({ lowPower = false }: SharinganCrowOverlayProps) {
+export default function SharinganCrowOverlay({
+  lowPower = false,
+  running = true,
+}: SharinganCrowOverlayProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const rafRef = useRef(0);
+  const animateRef = useRef<(() => void) | null>(null);
+  const runningRef = useRef(running);
+
+  useEffect(() => {
+    runningRef.current = running;
+    if (!running && rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      return;
+    }
+    if (running && !rafRef.current && animateRef.current) {
+      rafRef.current = requestAnimationFrame(animateRef.current);
+    }
+  }, [running]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -116,9 +135,11 @@ export default function SharinganCrowOverlay({ lowPower = false }: SharinganCrow
     resizeObserver.observe(mount);
 
     const clock = new THREE.Clock();
-    let rafId = 0;
-
     const animate = () => {
+      if (!runningRef.current) {
+        rafRef.current = 0;
+        return;
+      }
       const t = clock.getElapsedTime();
 
       for (let i = 0; i < particleCount; i += 1) {
@@ -158,13 +179,18 @@ export default function SharinganCrowOverlay({ lowPower = false }: SharinganCrow
       group.rotation.x = Math.cos(t * 0.35) * 0.1;
 
       renderer.render(scene, camera);
-      rafId = requestAnimationFrame(animate);
+      rafRef.current = requestAnimationFrame(animate);
     };
 
-    rafId = requestAnimationFrame(animate);
+    animateRef.current = animate;
+    if (runningRef.current) {
+      rafRef.current = requestAnimationFrame(animate);
+    }
 
     return () => {
-      cancelAnimationFrame(rafId);
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      animateRef.current = null;
       resizeObserver.disconnect();
       for (const mesh of meshes) {
         mesh.geometry.dispose();
